@@ -1,0 +1,41 @@
+﻿<Window x:Class="ClubTimerXbox.DatePickerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Выбор дня"
+        Width="360"
+        Height="430"
+        WindowStartupLocation="CenterOwner"
+        Background="#10141C"
+        ResizeMode="NoResize">
+
+    <Grid Margin="18">
+        <StackPanel>
+            <TextBlock Text="Выберите день"
+                       Foreground="White"
+                       FontSize="24"
+                       FontWeight="Bold"
+                       Margin="0,0,0,16"/>
+
+            <Calendar x:Name="DateCalendar"
+                      Height="260"
+                      Margin="0,0,0,16"/>
+
+            <Button Content="Применить"
+                    Height="46"
+                    FontSize="17"
+                    FontWeight="Bold"
+                    Background="#16A34A"
+                    Foreground="White"
+                    Click="ApplyButton_Click"
+                    Margin="0,0,0,10"/>
+
+            <Button Content="Отмена"
+                    Height="42"
+                    FontSize="16"
+                    FontWeight="Bold"
+                    Background="#334155"
+                    Foreground="White"
+                    Click="CancelButton_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>
