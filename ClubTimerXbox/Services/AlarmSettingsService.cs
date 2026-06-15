@@ -74,8 +74,7 @@ namespace ClubTimerXbox.Services
             if (settings.SoundDurationSeconds > 120)
                 settings.SoundDurationSeconds = 120;
 
-            if (string.IsNullOrWhiteSpace(settings.SoundName))
-                settings.SoundName = "Exclamation";
+            settings.SoundName = AlarmSoundService.NormalizeSoundName(settings.SoundName);
         }
 
         public static void ResetToDefault()

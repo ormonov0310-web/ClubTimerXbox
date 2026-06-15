@@ -814,6 +814,7 @@ namespace ClubTimerXbox
             }
 
             _itemsPanel.Children.Add(CreateEmployeeLossSummaryCard(items, range.Title));
+            _itemsPanel.Children.Add(CreateEmployeeLossEmployeeSummaryCard(items));
 
             foreach (var item in items)
             {
@@ -872,6 +873,83 @@ namespace ClubTimerXbox
             });
 
             return CreateCard(panel, Color.FromRgb(30, 41, 59));
+        }
+
+        private Border CreateEmployeeLossEmployeeSummaryCard(List<EmployeeLossItem> items)
+        {
+            var panel = new StackPanel();
+
+            panel.Children.Add(new TextBlock
+            {
+                Text = "К удержанию по сотрудникам",
+                Foreground = Brushes.White,
+                FontSize = 20,
+                FontWeight = FontWeights.Bold,
+                TextWrapping = TextWrapping.Wrap
+            });
+
+            var groups = items
+                .GroupBy(item => string.IsNullOrWhiteSpace(item.ResponsibleEmployeeName)
+                    ? "Без имени"
+                    : item.ResponsibleEmployeeName.Trim())
+                .Select(group => new
+                {
+                    EmployeeName = group.Key,
+                    Total = group.Sum(item => item.Amount),
+                    Unpaid = group.Where(item => !item.IsPaid).Sum(item => item.Amount),
+                    Paid = group.Where(item => item.IsPaid).Sum(item => item.Amount),
+                    Cash = group.Where(item => !item.IsPaid && IsCashLoss(item)).Sum(item => item.Amount),
+                    Product = group.Where(item => !item.IsPaid && IsProductLoss(item)).Sum(item => item.Amount),
+                    Other = group.Where(item => !item.IsPaid && !IsCashLoss(item) && !IsProductLoss(item)).Sum(item => item.Amount),
+                    Count = group.Count()
+                })
+                .OrderByDescending(group => group.Unpaid)
+                .ThenBy(group => group.EmployeeName)
+                .ToList();
+
+            if (groups.Count == 0)
+            {
+                panel.Children.Add(CreateMutedText("За выбранный период записей нет."));
+                return CreateCard(panel, Color.FromRgb(30, 41, 59));
+            }
+
+            foreach (var group in groups)
+            {
+                var employeePanel = new StackPanel
+                {
+                    Margin = new Thickness(0, 10, 0, 0)
+                };
+
+                employeePanel.Children.Add(new TextBlock
+                {
+                    Text = group.EmployeeName,
+                    Foreground = Brushes.White,
+                    FontSize = 16,
+                    FontWeight = FontWeights.Bold,
+                    TextWrapping = TextWrapping.Wrap
+                });
+
+                employeePanel.Children.Add(new TextBlock
+                {
+                    Text =
+                        $"К удержанию: {group.Unpaid} сом\n" +
+                        $"Оплачено: {group.Paid} сом\n" +
+                        $"Всего потерь: {group.Total} сом / записей: {group.Count}\n" +
+                        $"Неоплачено по типам: наличка {group.Cash} сом, товары {group.Product} сом, другое {group.Other} сом",
+                    Foreground = group.Unpaid > 0
+                        ? new SolidColorBrush(Color.FromRgb(248, 113, 113))
+                        : new SolidColorBrush(Color.FromRgb(74, 222, 128)),
+                    FontSize = 14,
+                    FontWeight = group.Unpaid > 0 ? FontWeights.SemiBold : FontWeights.Normal,
+                    TextWrapping = TextWrapping.Wrap,
+                    LineHeight = 22,
+                    Margin = new Thickness(0, 4, 0, 0)
+                });
+
+                panel.Children.Add(employeePanel);
+            }
+
+            return CreateCard(panel, Color.FromRgb(17, 35, 58));
         }
 
         private Border CreateEmployeeLossCard(EmployeeLossItem item)

@@ -10,6 +10,8 @@ namespace ClubTimerXbox.Models
 
         public int UnitPrice { get; set; }
 
+        public int PurchasePrice { get; set; }
+
         public int TotalAmount
         {
             get
@@ -19,5 +21,7 @@ namespace ClubTimerXbox.Models
         }
 
         public string Category { get; set; } = "";
+
+        public string ItemType { get; set; } = "";
     }
 }

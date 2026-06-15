@@ -73,6 +73,8 @@ namespace ClubTimerXbox.Models
 
         public int UnitPrice { get; set; }
 
+        public int PurchasePrice { get; set; }
+
         public int Quantity { get; set; }
 
         public int TotalAmount { get; set; }

@@ -54,12 +54,7 @@
                 <ComboBox x:Name="SoundComboBox"
                           FontSize="16"
                           Margin="0,6,0,18"
-                          Height="40">
-                    <ComboBoxItem Content="Будильник" Tag="Exclamation"/>
-                    <ComboBoxItem Content="Тревога" Tag="Hand"/>
-                    <ComboBoxItem Content="Короткий" Tag="Beep"/>
-                    <ComboBoxItem Content="Мягкий" Tag="Asterisk"/>
-                </ComboBox>
+                          Height="40"/>
 
                 <TextBlock Text="Сколько играть звук:"
                            Foreground="#CBD5E1"
@@ -81,6 +76,30 @@
                     <ComboBoxItem Content="10 секунд" Tag="10"/>
                     <ComboBoxItem Content="Пока не нажмут OK" Tag="0"/>
                 </ComboBox>
+
+                <TextBlock Text="Звуки интерфейса:"
+                           Foreground="#CBD5E1"
+                           FontSize="15"
+                           FontWeight="Bold"
+                           Margin="0,0,0,8"/>
+
+                <CheckBox x:Name="HoverSoundEnabledCheckBox"
+                          Content="Звук наводки включён"
+                          Foreground="White"
+                          FontSize="15"
+                          Margin="0,0,0,8"/>
+
+                <CheckBox x:Name="ClickSoundEnabledCheckBox"
+                          Content="Звук клика включён"
+                          Foreground="White"
+                          FontSize="15"
+                          Margin="0,0,0,8"/>
+
+                <CheckBox x:Name="ActionSoundEnabledCheckBox"
+                          Content="Звук тарифа включён"
+                          Foreground="White"
+                          FontSize="15"
+                          Margin="0,0,0,18"/>
 
                 <Button Content="Проверить звук"
                         Height="44"

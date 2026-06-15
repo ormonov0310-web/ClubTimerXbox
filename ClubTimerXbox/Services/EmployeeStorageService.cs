@@ -31,6 +31,7 @@ namespace ClubTimerXbox.Services
                 if (employees == null)
                     return new List<Employee>();
 
+                Normalize(employees);
                 return employees;
             }
             catch
@@ -42,6 +43,7 @@ namespace ClubTimerXbox.Services
         public static void Save(List<Employee> employees)
         {
             Directory.CreateDirectory(FolderPath);
+            Normalize(employees);
 
             var options = new JsonSerializerOptions
             {
@@ -63,6 +65,26 @@ namespace ClubTimerXbox.Services
             catch
             {
                 // Пока ничего не делаем.
+            }
+        }
+
+        private static void Normalize(List<Employee> employees)
+        {
+            var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var employee in employees)
+            {
+                employee.EmployeeId = employee.EmployeeId.Trim();
+                employee.Name = employee.Name.Trim();
+                employee.PinCode = employee.PinCode.Trim();
+
+                if (string.IsNullOrWhiteSpace(employee.EmployeeId) ||
+                    usedIds.Contains(employee.EmployeeId))
+                {
+                    employee.EmployeeId = "emp_" + Guid.NewGuid().ToString("N");
+                }
+
+                usedIds.Add(employee.EmployeeId);
             }
         }
     }

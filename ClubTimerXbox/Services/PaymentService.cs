@@ -16,14 +16,25 @@ namespace ClubTimerXbox.Services
             if (record == null)
                 return;
 
-            if (record.TotalAmount <= 0)
+            if (record.TotalAmount == 0)
                 return;
 
-            if (record.CashAmount < 0)
-                record.CashAmount = 0;
+            if (record.TotalAmount > 0)
+            {
+                if (record.CashAmount < 0)
+                    record.CashAmount = 0;
 
-            if (record.MBankAmount < 0)
-                record.MBankAmount = 0;
+                if (record.MBankAmount < 0)
+                    record.MBankAmount = 0;
+            }
+            else
+            {
+                if (record.CashAmount > 0)
+                    record.CashAmount = -record.CashAmount;
+
+                if (record.MBankAmount > 0)
+                    record.MBankAmount = -record.MBankAmount;
+            }
 
             int paymentTotal = record.CashAmount + record.MBankAmount;
 

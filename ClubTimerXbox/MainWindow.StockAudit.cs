@@ -1,4 +1,5 @@
-﻿using System.Windows;
+using System.Windows;
+using ClubTimerXbox.Services;
 
 namespace ClubTimerXbox
 {
@@ -6,6 +7,8 @@ namespace ClubTimerXbox
     {
         private void StockAuditButton_Click(object sender, RoutedEventArgs e)
         {
+            ActionLogService.EnsureAcceptanceForCurrentShift();
+
             var window = new StockAuditWindow
             {
                 Owner = this

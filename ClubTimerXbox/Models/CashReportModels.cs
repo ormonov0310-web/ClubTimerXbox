@@ -79,6 +79,8 @@ namespace ClubTimerXbox.Models
         public string PlaceName { get; set; } = "";
 
         public string Category { get; set; } = "";
+
+        public bool IsExpense { get; set; }
     }
 
     public class CashReportResult

@@ -12,6 +12,20 @@ namespace ClubTimerXbox
             // Пока открыто окно входа, нельзя завершать приложение,
             // даже если окно входа временно закрывается.
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            WindowSizeStorageService.EnableForAllWindows();
+            UiSoundService.EnableGlobalUiSounds();
+
+            if (!PcIdentityService.Current.IsActivated)
+            {
+                var activationWindow = new ActivationWindow();
+                bool? activationResult = activationWindow.ShowDialog();
+
+                if (activationResult != true || !PcIdentityService.Current.IsActivated)
+                {
+                    Shutdown();
+                    return;
+                }
+            }
 
             var loginWindow = new LoginWindow();
 

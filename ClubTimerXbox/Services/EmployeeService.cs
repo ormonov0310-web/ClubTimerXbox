@@ -87,6 +87,18 @@ namespace ClubTimerXbox.Services
             );
         }
 
+        public static Employee? FindById(string employeeId)
+        {
+            employeeId = employeeId.Trim();
+
+            if (string.IsNullOrWhiteSpace(employeeId))
+                return null;
+
+            return Employees.FirstOrDefault(employee =>
+                employee.EmployeeId.Equals(employeeId, StringComparison.OrdinalIgnoreCase)
+            );
+        }
+
         public static bool ExistsByName(string employeeName)
         {
             return FindByName(employeeName) != null;
@@ -127,10 +139,11 @@ namespace ClubTimerXbox.Services
             CurrentEmployee = null;
         }
 
-        public static void AddEmployee(string employeeName, string pinCode)
+        public static void AddEmployee(string employeeName, string pinCode, string employeeId = "")
         {
             employeeName = employeeName.Trim();
             pinCode = pinCode.Trim();
+            employeeId = employeeId.Trim();
 
             if (string.IsNullOrWhiteSpace(employeeName))
                 return;
@@ -141,8 +154,12 @@ namespace ClubTimerXbox.Services
             if (ExistsByName(employeeName))
                 return;
 
+            if (!string.IsNullOrWhiteSpace(employeeId) && FindById(employeeId) != null)
+                return;
+
             Employees.Add(new Employee
             {
+                EmployeeId = employeeId,
                 Name = employeeName,
                 PinCode = pinCode,
                 IsActive = true
@@ -202,6 +219,24 @@ namespace ClubTimerXbox.Services
         public static void DeleteEmployeeSoft(string employeeName)
         {
             SetEmployeeActive(employeeName, false);
+        }
+
+        public static void ReplaceAll(IEnumerable<Employee> employees)
+        {
+            Employees = employees
+                .Where(employee => !string.IsNullOrWhiteSpace(employee.Name))
+                .Select(employee => new Employee
+                {
+                    EmployeeId = employee.EmployeeId,
+                    Name = employee.Name,
+                    PinCode = employee.PinCode,
+                    IsActive = employee.IsActive
+                })
+                .ToList();
+
+            CurrentEmployee = null;
+
+            Save();
         }
 
         private static void EnsureDefaultEmployeesExist()

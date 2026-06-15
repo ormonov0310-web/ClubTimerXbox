@@ -22,6 +22,8 @@ namespace ClubTimerXbox.Services
 
         public int TodayShortages { get; set; }
         public int MonthShortages { get; set; }
+        public int MonthUnpaidLosses { get; set; }
+        public int MonthPaidLosses { get; set; }
 
         public int ClosedGameSessionsCount { get; set; }
         public int ProductServiceOperationsCount { get; set; }
@@ -48,9 +50,21 @@ namespace ClubTimerXbox.Services
     {
         public DateTime CreatedAt { get; set; }
         public string Title { get; set; } = "";
+        public string LossType { get; set; } = "";
         public string Description { get; set; } = "";
         public int Amount { get; set; }
         public string CheckedByEmployeeName { get; set; } = "";
+        public bool IsPaid { get; set; }
+        public DateTime? PaidAt { get; set; }
+    }
+
+    public class EmployeeProductServiceInfo
+    {
+        public DateTime CreatedAt { get; set; }
+        public string Title { get; set; } = "";
+        public string Description { get; set; } = "";
+        public int Amount { get; set; }
+        public string PlaceName { get; set; } = "";
     }
 
     public class EmployeeGameSessionInfo
@@ -78,17 +92,22 @@ namespace ClubTimerXbox.Services
     {
         public static EmployeeStatsSummary GetSummary(string employeeName)
         {
+            return GetSummary(employeeName, new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1));
+        }
+
+        public static EmployeeStatsSummary GetSummary(string employeeName, DateTime monthStart)
+        {
             DateTime todayStart = DateTime.Today;
             DateTime tomorrowStart = todayStart.AddDays(1);
 
-            DateTime monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            monthStart = new DateTime(monthStart.Year, monthStart.Month, 1);
             DateTime nextMonthStart = monthStart.AddMonths(1);
 
             var todayRecords = GetCashRecordsForEmployee(employeeName, todayStart, tomorrowStart);
             var monthRecords = GetCashRecordsForEmployee(employeeName, monthStart, nextMonthStart);
 
-            var todayShortages = GetShortageRecordsForEmployee(employeeName, todayStart, tomorrowStart);
-            var monthShortages = GetShortageRecordsForEmployee(employeeName, monthStart, nextMonthStart);
+            var todayLosses = GetLossRecordsForEmployee(employeeName, todayStart, tomorrowStart);
+            var monthLosses = GetLossRecordsForEmployee(employeeName, monthStart, nextMonthStart);
 
             var monthSessions = GetGameSessions(employeeName, monthStart, nextMonthStart);
 
@@ -123,18 +142,26 @@ namespace ClubTimerXbox.Services
                     .Where(record => record.Category == "Игры" || record.Category == "Товары и услуги")
                     .Sum(record => record.Amount),
 
-                TodayShortages = todayShortages.Sum(record => record.Amount),
-                MonthShortages = monthShortages.Sum(record => record.Amount),
+                TodayShortages = todayLosses.Sum(record => record.Amount),
+                MonthShortages = monthLosses.Sum(record => record.Amount),
+                MonthUnpaidLosses = monthLosses.Where(record => !record.IsPaid).Sum(record => record.Amount),
+                MonthPaidLosses = monthLosses.Where(record => record.IsPaid).Sum(record => record.Amount),
 
                 ClosedGameSessionsCount = monthSessions.Count,
                 ProductServiceOperationsCount = monthRecords.Count(record => record.Category == "Товары и услуги"),
-                ShortageCount = monthShortages.Count
+                ShortageCount = monthLosses.Count
             };
         }
 
         public static List<EmployeeJournalInfo> GetJournalForCurrentMonth(string employeeName)
         {
             DateTime monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            return GetJournalForMonth(employeeName, monthStart);
+        }
+
+        public static List<EmployeeJournalInfo> GetJournalForMonth(string employeeName, DateTime monthStart)
+        {
+            monthStart = new DateTime(monthStart.Year, monthStart.Month, 1);
             DateTime nextMonthStart = monthStart.AddMonths(1);
 
             var result = new List<EmployeeJournalInfo>();
@@ -325,14 +352,14 @@ namespace ClubTimerXbox.Services
             DateTime toExclusive,
             List<EmployeeJournalInfo> result)
         {
-            var records = GetShortageRecordsForEmployee(employeeName, fromInclusive, toExclusive);
+            var records = GetLossRecordsForEmployee(employeeName, fromInclusive, toExclusive);
 
             foreach (var record in records)
             {
                 result.Add(new EmployeeJournalInfo
                 {
                     CreatedAt = record.CreatedAt,
-                    Type = "Недостача",
+                    Type = "Потеря",
                     Title = record.Title,
                     Description = record.Description,
                     Amount = record.Amount
@@ -342,19 +369,39 @@ namespace ClubTimerXbox.Services
 
         public static List<EmployeeShiftInfo> GetShifts(string employeeName)
         {
+            return GetShifts(employeeName, DateTime.MinValue, DateTime.MaxValue);
+        }
+
+        public static List<EmployeeShiftInfo> GetShifts(
+            string employeeName,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
             return ActionLogService.GetAllShifts()
-                .Where(shift => shift.EmployeeName == employeeName)
+                .Where(shift =>
+                    shift.EmployeeName == employeeName &&
+                    shift.StartedAt < toExclusive &&
+                    (shift.ClosedAt ?? DateTime.Now) >= fromInclusive)
                 .OrderByDescending(shift => shift.StartedAt)
                 .Select(shift =>
                 {
+                    DateTime startTime = shift.StartedAt;
                     DateTime endTime = shift.ClosedAt ?? DateTime.Now;
+
+                    if (startTime < fromInclusive)
+                        startTime = fromInclusive;
+
+                    if (endTime > toExclusive)
+                        endTime = toExclusive;
 
                     return new EmployeeShiftInfo
                     {
                         StartedAt = shift.StartedAt,
                         ClosedAt = shift.ClosedAt,
                         IsClosed = shift.IsClosed,
-                        Duration = endTime - shift.StartedAt
+                        Duration = endTime > startTime
+                            ? endTime - startTime
+                            : TimeSpan.Zero
                     };
                 })
                 .ToList();
@@ -363,6 +410,12 @@ namespace ClubTimerXbox.Services
         public static List<EmployeeDayIncome> GetDailyIncomeForCurrentMonth(string employeeName)
         {
             DateTime monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            return GetDailyIncomeForMonth(employeeName, monthStart);
+        }
+
+        public static List<EmployeeDayIncome> GetDailyIncomeForMonth(string employeeName, DateTime monthStart)
+        {
+            monthStart = new DateTime(monthStart.Year, monthStart.Month, 1);
             DateTime nextMonthStart = monthStart.AddMonths(1);
 
             var records = GetCashRecordsForEmployee(employeeName, monthStart, nextMonthStart)
@@ -388,17 +441,49 @@ namespace ClubTimerXbox.Services
         public static List<EmployeeShortageInfo> GetShortagesForCurrentMonth(string employeeName)
         {
             DateTime monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            return GetShortagesForMonth(employeeName, monthStart);
+        }
+
+        public static List<EmployeeShortageInfo> GetShortagesForMonth(string employeeName, DateTime monthStart)
+        {
+            monthStart = new DateTime(monthStart.Year, monthStart.Month, 1);
             DateTime nextMonthStart = monthStart.AddMonths(1);
 
-            return GetShortageRecordsForEmployee(employeeName, monthStart, nextMonthStart)
+            var losses = GetLossRecordsForEmployee(employeeName, monthStart, nextMonthStart)
                 .Select(record => new EmployeeShortageInfo
                 {
                     CreatedAt = record.CreatedAt,
                     Title = record.Title,
+                    LossType = record.LossType,
                     Description = record.Description,
                     Amount = record.Amount,
-                    CheckedByEmployeeName = record.EmployeeName
+                    CheckedByEmployeeName = record.CheckedByEmployeeName,
+                    IsPaid = record.IsPaid,
+                    PaidAt = record.PaidAt
                 })
+                .ToList();
+
+            var legacyCashShortages = GetShortageRecordsForEmployee(employeeName, monthStart, nextMonthStart)
+                .Where(record => !losses.Any(loss =>
+                    loss.Amount == record.Amount &&
+                    loss.Title.Equals(record.Title, StringComparison.OrdinalIgnoreCase) &&
+                    Math.Abs((loss.CreatedAt - record.CreatedAt).TotalSeconds) < 5))
+                .Select(record => new EmployeeShortageInfo
+                {
+                    CreatedAt = record.CreatedAt,
+                    Title = record.Title,
+                    LossType = record.Title.Contains("налич", StringComparison.OrdinalIgnoreCase)
+                        ? "Недостача наличных"
+                        : "Недостача",
+                    Description = record.Description,
+                    Amount = record.Amount,
+                    CheckedByEmployeeName = record.EmployeeName,
+                    IsPaid = false,
+                    PaidAt = null
+                });
+
+            return losses
+                .Concat(legacyCashShortages)
                 .OrderByDescending(item => item.CreatedAt)
                 .ToList();
         }
@@ -406,9 +491,38 @@ namespace ClubTimerXbox.Services
         public static List<EmployeeGameSessionInfo> GetGameSessionsForCurrentMonth(string employeeName)
         {
             DateTime monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            return GetGameSessionsForMonth(employeeName, monthStart);
+        }
+
+        public static List<EmployeeGameSessionInfo> GetGameSessionsForMonth(string employeeName, DateTime monthStart)
+        {
+            monthStart = new DateTime(monthStart.Year, monthStart.Month, 1);
             DateTime nextMonthStart = monthStart.AddMonths(1);
 
             return GetGameSessions(employeeName, monthStart, nextMonthStart);
+        }
+
+        public static List<EmployeeProductServiceInfo> GetProductServicesForMonth(string employeeName, DateTime monthStart)
+        {
+            monthStart = new DateTime(monthStart.Year, monthStart.Month, 1);
+            DateTime nextMonthStart = monthStart.AddMonths(1);
+
+            return CashService.Records
+                .Where(record =>
+                    record.CreatedAt >= monthStart &&
+                    record.CreatedAt < nextMonthStart &&
+                    record.EmployeeName == employeeName &&
+                    record.Category == "Товары и услуги")
+                .OrderByDescending(record => record.CreatedAt)
+                .Select(record => new EmployeeProductServiceInfo
+                {
+                    CreatedAt = record.CreatedAt,
+                    Title = record.Title,
+                    Description = record.Description,
+                    Amount = record.Amount,
+                    PlaceName = record.PlaceName
+                })
+                .ToList();
         }
 
         public static TimeSpan GetWorkTime(
@@ -468,6 +582,17 @@ namespace ClubTimerXbox.Services
                     record.CreatedAt < toExclusive &&
                     record.Category == "Недостачи" &&
                     record.IncomeEmployeeName == employeeName)
+                .ToList();
+        }
+
+        private static List<EmployeeLossItem> GetLossRecordsForEmployee(
+            string employeeName,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            return EmployeeLossService.GetByPeriod(fromInclusive, toExclusive)
+                .Where(record =>
+                    record.ResponsibleEmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase))
                 .ToList();
         }
 

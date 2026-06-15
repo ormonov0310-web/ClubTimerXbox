@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using System.Windows;
 using ClubTimerXbox.Models;
@@ -13,32 +14,52 @@ namespace ClubTimerXbox.Services
     public static class FirebaseSyncService
     {
         private static readonly HttpClient _httpClient = new HttpClient();
+        private static DateTime _lastOwnerEmployeesPush = DateTime.MinValue;
 
         private static string BaseUrl =>
             FirebaseSettings.DatabaseUrl.TrimEnd('/');
+
+        private static string LegacyCurrentPath => "club/current";
+
+        private static string LegacyCommandsPath => "club/commands";
+
+        private static string ClubRootPath => $"clubs/{PcIdentityService.Current.ClubId}";
+
+        private static string ClubCurrentPath => $"{ClubRootPath}/current";
+
+        private static string ClubCommandsPath => $"{ClubRootPath}/commands";
+
+        private static string ClubMetaPath => $"{ClubRootPath}/meta";
+
+        private static string OwnerClubMetaPath => $"owner/clubs/{PcIdentityService.Current.ClubId}";
 
         public static async Task PushCurrentStateAsync(List<ClubPlace> places)
         {
             try
             {
+                var pcIdentity = PcIdentityService.Current;
                 DateTime todayStart = DateTime.Today;
                 DateTime tomorrowStart = todayStart.AddDays(1);
 
                 DateTime monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
                 DateTime nextMonthStart = monthStart.AddMonths(1);
 
-                int cashToday = CashService.GetCashIncomeTotalByPeriod(todayStart, tomorrowStart);
-
-                int gamesToday = CashService.GetTotalByPeriodAndCategory(
-                    todayStart,
-                    tomorrowStart,
-                    "Игры"
+                int gamesToday = GetPaymentTotal(
+                    CashReportSection.Games,
+                    CashReportPeriodMode.Day,
+                    todayStart
                 );
 
-                int productsToday = CashService.GetTotalByPeriodAndCategory(
-                    todayStart,
-                    tomorrowStart,
-                    "Товары и услуги"
+                int productsToday = GetPaymentTotal(
+                    CashReportSection.ProductsAndServices,
+                    CashReportPeriodMode.Day,
+                    todayStart
+                );
+
+                int cashToday = gamesToday + productsToday;
+                var incomePaymentToday = GetCombinedPaymentSummary(
+                    CashReportPeriodMode.Day,
+                    todayStart
                 );
 
                 int shortagesToday = CashService.GetShortageTotalByPeriod(
@@ -64,7 +85,25 @@ namespace ClubTimerXbox.Services
                 int cashlessToday = CashlessService.GetAmountForToday();
                 int expectedCashToday = CashlessService.GetExpectedCashForToday();
 
-                int cashMonth = CashService.GetCashIncomeTotalByPeriod(
+                int monthGames = GetPaymentTotal(
+                    CashReportSection.Games,
+                    CashReportPeriodMode.Month,
+                    monthStart
+                );
+
+                int monthProducts = GetPaymentTotal(
+                    CashReportSection.ProductsAndServices,
+                    CashReportPeriodMode.Month,
+                    monthStart
+                );
+
+                int cashMonth = monthGames + monthProducts;
+                var incomePaymentMonth = GetCombinedPaymentSummary(
+                    CashReportPeriodMode.Month,
+                    monthStart
+                );
+
+                int shortagesMonth = CashService.GetShortageTotalByPeriod(
                     monthStart,
                     nextMonthStart
                 );
@@ -73,18 +112,29 @@ namespace ClubTimerXbox.Services
                     monthStart,
                     nextMonthStart
                 );
+                int? actualCashlessBalanceMonth = CalculateActualCashlessBalanceByPeriod(
+                    monthStart,
+                    nextMonthStart
+                );
+                int? actualCashBalanceMonth = CalculateActualCashBalanceByPeriod(
+                    monthStart,
+                    nextMonthStart
+                );
+                bool cashlessVerifiedMonth = CashlessService.Records.Any(record =>
+                    record.Date >= monthStart.Date &&
+                    record.Date < nextMonthStart.Date);
 
-                int expensesMonth = CashService.GetExpenseTotalByPeriod(
+                int expensesMonth = CashService.GetClubExpenseTotalByPeriod(
                     monthStart,
                     nextMonthStart
                 );
 
-                int cashExpenseMonth = CashService.GetCashExpenseTotalByPeriod(
+                int cashExpenseMonth = CashService.GetClubCashExpenseTotalByPeriod(
                     monthStart,
                     nextMonthStart
                 );
 
-                int cashlessExpenseMonth = CashService.GetCashlessExpenseTotalByPeriod(
+                int cashlessExpenseMonth = CashService.GetClubCashlessExpenseTotalByPeriod(
                     monthStart,
                     nextMonthStart
                 );
@@ -98,6 +148,16 @@ namespace ClubTimerXbox.Services
                     monthStart,
                     nextMonthStart
                 );
+                var salaryRecordsMonth = CashService.GetSalaryRecordsByPeriod(
+                    monthStart,
+                    nextMonthStart
+                );
+                int salaryCashMonth = salaryRecordsMonth
+                    .Where(record => record.PaymentMethod == "Наличные")
+                    .Sum(record => record.Amount);
+                int salaryCashlessMonth = salaryRecordsMonth
+                    .Where(record => record.PaymentMethod == "Безнал")
+                    .Sum(record => record.Amount);
 
                 int stockPurchaseToday = StockPurchaseService.GetTotalByPeriod(
                     todayStart,
@@ -108,8 +168,34 @@ namespace ClubTimerXbox.Services
                     monthStart,
                     nextMonthStart
                 );
+                var stockPurchaseExpenseRecordsMonth = CashService.GetExpenseRecordsByExpenseCategory(
+                    monthStart,
+                    nextMonthStart,
+                    "Закупка"
+                );
+                int stockPurchaseCashMonth = stockPurchaseExpenseRecordsMonth
+                    .Where(record => record.PaymentMethod == "Наличные")
+                    .Sum(record => record.Amount);
+                int stockPurchaseCashlessMonth = stockPurchaseExpenseRecordsMonth
+                    .Where(record => record.PaymentMethod == "Безнал")
+                    .Sum(record => record.Amount);
 
-                var expenseCategories = CashService.GetDefaultExpenseCategories();
+                var ownerWithdrawRecordsMonth = CashService.GetExpenseRecordsByExpenseCategory(
+                    monthStart,
+                    nextMonthStart,
+                    "Владелец"
+                );
+                int ownerWithdrawMonth = ownerWithdrawRecordsMonth.Sum(record => record.Amount);
+                int ownerWithdrawCashMonth = ownerWithdrawRecordsMonth
+                    .Where(record => record.PaymentMethod == "Наличные")
+                    .Sum(record => record.Amount);
+                int ownerWithdrawCashlessMonth = ownerWithdrawRecordsMonth
+                    .Where(record => record.PaymentMethod == "Безнал")
+                    .Sum(record => record.Amount);
+
+                var expenseCategories = CashService.GetDefaultExpenseCategories()
+                    .Where(IsOwnerReportExpenseCategory)
+                    .ToList();
 
                 var expensesByCategory = expenseCategories
                     .Select(category => new
@@ -141,10 +227,8 @@ namespace ClubTimerXbox.Services
                     })
                     .ToList();
 
-                var stockPurchases = StockPurchaseService.GetPurchasesByPeriod(
-                        monthStart,
-                        nextMonthStart
-                    )
+                var stockPurchases = StockPurchaseService.Purchases
+                    .OrderByDescending(purchase => purchase.CreatedAt)
                     .Take(100)
                     .Select(purchase => new
                     {
@@ -158,6 +242,7 @@ namespace ClubTimerXbox.Services
                             quantity = item.Quantity,
                             purchasePrice = item.PurchasePrice,
                             salePrice = item.SalePrice,
+                            minimumQuantity = item.MinimumQuantity,
                             totalAmount = item.TotalAmount
                         }).ToList()
                     })
@@ -198,16 +283,71 @@ namespace ClubTimerXbox.Services
                     .Concat(serviceItems.Cast<object>())
                     .ToList();
 
+                var reportsByMonth = BuildReportsByMonth();
+                var autoSalaryReport = AutoSalaryService.BuildReport(monthStart);
+                var cashReconciliation = CashReconciliationService
+                    .GetRecentItems()
+                    .Select(item => new
+                    {
+                        id = item.Id.ToString(),
+                        createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                        kind = item.Kind.ToString(),
+                        status = item.Status.ToString(),
+                        amount = item.Amount,
+                        expectedAmount = item.ExpectedAmount,
+                        actualAmount = item.ActualAmount,
+                        checkedByEmployeeName = item.CheckedByEmployeeName,
+                        responsibleEmployeeName = item.ResponsibleEmployeeName,
+                        title = item.Title,
+                        note = item.Note,
+                        resolvedAt = item.ResolvedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
+                        resolvedBy = item.ResolvedBy,
+                        resolutionNote = item.ResolutionNote
+                    })
+                    .ToList();
+
                 var data = new
                 {
                     updatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    app = AppVersionService.BuildPayload(),
+                    club = new
+                    {
+                        id = pcIdentity.ClubId,
+                        name = pcIdentity.ClubName,
+                        isActivated = pcIdentity.IsActivated,
+                        installationId = pcIdentity.InstallationId,
+                        activatedAt = pcIdentity.ActivatedAt,
+                        pcName = Environment.MachineName,
+                        appVersion = AppVersionService.Version,
+                        updateChannel = AppVersionService.UpdateChannel
+                    },
+                    currentEmployeeName = EmployeeService.CurrentEmployee?.Name ?? "",
+                    settings = BuildClubSettingsPayload(AppSettingsService.Current),
+                    acceptance = new
+                    {
+                        isRequired = ShiftAcceptanceService.Current.IsRequired,
+                        isCompleted = ShiftAcceptanceService.Current.IsCompleted,
+                        productsAccepted = ShiftAcceptanceService.Current.ProductsAccepted,
+                        cashAccepted = ShiftAcceptanceService.Current.CashAccepted,
+                        newEmployeeName = ShiftAcceptanceService.Current.NewEmployeeName,
+                        responsibleEmployeeName = ShiftAcceptanceService.Current.ResponsibleEmployeeName,
+                        createdAt = ShiftAcceptanceService.Current.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                        productsAcceptedAt = ShiftAcceptanceService.Current.ProductsAcceptedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
+                        cashAcceptedAt = ShiftAcceptanceService.Current.CashAcceptedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
+                        completedAt = ShiftAcceptanceService.Current.CompletedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? ""
+                    },
 
                     cash = new
                     {
                         cashToday,
                         gamesToday,
                         productsToday,
+                        incomeCashToday = incomePaymentToday.CashAmount,
+                        incomeMBankToday = incomePaymentToday.MBankAmount,
                         shortagesToday,
+                        gamesMonth = monthGames,
+                        productsMonth = monthProducts,
+                        shortagesMonth,
                         expensesToday,
                         cashExpenseToday,
                         cashlessExpenseToday,
@@ -215,17 +355,54 @@ namespace ClubTimerXbox.Services
                         expectedCashToday,
 
                         cashMonth,
+                        incomeCashMonth = incomePaymentMonth.CashAmount,
+                        incomeMBankMonth = incomePaymentMonth.MBankAmount,
                         cashlessMonth,
+                        actualCashBalanceMonth,
+                        actualCashlessBalanceMonth,
+                        cashlessVerifiedMonth,
                         expensesMonth,
                         cashExpenseMonth,
                         cashlessExpenseMonth,
 
                         salaryToday,
                         salaryMonth,
+                        salaryCashMonth,
+                        salaryCashlessMonth,
 
                         stockPurchaseToday,
-                        stockPurchaseMonth
+                        stockPurchaseMonth,
+                        stockPurchaseCashMonth,
+                        stockPurchaseCashlessMonth,
+
+                        ownerWithdrawMonth,
+                        ownerWithdrawCashMonth,
+                        ownerWithdrawCashlessMonth
                     },
+
+                    cashRecords = new
+                    {
+                        today = new
+                        {
+                            games = BuildCashRecordItems(todayStart, tomorrowStart, "Игры"),
+                            productsAndServices = BuildCashRecordItems(todayStart, tomorrowStart, "Товары и услуги"),
+                            expenses = BuildCashRecordItems(todayStart, tomorrowStart, "Расходы"),
+                            losses = BuildCashRecordItems(todayStart, tomorrowStart, "Недостачи")
+                        },
+                        month = new
+                        {
+                            games = BuildCashRecordItems(monthStart, nextMonthStart, "Игры"),
+                            productsAndServices = BuildCashRecordItems(monthStart, nextMonthStart, "Товары и услуги"),
+                            expenses = BuildCashRecordItems(monthStart, nextMonthStart, "Расходы"),
+                            losses = BuildCashRecordItems(monthStart, nextMonthStart, "Недостачи")
+                        }
+                    },
+
+                    reportsByMonth,
+
+                    autoSalary = BuildAutoSalaryPayload(autoSalaryReport),
+
+                    cashReconciliation,
 
                     places = places.Select(place => new
                     {
@@ -235,9 +412,14 @@ namespace ClubTimerXbox.Services
                         isOpenMode = place.IsOpenMode,
                         isCalculating = place.IsCalculating,
                         paidAmount = place.PaidAmount,
+                        currentGameAmount = GetCurrentGameAmount(place),
                         remainingSeconds = place.RemainingSeconds,
+                        totalMinutes = place.TotalMinutes,
                         startedByEmployeeName = place.StartedByEmployeeName,
-                        incomeEmployeeName = place.IncomeEmployeeName
+                        incomeEmployeeName = place.IncomeEmployeeName,
+                        hasAttachedItems = HasUnpaidSessionSales(place.Name),
+                        productsAndServicesAmount = GetUnpaidSessionSalesAmount(place.Name),
+                        saleLines = GetUnpaidSessionSaleLines(place.Name)
                     }).ToList(),
 
                     stock = stockItems,
@@ -251,6 +433,9 @@ namespace ClubTimerXbox.Services
                     employees = employees.Select(employee =>
                     {
                         var summary = EmployeeStatsService.GetSummary(employee.Name);
+                        var autoSalary = autoSalaryReport.Employees
+                            .FirstOrDefault(item =>
+                                item.EmployeeName.Equals(employee.Name, StringComparison.OrdinalIgnoreCase));
 
                         int salaryForMonth = CashService.GetSalaryTotalByPeriodForEmployee(
                             monthStart,
@@ -306,6 +491,7 @@ namespace ClubTimerXbox.Services
 
                         return new
                         {
+                            employeeId = employee.EmployeeId,
                             name = employee.Name,
                             pinCode = employee.PinCode,
                             isActive = employee.IsActive,
@@ -326,6 +512,21 @@ namespace ClubTimerXbox.Services
                             monthShortages = summary.MonthShortages,
 
                             monthSalaryPaid = salaryForMonth,
+                            autoSalary = autoSalary == null
+                                ? null
+                                : new
+                                {
+                                    workHours = autoSalary.WorkHours,
+                                    timeAmount = autoSalary.TimeAmount,
+                                    gameRevenueAmount = autoSalary.GameRevenueAmount,
+                                    productShareAmount = autoSalary.ProductShareAmount,
+                                    productBonusAmount = autoSalary.ProductBonusAmount,
+                                    bonusAmount = autoSalary.BonusAmount,
+                                    grossAmount = autoSalary.GrossAmount,
+                                    lossesAmount = autoSalary.LossesAmount,
+                                    paidAmount = autoSalary.PaidAmount,
+                                    remainingAmount = autoSalary.RemainingAmount
+                                },
 
                             closedGameSessionsCount = summary.ClosedGameSessionsCount,
                             productServiceOperationsCount = summary.ProductServiceOperationsCount,
@@ -361,7 +562,11 @@ namespace ClubTimerXbox.Services
                         .ToList()
                 };
 
-                await PutAsync("club/current", data);
+                await PutAsync(LegacyCurrentPath, data);
+                await PutAsync(ClubCurrentPath, data);
+                await PutAsync(ClubMetaPath, BuildClubMeta(pcIdentity));
+                await PutAsync(OwnerClubMetaPath, BuildClubMeta(pcIdentity));
+                await PushOwnerEmployeesIfNeededAsync(employees, pcIdentity);
             }
             catch
             {
@@ -369,28 +574,13 @@ namespace ClubTimerXbox.Services
             }
         }
 
-        public static async Task CheckCommandsAsync()
+        public static async Task CheckCommandsAsync(IReadOnlyList<ClubPlace>? places = null)
         {
             try
             {
-                var commands = await GetAsync<Dictionary<string, FirebaseCommand>>("club/commands");
-
-                if (commands == null)
-                    return;
-
-                foreach (var pair in commands)
-                {
-                    string commandId = pair.Key;
-                    FirebaseCommand command = pair.Value;
-
-                    if (command == null)
-                        continue;
-
-                    if (command.Status != "pending")
-                        continue;
-
-                    await ApplyCommandAsync(commandId, command);
-                }
+                var currentPlaces = places ?? Array.Empty<ClubPlace>();
+                await CheckCommandsAsync(ClubCommandsPath, currentPlaces);
+                await CheckCommandsAsync(LegacyCommandsPath, currentPlaces);
             }
             catch
             {
@@ -398,7 +588,913 @@ namespace ClubTimerXbox.Services
             }
         }
 
-        private static async Task ApplyCommandAsync(string commandId, FirebaseCommand command)
+        private static async Task CheckCommandsAsync(
+            string commandsPath,
+            IReadOnlyList<ClubPlace> places)
+        {
+            var commands = await GetAsync<Dictionary<string, FirebaseCommand>>(commandsPath);
+
+            if (commands == null)
+                return;
+
+            foreach (var pair in commands)
+            {
+                string commandId = pair.Key;
+                FirebaseCommand command = pair.Value;
+
+                if (command == null)
+                    continue;
+
+                if (command.Status != "pending")
+                    continue;
+
+                command.FirebasePath = commandsPath;
+                await ApplyCommandAsync(commandId, command, places);
+            }
+        }
+
+        private static object BuildClubMeta(PcIdentity identity)
+        {
+            return new
+            {
+                id = identity.ClubId,
+                name = identity.ClubName,
+                isActivated = identity.IsActivated,
+                installationId = identity.InstallationId,
+                activatedAt = identity.ActivatedAt,
+                pcName = Environment.MachineName,
+                appVersion = AppVersionService.Version,
+                updateChannel = AppVersionService.UpdateChannel,
+                app = AppVersionService.BuildPayload(),
+                updatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+            };
+        }
+
+        private static object BuildClubSettingsPayload(ClubSettings settings)
+        {
+            return new
+            {
+                tvCount = settings.TvCount,
+                wheelCount = settings.WheelCount,
+                vipRoomCount = settings.VipRoomCount,
+                tariffs = new
+                {
+                    tv = BuildTariffPayload(settings.TvTariff),
+                    wheel = BuildTariffPayload(settings.WheelTariff),
+                    vip = BuildTariffPayload(settings.VipTariff)
+                }
+            };
+        }
+
+        private static object BuildTariffPayload(TariffSettings tariff)
+        {
+            return new
+            {
+                oneHourPrice = tariff.OneHourPrice,
+                halfHourPrice = tariff.HalfHourPrice,
+                fiveMinutesPrice = tariff.FiveMinutesPrice
+            };
+        }
+
+        private static async Task PushOwnerEmployeesIfNeededAsync(
+            List<Employee> employees,
+            PcIdentity identity)
+        {
+            if (DateTime.Now - _lastOwnerEmployeesPush < TimeSpan.FromMinutes(1))
+                return;
+
+            _lastOwnerEmployeesPush = DateTime.Now;
+            string updatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+
+            foreach (var employee in employees)
+            {
+                if (string.IsNullOrWhiteSpace(employee.EmployeeId))
+                    continue;
+
+                await PutAsync($"owner/employees/{employee.EmployeeId}/profile", new
+                {
+                    employeeId = employee.EmployeeId,
+                    name = employee.Name,
+                    pinCode = employee.PinCode,
+                    updatedAt
+                });
+
+                await PutAsync($"owner/employees/{employee.EmployeeId}/clubs/{identity.ClubId}", new
+                {
+                    clubId = identity.ClubId,
+                    clubName = identity.ClubName,
+                    isActive = employee.IsActive,
+                    updatedAt
+                });
+            }
+        }
+
+        private static int GetPaymentTotal(
+            CashReportSection section,
+            CashReportPeriodMode periodMode,
+            DateTime selectedDate)
+        {
+            var filter = new CashReportFilter
+            {
+                Section = section,
+                PeriodMode = periodMode,
+                ViewMode = CashReportViewMode.Records,
+                SelectedDay = selectedDate,
+                SelectedYear = selectedDate.Year,
+                SelectedMonth = selectedDate.Month
+            };
+
+            var report = CashReportService.BuildReport(filter);
+
+            return report.Summary.TotalAmount;
+        }
+
+        private static CashReportSummary GetCombinedPaymentSummary(
+            CashReportPeriodMode periodMode,
+            DateTime selectedDate)
+        {
+            var games = GetPaymentSummary(
+                CashReportSection.Games,
+                periodMode,
+                selectedDate
+            );
+
+            var products = GetPaymentSummary(
+                CashReportSection.ProductsAndServices,
+                periodMode,
+                selectedDate
+            );
+
+            return new CashReportSummary
+            {
+                TotalAmount = games.TotalAmount + products.TotalAmount,
+                CashAmount = games.CashAmount + products.CashAmount,
+                MBankAmount = games.MBankAmount + products.MBankAmount,
+                RecordsCount = games.RecordsCount + products.RecordsCount
+            };
+        }
+
+        private static int? CalculateActualCashBalanceByPeriod(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            var latestAcceptance = CashAcceptanceService
+                .GetByPeriod(fromInclusive, toExclusive)
+                .FirstOrDefault();
+
+            if (latestAcceptance == null)
+                return null;
+
+            DateTime checkpoint = latestAcceptance.CreatedAt;
+
+            int cashIncomeAfterCheckpoint = PaymentService.Records
+                .Where(record =>
+                    record.CreatedAt > checkpoint &&
+                    record.CreatedAt < toExclusive)
+                .Sum(record => record.CashAmount);
+
+            int cashExpensesAfterCheckpoint = CashService.Records
+                .Where(record =>
+                    record.CreatedAt > checkpoint &&
+                    record.CreatedAt < toExclusive &&
+                    record.Category == "Расходы" &&
+                    record.PaymentMethod == "Наличные")
+                .Sum(record => record.Amount);
+
+            int balance =
+                latestAcceptance.ActualCashAmount +
+                cashIncomeAfterCheckpoint -
+                cashExpensesAfterCheckpoint;
+
+            return balance;
+        }
+
+        private static int? CalculateActualCashlessBalanceByPeriod(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            var latestVerification = CashlessService.Records
+                .Where(record =>
+                    record.Date >= fromInclusive.Date &&
+                    record.Date < toExclusive.Date)
+                .OrderByDescending(record => record.Date)
+                .ThenByDescending(record => record.UpdatedAt)
+                .FirstOrDefault();
+
+            if (latestVerification == null)
+                return null;
+
+            DateTime checkpoint = latestVerification.UpdatedAt;
+
+            int cashlessIncomeAfterCheckpoint = PaymentService.Records
+                .Where(record =>
+                    record.CreatedAt > checkpoint &&
+                    record.CreatedAt < toExclusive)
+                .Sum(record => record.MBankAmount);
+
+            int cashlessExpensesAfterCheckpoint = CashService.Records
+                .Where(record =>
+                    record.CreatedAt > checkpoint &&
+                    record.CreatedAt < toExclusive &&
+                    record.Category == "Расходы" &&
+                    record.PaymentMethod == "Безнал")
+                .Sum(record => record.Amount);
+
+            int balance =
+                latestVerification.Amount +
+                cashlessIncomeAfterCheckpoint -
+                cashlessExpensesAfterCheckpoint;
+
+            return balance;
+        }
+
+        private static CashReportSummary GetPaymentSummary(
+            CashReportSection section,
+            CashReportPeriodMode periodMode,
+            DateTime selectedDate)
+        {
+            var filter = new CashReportFilter
+            {
+                Section = section,
+                PeriodMode = periodMode,
+                ViewMode = CashReportViewMode.Records,
+                SelectedDay = selectedDate,
+                SelectedYear = selectedDate.Year,
+                SelectedMonth = selectedDate.Month
+            };
+
+            return CashReportService.BuildReport(filter).Summary;
+        }
+
+        private static Dictionary<string, object> BuildReportsByMonth()
+        {
+            var monthStarts = new HashSet<DateTime>();
+
+            void AddMonth(DateTime date)
+            {
+                monthStarts.Add(new DateTime(date.Year, date.Month, 1));
+            }
+
+            AddMonth(DateTime.Today);
+
+            foreach (var record in CashService.Records)
+                AddMonth(record.CreatedAt);
+
+            foreach (var record in PaymentService.Records)
+                AddMonth(record.CreatedAt);
+
+            foreach (var record in CashlessService.Records)
+                AddMonth(record.Date);
+
+            foreach (var purchase in StockPurchaseService.Purchases)
+                AddMonth(purchase.CreatedAt);
+
+            return monthStarts
+                .OrderByDescending(date => date)
+                .Take(18)
+                .ToDictionary(
+                    date => date.ToString("yyyy-MM"),
+                    date => (object)BuildMonthReport(date)
+                );
+        }
+
+        private static object BuildAutoSalaryPayload(AutoSalaryReport report)
+        {
+            return new
+            {
+                monthKey = report.MonthKey,
+                settings = new
+                {
+                    expenseReservePercent = report.Settings.ExpenseReservePercent,
+                    salaryFundPercent = report.Settings.SalaryFundPercent,
+                    timeSharePercent = report.Settings.TimeSharePercent,
+                    gameRevenueSharePercent = report.Settings.GameRevenueSharePercent,
+                    timeMonthlyFundAmount = report.Settings.TimeMonthlyFundAmount,
+                    timeMonthlyPlannedHours = report.Settings.TimeMonthlyPlannedHours,
+                    productRevenueSharePercent = report.Settings.ProductRevenueSharePercent,
+                    productBonusPercent = report.Settings.ProductBonusPercent,
+                    workDayStartHour = report.Settings.WorkDayStartHour,
+                    workDayEndHour = report.Settings.WorkDayEndHour,
+                    dailyGameRevenueNorm = report.Settings.DailyGameRevenueNorm,
+                    overNormBonusPercent = report.Settings.OverNormBonusPercent,
+                    punctualityBonusAmount = report.Settings.PunctualityBonusAmount,
+                    lateActiveSessionBonusAmount = report.Settings.LateActiveSessionBonusAmount
+                },
+                gameRevenue = report.GameRevenue,
+                productRevenue = report.ProductRevenue,
+                expenseReserveAmount = report.ExpenseReserveAmount,
+                salaryBaseAmount = report.SalaryBaseAmount,
+                salaryFundAmount = report.SalaryFundAmount,
+                timeFundAmount = report.TimeFundAmount,
+                gameRevenueFundAmount = report.GameRevenueFundAmount,
+                productShareFundAmount = report.ProductShareFundAmount,
+                productBonusTotalAmount = report.ProductBonusTotalAmount,
+                bonusTotalAmount = report.BonusTotalAmount,
+                employees = report.Employees.Select(employee => new
+                {
+                    employeeName = employee.EmployeeName,
+                    workHours = employee.WorkHours,
+                    gameRevenue = employee.GameRevenue,
+                    productRevenue = employee.ProductRevenue,
+                    timeAmount = employee.TimeAmount,
+                    gameRevenueAmount = employee.GameRevenueAmount,
+                    productShareAmount = employee.ProductShareAmount,
+                    productBonusAmount = employee.ProductBonusAmount,
+                    bonusAmount = employee.BonusAmount,
+                    bonuses = employee.Bonuses.Select(bonus => new
+                    {
+                        createdAt = bonus.CreatedAt.ToString("O"),
+                        type = bonus.Type,
+                        title = bonus.Title,
+                        description = bonus.Description,
+                        amount = bonus.Amount
+                    }).ToList(),
+                    grossAmount = employee.GrossAmount,
+                    lossesAmount = employee.LossesAmount,
+                    paidAmount = employee.PaidAmount,
+                    remainingAmount = employee.RemainingAmount
+                }).ToList()
+            };
+        }
+
+        private static ProductServiceMonthSummary BuildProductServiceMonthSummary(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            AutoSalaryReport salaryReport)
+        {
+            var summary = new ProductServiceMonthSummary
+            {
+                EmployeeBonus = salaryReport.ProductBonusTotalAmount,
+                ProductBonusPercent = salaryReport.Settings.ProductBonusPercent
+            };
+
+            foreach (var payment in PaymentService.GetRecordsByPeriod(fromInclusive, toExclusive))
+            {
+                if (payment.GameSessionId != null)
+                    continue;
+
+                foreach (var item in payment.Items ?? new List<CheckoutItem>())
+                {
+                    if (!IsProductServiceCheckoutItem(item))
+                        continue;
+
+                    AddProductServiceSale(
+                        summary,
+                        item,
+                        payment.CreatedAt,
+                        payment.EmployeeName,
+                        payment.PlaceName
+                    );
+                }
+            }
+
+            foreach (var session in ActionLogService.GetAllGameSessions())
+            {
+                if (session.ClosedAt == null ||
+                    session.ClosedAt.Value < fromInclusive ||
+                    session.ClosedAt.Value >= toExclusive)
+                {
+                    continue;
+                }
+
+                foreach (var line in session.SaleLines.Where(line => line.IsPaid))
+                {
+                    AddProductServiceSale(summary, line);
+                }
+            }
+
+            foreach (var audit in StockAuditService.GetByPeriod(fromInclusive, toExclusive)
+                         .Where(item => item.Difference < 0))
+            {
+                AddProductStat(
+                    summary,
+                    audit.ProductName,
+                    soldQuantity: 0,
+                    lostQuantity: Math.Abs(audit.Difference),
+                    revenue: 0,
+                    margin: 0
+                );
+            }
+
+            summary.NetProfit =
+                summary.ServiceRevenue + summary.ProductProfit - summary.EmployeeBonus;
+
+            return summary;
+        }
+
+        private static bool IsProductServiceCheckoutItem(CheckoutItem item)
+        {
+            if (item == null)
+                return false;
+
+            string category = item.Category?.Trim() ?? "";
+
+            return category == "Товар" ||
+                   category == "Услуга" ||
+                   category == "Товары и услуги" ||
+                   category == "Товары/услуги" ||
+                   item.ItemType == SaleItemType.Product.ToString() ||
+                   item.ItemType == SaleItemType.Service.ToString();
+        }
+
+        private static void AddProductServiceSale(
+            ProductServiceMonthSummary summary,
+            CheckoutItem item,
+            DateTime createdAt,
+            string employeeName,
+            string placeName)
+        {
+            bool isProduct = IsProductSale(item.ItemType, item.Category, item.Name);
+            int total = item.TotalAmount;
+            string itemType = isProduct ? "Товар" : "Услуга";
+            int purchasePrice = isProduct
+                ? ResolvePurchasePrice(item.Name, item.PurchasePrice)
+                : 0;
+            int cost = purchasePrice * item.Quantity;
+            int profit = isProduct ? total - cost : total;
+
+            summary.Sales.Add(new ProductServiceSaleRow
+            {
+                CreatedAt = createdAt,
+                ItemName = item.Name,
+                ItemType = itemType,
+                Quantity = item.Quantity,
+                UnitPrice = item.UnitPrice,
+                PurchasePrice = purchasePrice,
+                TotalAmount = total,
+                ProfitAmount = profit,
+                EmployeeName = employeeName,
+                PlaceName = placeName
+            });
+
+            if (isProduct)
+            {
+                summary.ProductRevenue += total;
+                summary.ProductPurchaseCost += cost;
+                summary.ProductProfit += total - cost;
+                AddProductStat(summary, item.Name, item.Quantity, 0, total, total - cost);
+                return;
+            }
+
+            summary.ServiceRevenue += total;
+        }
+
+        private static void AddProductServiceSale(
+            ProductServiceMonthSummary summary,
+            GameSessionSaleLine line)
+        {
+            if (line.ItemType == SaleItemType.Product)
+            {
+                int purchasePrice = ResolvePurchasePrice(line.ItemName, line.PurchasePrice);
+                int cost = purchasePrice * line.Quantity;
+                int profit = line.TotalAmount - cost;
+
+                summary.Sales.Add(new ProductServiceSaleRow
+                {
+                    CreatedAt = line.CreatedAt,
+                    ItemName = line.ItemName,
+                    ItemType = "Товар",
+                    Quantity = line.Quantity,
+                    UnitPrice = line.UnitPrice,
+                    PurchasePrice = purchasePrice,
+                    TotalAmount = line.TotalAmount,
+                    ProfitAmount = profit,
+                    EmployeeName = line.EmployeeName,
+                    PlaceName = ""
+                });
+
+                summary.ProductRevenue += line.TotalAmount;
+                summary.ProductPurchaseCost += cost;
+                summary.ProductProfit += profit;
+                AddProductStat(summary, line.ItemName, line.Quantity, 0, line.TotalAmount, profit);
+                return;
+            }
+
+            summary.Sales.Add(new ProductServiceSaleRow
+            {
+                CreatedAt = line.CreatedAt,
+                ItemName = line.ItemName,
+                ItemType = "Услуга",
+                Quantity = line.Quantity,
+                UnitPrice = line.UnitPrice,
+                PurchasePrice = 0,
+                TotalAmount = line.TotalAmount,
+                ProfitAmount = line.TotalAmount,
+                EmployeeName = line.EmployeeName,
+                PlaceName = ""
+            });
+            summary.ServiceRevenue += line.TotalAmount;
+        }
+
+        private static bool IsProductSale(
+            string itemType,
+            string category,
+            string itemName)
+        {
+            if (itemType == SaleItemType.Product.ToString() || category == "Товар")
+                return true;
+
+            if (itemType == SaleItemType.Service.ToString() || category == "Услуга")
+                return false;
+
+            return ProductStockService.IsProductTracked(itemName);
+        }
+
+        private static int ResolvePurchasePrice(string productName, int savedPurchasePrice)
+        {
+            if (savedPurchasePrice > 0)
+                return savedPurchasePrice;
+
+            return ProductStockService.GetPurchasePrice(productName);
+        }
+
+        private static void AddProductStat(
+            ProductServiceMonthSummary summary,
+            string productName,
+            int soldQuantity,
+            int lostQuantity,
+            int revenue,
+            int margin)
+        {
+            if (string.IsNullOrWhiteSpace(productName))
+                return;
+
+            ProductStatRow stat;
+
+            if (summary.ProductStats.ContainsKey(productName))
+            {
+                stat = summary.ProductStats[productName];
+            }
+            else
+            {
+                stat = new ProductStatRow
+                {
+                    ProductName = productName
+                };
+                summary.ProductStats[productName] = stat;
+            }
+
+            stat.SoldQuantity += soldQuantity;
+            stat.LostQuantity += lostQuantity;
+            stat.Revenue += revenue;
+            stat.Margin += margin;
+            stat.EmployeeBonus = Percent(stat.Revenue, summary.ProductBonusPercent);
+            stat.NetProfit = stat.Margin - stat.EmployeeBonus;
+        }
+
+        private static int Percent(int amount, int percent)
+        {
+            return (int)Math.Round(amount * (percent / 100.0));
+        }
+
+        private class ProductServiceMonthSummary
+        {
+            public int ProductRevenue { get; set; }
+
+            public int ServiceRevenue { get; set; }
+
+            public int ProductPurchaseCost { get; set; }
+
+            public int ProductProfit { get; set; }
+
+            public int EmployeeBonus { get; set; }
+
+            public int NetProfit { get; set; }
+
+            public int ProductBonusPercent { get; set; }
+
+            public List<ProductServiceSaleRow> Sales { get; } = new List<ProductServiceSaleRow>();
+
+            public Dictionary<string, ProductStatRow> ProductStats { get; } =
+                new Dictionary<string, ProductStatRow>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private class ProductServiceSaleRow
+        {
+            public DateTime CreatedAt { get; set; }
+
+            public string ItemName { get; set; } = "";
+
+            public string ItemType { get; set; } = "";
+
+            public int Quantity { get; set; }
+
+            public int UnitPrice { get; set; }
+
+            public int PurchasePrice { get; set; }
+
+            public int TotalAmount { get; set; }
+
+            public int ProfitAmount { get; set; }
+
+            public string EmployeeName { get; set; } = "";
+
+            public string PlaceName { get; set; } = "";
+        }
+
+        private class ProductStatRow
+        {
+            public string ProductName { get; set; } = "";
+
+            public int SoldQuantity { get; set; }
+
+            public int LostQuantity { get; set; }
+
+            public int Revenue { get; set; }
+
+            public int Margin { get; set; }
+
+            public int EmployeeBonus { get; set; }
+
+            public int NetProfit { get; set; }
+        }
+
+        private static object BuildMonthReport(DateTime monthStart)
+        {
+            DateTime nextMonthStart = monthStart.AddMonths(1);
+
+            int games = GetPaymentTotal(CashReportSection.Games, CashReportPeriodMode.Month, monthStart);
+            int products = GetPaymentTotal(CashReportSection.ProductsAndServices, CashReportPeriodMode.Month, monthStart);
+            int income = games + products;
+            int expenses = CashService.GetClubExpenseTotalByPeriod(monthStart, nextMonthStart);
+            int stockPurchase = StockPurchaseService.GetTotalByPeriod(monthStart, nextMonthStart);
+            var stockPurchaseExpenseRecords = CashService.GetExpenseRecordsByExpenseCategory(
+                monthStart,
+                nextMonthStart,
+                "Закупка"
+            );
+            int stockPurchaseCash = stockPurchaseExpenseRecords
+                .Where(record => record.PaymentMethod == "Наличные")
+                .Sum(record => record.Amount);
+            int stockPurchaseCashless = stockPurchaseExpenseRecords
+                .Where(record => record.PaymentMethod == "Безнал")
+                .Sum(record => record.Amount);
+            var ownerWithdrawRecords = CashService.GetExpenseRecordsByExpenseCategory(
+                monthStart,
+                nextMonthStart,
+                "Владелец"
+            );
+            int ownerWithdraw = ownerWithdrawRecords.Sum(record => record.Amount);
+            int ownerWithdrawCash = ownerWithdrawRecords
+                .Where(record => record.PaymentMethod == "Наличные")
+                .Sum(record => record.Amount);
+            int ownerWithdrawCashless = ownerWithdrawRecords
+                .Where(record => record.PaymentMethod == "Безнал")
+                .Sum(record => record.Amount);
+            int salary = CashService.GetSalaryTotalByPeriod(monthStart, nextMonthStart);
+            var salaryRecords = CashService.GetSalaryRecordsByPeriod(monthStart, nextMonthStart);
+            int salaryCash = salaryRecords
+                .Where(record => record.PaymentMethod == "Наличные")
+                .Sum(record => record.Amount);
+            int salaryCashless = salaryRecords
+                .Where(record => record.PaymentMethod == "Безнал")
+                .Sum(record => record.Amount);
+            var salaryReport = AutoSalaryService.BuildReport(monthStart);
+            var productServiceSummary = BuildProductServiceMonthSummary(
+                monthStart,
+                nextMonthStart,
+                salaryReport
+            );
+            int salaryGross = salaryReport.Employees.Sum(employee => employee.GrossAmount);
+            int salaryLosses = salaryReport.Employees.Sum(employee => employee.LossesAmount);
+            int salaryAccrued = salaryReport.Employees.Sum(employee =>
+                Math.Max(0, employee.GrossAmount - employee.LossesAmount));
+            int losses = CashService.GetShortageTotalByPeriod(monthStart, nextMonthStart);
+            var incomePayment = GetCombinedPaymentSummary(CashReportPeriodMode.Month, monthStart);
+            int cashExpense = CashService.GetClubCashExpenseTotalByPeriod(monthStart, nextMonthStart);
+            int cashlessExpense = CashService.GetClubCashlessExpenseTotalByPeriod(monthStart, nextMonthStart);
+            int? actualCashBalance = CalculateActualCashBalanceByPeriod(monthStart, nextMonthStart);
+            int? actualCashlessBalance = CalculateActualCashlessBalanceByPeriod(monthStart, nextMonthStart);
+
+            var expenseRecords = BuildCashRecordItems(monthStart, nextMonthStart, "Расходы");
+            var expensesByCategory = CashService
+                .GetRecordsByPeriodAndCategory(monthStart, nextMonthStart, "Расходы")
+                .Where(record => IsOwnerReportExpenseCategory(record.ExpenseCategory))
+                .GroupBy(record => string.IsNullOrWhiteSpace(record.ExpenseCategory) ? "Другое" : record.ExpenseCategory)
+                .Select(group => new
+                {
+                    category = group.Key,
+                    total = group.Sum(record => record.Amount),
+                    cash = group.Where(record => record.PaymentMethod == "Наличные").Sum(record => record.Amount),
+                    cashless = group.Where(record => record.PaymentMethod == "Безнал").Sum(record => record.Amount)
+                })
+                .OrderByDescending(item => item.total)
+                .Cast<object>()
+                .ToArray();
+
+            return new
+            {
+                monthKey = monthStart.ToString("yyyy-MM"),
+                cash = new
+                {
+                    gamesMonth = games,
+                    productsMonth = products,
+                    productSalesMonth = productServiceSummary.ProductRevenue,
+                    serviceSalesMonth = productServiceSummary.ServiceRevenue,
+                    productSoldPurchaseCostMonth = productServiceSummary.ProductPurchaseCost,
+                    productProfitMonth = productServiceSummary.ProductProfit,
+                    productServiceBonusMonth = productServiceSummary.EmployeeBonus,
+                    productServiceNetProfitMonth = productServiceSummary.NetProfit,
+                    cashMonth = income,
+                    expensesMonth = expenses,
+                    stockPurchaseMonth = stockPurchase,
+                    stockPurchaseCashMonth = stockPurchaseCash,
+                    stockPurchaseCashlessMonth = stockPurchaseCashless,
+                    ownerWithdrawMonth = ownerWithdraw,
+                    ownerWithdrawCashMonth = ownerWithdrawCash,
+                    ownerWithdrawCashlessMonth = ownerWithdrawCashless,
+                    salaryAccruedMonth = salaryAccrued,
+                    salaryGrossMonth = salaryGross,
+                    salaryLossesMonth = salaryLosses,
+                    salaryMonth = salary,
+                    salaryCashMonth = salaryCash,
+                    salaryCashlessMonth = salaryCashless,
+                    shortagesMonth = losses,
+                    incomeCashMonth = incomePayment.CashAmount,
+                    incomeMBankMonth = incomePayment.MBankAmount,
+                    actualCashBalanceMonth = actualCashBalance,
+                    actualCashlessBalanceMonth = actualCashlessBalance,
+                    cashExpenseMonth = cashExpense,
+                    cashlessExpenseMonth = cashlessExpense
+                },
+                cashRecords = new
+                {
+                    expenses = expenseRecords,
+                    games = BuildCashRecordItems(monthStart, nextMonthStart, "Игры"),
+                    productsAndServices = BuildCashRecordItems(monthStart, nextMonthStart, "Товары и услуги"),
+                    losses = BuildCashRecordItems(monthStart, nextMonthStart, "Недостачи")
+                },
+                productService = new
+                {
+                    stockPurchases = BuildStockPurchaseItems(monthStart, nextMonthStart),
+                    sales = productServiceSummary.Sales
+                        .OrderByDescending(item => item.CreatedAt)
+                        .Take(150)
+                        .Select(item => new
+                        {
+                            createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                            itemName = item.ItemName,
+                            itemType = item.ItemType,
+                            quantity = item.Quantity,
+                            unitPrice = item.UnitPrice,
+                            purchasePrice = item.PurchasePrice,
+                            totalAmount = item.TotalAmount,
+                            profitAmount = item.ProfitAmount,
+                            employeeName = item.EmployeeName,
+                            placeName = item.PlaceName
+                        })
+                        .ToArray(),
+                    productStats = productServiceSummary.ProductStats.Values
+                        .OrderByDescending(item => item.Revenue)
+                        .Select(item => new
+                        {
+                            productName = item.ProductName,
+                            soldQuantity = item.SoldQuantity,
+                            lostQuantity = item.LostQuantity,
+                            revenue = item.Revenue,
+                            margin = item.Margin,
+                            employeeBonus = item.EmployeeBonus,
+                            netProfit = item.NetProfit
+                        })
+                        .ToArray()
+                },
+                expensesByCategory
+            };
+        }
+
+        private static bool IsOwnerReportExpenseCategory(string expenseCategory)
+        {
+            if (string.IsNullOrWhiteSpace(expenseCategory))
+                return true;
+
+            return !expenseCategory.Equals("Зарплата", StringComparison.OrdinalIgnoreCase) &&
+                   !expenseCategory.Equals("Закупка", StringComparison.OrdinalIgnoreCase) &&
+                   !expenseCategory.Equals("Владелец", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static object[] BuildStockPurchaseItems(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            return StockPurchaseService
+                .GetPurchasesByPeriod(fromInclusive, toExclusive)
+                .Take(100)
+                .Select(purchase => new
+                {
+                    createdAt = purchase.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                    addedBy = purchase.AddedBy,
+                    note = purchase.Note,
+                    totalAmount = purchase.TotalAmount,
+                    items = purchase.Items.Select(item => new
+                    {
+                        productName = item.ProductName,
+                        quantity = item.Quantity,
+                        purchasePrice = item.PurchasePrice,
+                        salePrice = item.SalePrice,
+                        minimumQuantity = item.MinimumQuantity,
+                        totalAmount = item.TotalAmount
+                    }).ToArray()
+                })
+                .Cast<object>()
+                .ToArray();
+        }
+
+        private static object[] BuildCashRecordItems(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string category)
+        {
+            return CashService
+                .GetRecordsByPeriodAndCategory(fromInclusive, toExclusive, category)
+                .Take(120)
+                .Select(record => new
+                {
+                    id = record.Id.ToString(),
+                    createdAt = record.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                    title = record.Title,
+                    description = record.Description,
+                    amount = record.Amount,
+                    category = record.Category,
+                    expenseCategory = record.ExpenseCategory,
+                    paymentMethod = record.PaymentMethod,
+                    employeeName = record.EmployeeName,
+                    incomeEmployeeName = record.IncomeEmployeeName,
+                    relatedEmployeeName = record.RelatedEmployeeName,
+                    placeName = record.PlaceName
+                })
+                .Cast<object>()
+                .ToArray();
+        }
+
+        private static bool HasUnpaidSessionSales(string placeName)
+        {
+            return GetUnpaidSessionSalesAmount(placeName) > 0;
+        }
+
+        private static int GetCurrentGameAmount(ClubPlace place)
+        {
+            if (!place.IsBusy)
+                return 0;
+
+            if (place.IsOpenMode)
+            {
+                if (place.StartTime == null)
+                    return (int)Math.Ceiling(place.AccruedAmountBeforeCurrentSegment);
+
+                double totalSeconds = (DateTime.Now - place.StartTime.Value).TotalSeconds;
+                int minutes = (int)Math.Ceiling(totalSeconds / 60.0);
+
+                if (minutes < 1)
+                    minutes = 1;
+
+                double openModeTotal =
+                    place.AccruedAmountBeforeCurrentSegment + (minutes * place.ActivePricePerMinute);
+
+                return (int)Math.Ceiling(openModeTotal);
+            }
+
+            return place.PaidAmount;
+        }
+
+        private static int GetUnpaidSessionSalesAmount(string placeName)
+        {
+            var session = ActionLogService.GetActiveGameSessionByPlace(placeName);
+
+            if (session == null)
+                return 0;
+
+            return session.SaleLines
+                .Where(line => !line.IsPaid)
+                .Sum(line => line.TotalAmount);
+        }
+
+        private static object[] GetUnpaidSessionSaleLines(string placeName)
+        {
+            var session = ActionLogService.GetActiveGameSessionByPlace(placeName);
+
+            if (session == null)
+                return new object[0];
+
+            return session.SaleLines
+                .Where(line => !line.IsPaid)
+                .Select(line => new
+                {
+                    itemName = line.ItemName,
+                    itemType = line.ItemType.ToString(),
+                    quantity = line.Quantity,
+                    unitPrice = line.UnitPrice,
+                    totalAmount = line.TotalAmount,
+                    employeeName = line.EmployeeName,
+                    createdAt = line.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss")
+                })
+                .Cast<object>()
+                .ToArray();
+        }
+
+        private static async Task ApplyCommandAsync(
+            string commandId,
+            FirebaseCommand command,
+            IReadOnlyList<ClubPlace> places)
         {
             try
             {
@@ -530,6 +1626,84 @@ namespace ClubTimerXbox.Services
                     return;
                 }
 
+                if (command.Type == "DeleteExpense")
+                {
+                    ApplyDeleteExpense(command);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Расход удалён: {command.RecordId}."
+                    );
+
+                    return;
+                }
+
+                if (command.Type == "RenameExpenseCategory")
+                {
+                    int changed = ApplyRenameExpenseCategory(command);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Категория расходов переименована: {command.ExpenseCategory} → {command.NewExpenseCategory}. Записей: {changed}."
+                    );
+
+                    return;
+                }
+
+                if (command.Type == "UpdateExpenseCategoryAmount")
+                {
+                    ApplyUpdateExpenseCategoryAmount(command);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Сумма категории расходов обновлена: {command.ExpenseCategory}, новый итог {command.Amount} сом."
+                    );
+
+                    return;
+                }
+
+                if (command.Type == "DeleteExpenseCategory")
+                {
+                    int deleted = ApplyDeleteExpenseCategory(command);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Категория расходов удалена: {command.ExpenseCategory}. Записей: {deleted}."
+                    );
+
+                    return;
+                }
+
+                if (command.Type == "ResolveCashReconciliation")
+                {
+                    var item = ApplyResolveCashReconciliation(command);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Сверка закрыта: {item.Title}, {item.Amount} сом."
+                    );
+
+                    return;
+                }
+
+                if (command.Type == "VerifyCashlessActual")
+                {
+                    string message = ApplyVerifyCashlessActual(command);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        message
+                    );
+
+                    return;
+                }
+
                 if (command.Type == "AddSalaryPayment")
                 {
                     ApplyAddSalaryPayment(command);
@@ -543,6 +1717,19 @@ namespace ClubTimerXbox.Services
                     return;
                 }
 
+                if (command.Type == "UpdateAutoSalarySettings")
+                {
+                    var settings = ApplyUpdateAutoSalarySettings(command);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Настройки авто ЗП сохранены: резерв {settings.ExpenseReservePercent}%, фонд выручки {settings.SalaryFundPercent}%, фонд времени {settings.TimeMonthlyFundAmount} сом / {settings.TimeMonthlyPlannedHours} ч."
+                    );
+
+                    return;
+                }
+
                 if (command.Type == "SetCashlessForToday")
                 {
                     ApplySetCashlessForToday(command);
@@ -551,6 +1738,19 @@ namespace ClubTimerXbox.Services
                         commandId,
                         command,
                         $"Безнал за сегодня сохранён: {command.Amount} сом."
+                    );
+
+                    return;
+                }
+
+                if (command.Type == "ClearAllHistoryKeepEmployees")
+                {
+                    ApplyClearAllHistoryKeepEmployees();
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        "История очищена. Сотрудники, товары/услуги и настройки сохранены."
                     );
 
                     return;
@@ -604,6 +1804,40 @@ namespace ClubTimerXbox.Services
                         command,
                         $"Работник включён: {command.EmployeeName}."
                     );
+
+                    return;
+                }
+
+                if (command.Type == "PrepareAppUpdate")
+                {
+                    string message = await AppUpdateService.PrepareLatestUpdateAsync();
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        message
+                    );
+
+                    return;
+                }
+
+                if (command.Type == "InstallAppUpdate")
+                {
+                    var result = await AppUpdateService.InstallLatestUpdateAsync(places);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        result.Message
+                    );
+
+                    if (result.ShouldShutdown)
+                    {
+                        _ = Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            Application.Current.Shutdown();
+                        }));
+                    }
 
                     return;
                 }
@@ -882,7 +2116,8 @@ namespace ClubTimerXbox.Services
                     ProductName = productName,
                     Quantity = item.Quantity,
                     PurchasePrice = purchasePrice,
-                    SalePrice = salePrice
+                    SalePrice = salePrice,
+                    MinimumQuantity = item.MinimumQuantity
                 });
             }
 
@@ -928,19 +2163,338 @@ namespace ClubTimerXbox.Services
 
         private static void ApplyAddExpense(FirebaseCommand command)
         {
-            if (string.IsNullOrWhiteSpace(command.Title))
-                throw new Exception("Не указан title.");
-
             if (command.Amount <= 0)
                 throw new Exception("amount должен быть больше 0.");
 
+            string expenseCategory = CashService.NormalizeExpenseCategory(command.ExpenseCategory);
+            string title = string.IsNullOrWhiteSpace(command.Title)
+                ? expenseCategory
+                : command.Title.Trim();
+
             CashService.AddExpense(
                 employeeName: "Владелец",
-                title: command.Title,
+                title: title,
                 description: command.Description,
                 amount: command.Amount,
                 paymentMethod: NormalizePaymentMethod(command.PaymentMethod),
-                expenseCategory: CashService.NormalizeExpenseCategory(command.ExpenseCategory)
+                expenseCategory: expenseCategory
+            );
+        }
+
+        private static void ApplyDeleteExpense(FirebaseCommand command)
+        {
+            if (!Guid.TryParse(command.RecordId, out Guid recordId))
+                throw new Exception("Не указан корректный recordId.");
+
+            bool deleted = CashService.DeleteRecord(recordId, "Расходы");
+
+            if (!deleted)
+                throw new Exception($"Расход не найден: {command.RecordId}");
+        }
+
+        private static int ApplyRenameExpenseCategory(FirebaseCommand command)
+        {
+            if (string.IsNullOrWhiteSpace(command.ExpenseCategory))
+                throw new Exception("Не указана категория.");
+
+            if (string.IsNullOrWhiteSpace(command.NewExpenseCategory))
+                throw new Exception("Не указано новое название категории.");
+
+            var (monthStart, nextMonthStart) = ParseCommandMonth(command.MonthKey);
+
+            return CashService.RenameExpenseCategoryByPeriod(
+                monthStart,
+                nextMonthStart,
+                command.ExpenseCategory,
+                command.NewExpenseCategory
+            );
+        }
+
+        private static int ApplyDeleteExpenseCategory(FirebaseCommand command)
+        {
+            if (string.IsNullOrWhiteSpace(command.ExpenseCategory))
+                throw new Exception("Не указана категория.");
+
+            var (monthStart, nextMonthStart) = ParseCommandMonth(command.MonthKey);
+
+            return CashService.DeleteExpenseCategoryByPeriod(
+                monthStart,
+                nextMonthStart,
+                command.ExpenseCategory
+            );
+        }
+
+        private static void ApplyUpdateExpenseCategoryAmount(FirebaseCommand command)
+        {
+            if (string.IsNullOrWhiteSpace(command.ExpenseCategory))
+                throw new Exception("Не указана категория.");
+
+            if (command.Amount < 0)
+                throw new Exception("Сумма не должна быть меньше 0.");
+
+            var (monthStart, nextMonthStart) = ParseCommandMonth(command.MonthKey);
+
+            int updatedAmount = CashService.UpdateExpenseCategoryTotalByPeriod(
+                monthStart,
+                nextMonthStart,
+                command.ExpenseCategory,
+                command.Amount
+            );
+
+            if (updatedAmount <= 0 && command.Amount > 0)
+                throw new Exception("Категория расходов не найдена.");
+        }
+
+        private static (DateTime monthStart, DateTime nextMonthStart) ParseCommandMonth(string monthKey)
+        {
+            if (DateTime.TryParse($"{monthKey}-01", out DateTime parsed))
+            {
+                var monthStart = new DateTime(parsed.Year, parsed.Month, 1);
+                return (monthStart, monthStart.AddMonths(1));
+            }
+
+            var current = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            return (current, current.AddMonths(1));
+        }
+
+        private static CashReconciliationItem ApplyResolveCashReconciliation(FirebaseCommand command)
+        {
+            if (!Guid.TryParse(command.ReconciliationId, out Guid reconciliationId))
+                throw new Exception("Не указан корректный reconciliationId.");
+
+            var item = CashReconciliationService.Resolve(
+                reconciliationId,
+                "Владелец",
+                command.ResolutionType,
+                command.Description
+            );
+
+            if (command.ResolutionType == "RealShortage" &&
+                item.Amount > 0 &&
+                item.Kind == CashReconciliationKind.CashShortage)
+            {
+                string description =
+                    $"Сверка налички закрыта владельцем как реальная недостача.\n" +
+                    $"Должно быть: {item.ExpectedAmount} сом\n" +
+                    $"Фактически: {item.ActualAmount} сом\n" +
+                    $"Недостача: {item.Amount} сом";
+
+                CashService.AddShortage(
+                    checkedByEmployeeName: item.CheckedByEmployeeName,
+                    responsibleEmployeeName: item.ResponsibleEmployeeName,
+                    title: "Недостача наличных",
+                    description: description,
+                    amount: item.Amount
+                );
+
+                EmployeeLossService.AddCashShortage(
+                    responsibleEmployeeName: item.ResponsibleEmployeeName,
+                    checkedByEmployeeName: item.CheckedByEmployeeName,
+                    description: description,
+                    amount: item.Amount
+                );
+            }
+
+            if (command.ResolutionType == "RealShortage" &&
+                item.Amount > 0 &&
+                item.Kind == CashReconciliationKind.CashlessShortage)
+            {
+                var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+                var nextMonthStart = monthStart.AddMonths(1);
+
+                DistributeCashlessShortage(
+                    item.Amount,
+                    monthStart,
+                    nextMonthStart,
+                    item.ExpectedAmount,
+                    item.ActualAmount
+                );
+            }
+
+            return item;
+        }
+
+        private static string ApplyVerifyCashlessActual(FirebaseCommand command)
+        {
+            if (command.Amount < 0)
+                throw new Exception("amount не может быть меньше 0.");
+
+            var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            var nextMonthStart = monthStart.AddMonths(1);
+            var paymentSummary = GetCombinedPaymentSummary(CashReportPeriodMode.Month, monthStart);
+
+            int cashlessExpenses = CashService.GetCashlessExpenseTotalByPeriod(monthStart, nextMonthStart);
+            int expectedCashlessIncome = paymentSummary.MBankAmount;
+            int expectedCashlessBalance = expectedCashlessIncome - cashlessExpenses;
+
+            if (expectedCashlessBalance < 0)
+                expectedCashlessBalance = 0;
+
+            int actualCashless = command.Amount;
+            int difference = actualCashless - expectedCashlessBalance;
+
+            CashlessService.SetAmountForToday(
+                amount: actualCashless,
+                note: string.IsNullOrWhiteSpace(command.Description)
+                    ? "Сверка безнала владельцем"
+                    : command.Description
+            );
+
+            if (difference >= 0)
+            {
+                CashReconciliationService.AddCashlessVerification(
+                    expectedAmount: expectedCashlessBalance,
+                    actualAmount: actualCashless,
+                    amount: difference,
+                    status: CashReconciliationStatus.Resolved,
+                    note: difference == 0
+                        ? "Остаток безнала сошелся."
+                        : $"Фактический остаток безнала больше программы на {difference} сом."
+                );
+
+                return difference == 0
+                    ? "Остаток безнала сошелся."
+                    : $"Остаток безнала больше программы на {difference} сом. Записано как излишек безнала.";
+            }
+
+            int shortage = Math.Abs(difference);
+            var notes = new List<string>
+            {
+                $"Поступило безнала по программе: {expectedCashlessIncome} сом.",
+                $"Расходы безнала: {cashlessExpenses} сом.",
+                $"Ожидаемый остаток безнала: {expectedCashlessBalance} сом.",
+                $"Фактический остаток: {actualCashless} сом.",
+                $"Недостача остатка безнала: {shortage} сом."
+            };
+
+            var reconciliation = CashReconciliationService.AddCashlessVerification(
+                expectedAmount: expectedCashlessBalance,
+                actualAmount: actualCashless,
+                amount: shortage,
+                status: CashReconciliationStatus.Open,
+                note: string.Join("\n", notes)
+            );
+
+            if (reconciliation.Status == CashReconciliationStatus.Resolved)
+            {
+                notes.Add("Закрыто автоматически излишком налички как ошибка типа оплаты.");
+                return string.Join(" ", notes);
+            }
+
+            if (reconciliation.Amount >= CashReconciliationService.AutoResolveLimit)
+            {
+                notes.Add($"Сумма {reconciliation.Amount} сом требует ручной разборки владельцем.");
+                return string.Join(" ", notes);
+            }
+
+            int finalShortage = reconciliation.Amount;
+            DistributeCashlessShortage(
+                finalShortage,
+                monthStart,
+                nextMonthStart,
+                expectedCashlessBalance,
+                actualCashless
+            );
+
+            CashReconciliationService.Resolve(
+                reconciliation.Id,
+                "Система",
+                "RealShortage",
+                $"После автоматического сопоставления с наличкой осталась реальная недостача безнала {finalShortage} сом."
+            );
+
+            notes.Add($"Остаток недостачи {finalShortage} сом оформлен на сотрудников по доле безнал-выручки.");
+            return string.Join(" ", notes);
+        }
+
+        private static void DistributeCashlessShortage(
+            int shortageAmount,
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            int expectedCashless,
+            int actualCashless)
+        {
+            var groups = PaymentService.Records
+                .Where(record =>
+                    record.CreatedAt >= fromInclusive &&
+                    record.CreatedAt < toExclusive &&
+                    record.MBankAmount > 0)
+                .GroupBy(record =>
+                    string.IsNullOrWhiteSpace(record.EmployeeName)
+                        ? "Неизвестно"
+                        : record.EmployeeName)
+                .Select(group => new
+                {
+                    EmployeeName = group.Key,
+                    Amount = group.Sum(record => record.MBankAmount)
+                })
+                .Where(group => group.Amount > 0)
+                .OrderByDescending(group => group.Amount)
+                .ToList();
+
+            if (groups.Count == 0)
+            {
+                AddCashlessShortageForEmployee(
+                    "Неизвестно",
+                    shortageAmount,
+                    expectedCashless,
+                    actualCashless
+                );
+
+                return;
+            }
+
+            int total = groups.Sum(group => group.Amount);
+            int distributed = 0;
+
+            for (int index = 0; index < groups.Count; index++)
+            {
+                int amount = index == groups.Count - 1
+                    ? shortageAmount - distributed
+                    : (int)Math.Round(shortageAmount * (groups[index].Amount / (double)total));
+
+                if (amount <= 0)
+                    continue;
+
+                distributed += amount;
+
+                AddCashlessShortageForEmployee(
+                    groups[index].EmployeeName,
+                    amount,
+                    expectedCashless,
+                    actualCashless
+                );
+            }
+        }
+
+        private static void AddCashlessShortageForEmployee(
+            string employeeName,
+            int amount,
+            int expectedCashlessBalance,
+            int actualCashless)
+        {
+            string description =
+                $"Автоматическая сверка безнала владельцем.\n" +
+                $"Ожидаемый остаток безнала: {expectedCashlessBalance} сом\n" +
+                $"Фактический остаток: {actualCashless} сом\n" +
+                $"Доля сотрудника: {amount} сом";
+
+            CashService.AddShortage(
+                checkedByEmployeeName: "Владелец",
+                responsibleEmployeeName: employeeName,
+                title: "Недостача безнала",
+                description: description,
+                amount: amount
+            );
+
+            EmployeeLossService.AddLoss(
+                responsibleEmployeeName: employeeName,
+                checkedByEmployeeName: "Владелец",
+                lossType: "Недостача безнала",
+                title: "Недостача безнала",
+                description: description,
+                amount: amount,
+                note: "Автоматически создано при сверке безнала"
             );
         }
 
@@ -959,6 +2513,20 @@ namespace ClubTimerXbox.Services
             if (employee == null)
                 throw new Exception($"Работник не найден: {employeeName}");
 
+            var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            var salary = AutoSalaryService
+                .BuildReport(monthStart)
+                .Employees
+                .FirstOrDefault(item =>
+                    item.EmployeeName.Equals(employee.Name, StringComparison.OrdinalIgnoreCase));
+            int remaining = salary?.RemainingAmount ?? 0;
+
+            if (remaining <= 0)
+                throw new Exception("У работника нет остатка зарплаты после штрафов.");
+
+            if (command.Amount > remaining)
+                throw new Exception($"Нельзя выдать больше остатка после штрафов: {remaining} сом.");
+
             CashService.AddSalaryPayment(
                 ownerName: "Владелец",
                 employeeName: employee.Name,
@@ -966,6 +2534,31 @@ namespace ClubTimerXbox.Services
                 paymentMethod: NormalizePaymentMethod(command.PaymentMethod),
                 description: command.Description
             );
+        }
+
+        private static AutoSalarySettings ApplyUpdateAutoSalarySettings(FirebaseCommand command)
+        {
+            var settings = new AutoSalarySettings
+            {
+                ExpenseReservePercent = command.ExpenseReservePercent,
+                SalaryFundPercent = command.SalaryFundPercent,
+                TimeSharePercent = command.TimeSharePercent,
+                GameRevenueSharePercent = command.GameRevenueSharePercent,
+                TimeMonthlyFundAmount = command.TimeMonthlyFundAmount,
+                TimeMonthlyPlannedHours = command.TimeMonthlyPlannedHours,
+                ProductRevenueSharePercent = command.ProductRevenueSharePercent,
+                ProductBonusPercent = command.ProductBonusPercent,
+                WorkDayStartHour = command.WorkDayStartHour,
+                WorkDayEndHour = command.WorkDayEndHour,
+                DailyGameRevenueNorm = command.DailyGameRevenueNorm,
+                OverNormBonusPercent = command.OverNormBonusPercent,
+                PunctualityBonusAmount = command.PunctualityBonusAmount,
+                LateActiveSessionBonusAmount = command.LateActiveSessionBonusAmount
+            };
+
+            AutoSalaryService.UpdateSettings(settings);
+
+            return AutoSalaryService.Settings;
         }
 
         private static void ApplySetCashlessForToday(FirebaseCommand command)
@@ -977,6 +2570,24 @@ namespace ClubTimerXbox.Services
                 amount: command.Amount,
                 note: command.Description
             );
+        }
+
+        private static void ApplyClearAllHistoryKeepEmployees()
+        {
+            // Keep system setup intact: employees, product catalog/stock, salary formula,
+            // alarm settings, Tuya credentials, device preferences, work modes, and cloud schedules.
+            ActiveSessionStorageService.Clear();
+            ActionLogService.Clear();
+            CashService.Clear();
+            CashlessService.Clear();
+            CashAcceptanceService.Clear();
+            CashReconciliationService.Clear();
+            EmployeeLossService.Clear();
+            PaymentService.Clear();
+            ProductIncomingService.Clear();
+            StockAuditService.Clear();
+            StockPurchaseService.Clear();
+            ShiftAcceptanceService.Reset();
         }
 
         private static void ApplyAddEmployee(FirebaseCommand command)
@@ -993,7 +2604,7 @@ namespace ClubTimerXbox.Services
             if (EmployeeService.ExistsByName(employeeName))
                 throw new Exception($"Работник уже существует: {employeeName}");
 
-            EmployeeService.AddEmployee(employeeName, pinCode);
+            EmployeeService.AddEmployee(employeeName, pinCode, command.EmployeeId);
         }
 
         private static void ApplyUpdateEmployeePin(FirebaseCommand command)
@@ -1073,7 +2684,7 @@ namespace ClubTimerXbox.Services
             command.AppliedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             command.ResultMessage = resultMessage;
 
-            await PutAsync($"club/commands/{commandId}", command);
+            await PutAsync($"{GetCommandPath(command)}/{commandId}", command);
         }
 
         private static async Task MarkCommandError(
@@ -1085,7 +2696,14 @@ namespace ClubTimerXbox.Services
             command.AppliedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             command.ResultMessage = errorMessage;
 
-            await PutAsync($"club/commands/{commandId}", command);
+            await PutAsync($"{GetCommandPath(command)}/{commandId}", command);
+        }
+
+        private static string GetCommandPath(FirebaseCommand command)
+        {
+            return string.IsNullOrWhiteSpace(command.FirebasePath)
+                ? LegacyCommandsPath
+                : command.FirebasePath;
         }
 
         private static async Task<T?> GetAsync<T>(string path)
@@ -1129,6 +2747,9 @@ namespace ClubTimerXbox.Services
 
         private class FirebaseCommand
         {
+            [JsonIgnore]
+            public string FirebasePath { get; set; } = "";
+
             public string Type { get; set; } = "";
             public string Status { get; set; } = "pending";
 
@@ -1156,9 +2777,30 @@ namespace ClubTimerXbox.Services
             public string PaymentMethod { get; set; } = "Наличные";
 
             public string ExpenseCategory { get; set; } = "Другое";
+            public string NewExpenseCategory { get; set; } = "";
+            public string MonthKey { get; set; } = "";
+            public string RecordId { get; set; } = "";
+            public string ReconciliationId { get; set; } = "";
+            public string ResolutionType { get; set; } = "";
 
             public string EmployeeName { get; set; } = "";
+            public string EmployeeId { get; set; } = "";
             public string PinCode { get; set; } = "";
+
+            public int ExpenseReservePercent { get; set; }
+            public int SalaryFundPercent { get; set; }
+            public int TimeSharePercent { get; set; }
+            public int GameRevenueSharePercent { get; set; }
+            public int TimeMonthlyFundAmount { get; set; }
+            public int TimeMonthlyPlannedHours { get; set; }
+            public int ProductRevenueSharePercent { get; set; }
+            public int ProductBonusPercent { get; set; }
+            public int WorkDayStartHour { get; set; }
+            public int WorkDayEndHour { get; set; }
+            public int DailyGameRevenueNorm { get; set; }
+            public int OverNormBonusPercent { get; set; }
+            public int PunctualityBonusAmount { get; set; }
+            public int LateActiveSessionBonusAmount { get; set; }
 
             public string CreatedAt { get; set; } = "";
             public string AppliedAt { get; set; } = "";

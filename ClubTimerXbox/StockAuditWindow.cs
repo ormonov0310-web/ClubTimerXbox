@@ -333,8 +333,7 @@ namespace ClubTimerXbox
                 Width = 180,
                 Height = 44,
                 FontSize = 16,
-                FontWeight = FontWeights.SemiBold,
-                IsEnabled = !ShiftAcceptanceService.Current.ProductsAccepted
+                FontWeight = FontWeights.SemiBold
             };
 
             acceptButton.Click += (_, _) => AcceptProducts();
@@ -363,7 +362,7 @@ namespace ClubTimerXbox
 
             _expectedCashAmount = CalculateExpectedCashAmount();
 
-            _actualCashBox.Text = _expectedCashAmount.ToString();
+            _actualCashBox.Text = "";
             _actualCashBox.Width = 180;
             _actualCashBox.Height = 44;
             _actualCashBox.FontSize = 18;
@@ -371,14 +370,13 @@ namespace ClubTimerXbox
             _actualCashBox.TextChanged -= ActualCashBox_TextChanged;
             _actualCashBox.TextChanged += ActualCashBox_TextChanged;
 
-            _cashExpectedText.Text =
-                $"Налички должно быть: {_expectedCashAmount} сом";
+            _cashExpectedText.Text = "Посчитайте фактическую наличку и введите сумму.";
 
             _cashExpectedText.Foreground = Brushes.White;
             _cashExpectedText.FontSize = 23;
             _cashExpectedText.FontWeight = FontWeights.Bold;
 
-            UpdateCashDifferenceText();
+            _cashDifferenceText.Text = "";
 
             _contentPanel.Children.Add(new TextBlock
             {
@@ -392,8 +390,7 @@ namespace ClubTimerXbox
             _contentPanel.Children.Add(new TextBlock
             {
                 Text =
-                    "Сотруднику показываем только готовую сумму: сколько должно быть в кассе и сколько фактически. " +
-                    "Подробности расчёта здесь не показываем.",
+                    "Ожидаемую сумму до ввода не показываем. Сначала нужно честно посчитать деньги в кассе.",
                 Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
                 FontSize = 15,
                 TextWrapping = TextWrapping.Wrap,
@@ -426,8 +423,7 @@ namespace ClubTimerXbox
             panel.Children.Add(new TextBlock
             {
                 Text =
-                    "Расчёт идёт от последней принятой налички: предыдущий фактический остаток + новые наличные поступления - наличные расходы. " +
-                    "Подробности скрыты, чтобы не грузить админа.",
+                    "После принятия система сравнит факт с программой и отправит разницу владельцу на разбор.",
                 Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
                 FontSize = 14,
                 TextWrapping = TextWrapping.Wrap,
@@ -482,8 +478,7 @@ namespace ClubTimerXbox
                 Width = 190,
                 Height = 44,
                 FontSize = 16,
-                FontWeight = FontWeights.SemiBold,
-                IsEnabled = !ShiftAcceptanceService.Current.CashAccepted
+                FontWeight = FontWeights.SemiBold
             };
 
             acceptButton.Click += (_, _) => AcceptCash();
@@ -523,36 +518,9 @@ namespace ClubTimerXbox
 
         private void UpdateCashDifferenceText()
         {
-            if (!int.TryParse(_actualCashBox.Text.Trim(), out int actualCash))
-            {
-                _cashDifferenceText.Text = "Разница: неверное число";
-                _cashDifferenceText.Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113));
-                _cashDifferenceText.FontSize = 16;
-                _cashDifferenceText.FontWeight = FontWeights.SemiBold;
-                return;
-            }
-
-            int difference = actualCash - _expectedCashAmount;
-
+            _cashDifferenceText.Text = "";
             _cashDifferenceText.FontSize = 16;
             _cashDifferenceText.FontWeight = FontWeights.SemiBold;
-
-            if (difference < 0)
-            {
-                _cashDifferenceText.Text = $"Недостача наличных: {Math.Abs(difference)} сом";
-                _cashDifferenceText.Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113));
-                return;
-            }
-
-            if (difference > 0)
-            {
-                _cashDifferenceText.Text = $"Излишек наличных: {difference} сом";
-                _cashDifferenceText.Foreground = new SolidColorBrush(Color.FromRgb(96, 165, 250));
-                return;
-            }
-
-            _cashDifferenceText.Text = "Разница: 0";
-            _cashDifferenceText.Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128));
         }
 
         private int CalculateExpectedCashAmount()
@@ -622,6 +590,9 @@ namespace ClubTimerXbox
 
         private void AcceptCash()
         {
+            if (!CanAcceptPart("наличку", ShiftAcceptanceService.Current.CashAccepted))
+                return;
+
             if (!int.TryParse(_actualCashBox.Text.Trim(), out int actualCash))
             {
                 MessageBox.Show(
@@ -650,30 +621,56 @@ namespace ClubTimerXbox
 
             if (difference < 0)
             {
-                int shortageAmount = Math.Abs(difference);
-
-                string shortageDescription =
-                    $"Приёмка налички: {responsible} → {checkedBy}\n" +
+                int shortage = Math.Abs(difference);
+                string description =
+                    $"Автоматическая недостача налички при приёмке.\n" +
+                    $"Передача: {responsible} → {checkedBy}\n" +
                     $"Должно быть: {_expectedCashAmount} сом\n" +
                     $"Фактически: {actualCash} сом\n" +
-                    $"Недостача: {shortageAmount} сом";
+                    $"Недостача: {shortage} сом";
 
                 CashService.AddShortage(
                     checkedByEmployeeName: checkedBy,
                     responsibleEmployeeName: responsible,
                     title: "Недостача наличных",
-                    description: shortageDescription,
-                    amount: shortageAmount
+                    description: description,
+                    amount: shortage
                 );
 
                 EmployeeLossService.AddCashShortage(
                     responsibleEmployeeName: responsible,
                     checkedByEmployeeName: checkedBy,
-                    description: shortageDescription,
-                    amount: shortageAmount
+                    description: description,
+                    amount: shortage
+                );
+
+                var reconciliation = CashReconciliationService.AddCashAcceptanceDifference(
+                    checkedByEmployeeName: checkedBy,
+                    responsibleEmployeeName: responsible,
+                    expectedAmount: _expectedCashAmount,
+                    actualAmount: actualCash,
+                    note: "Приёмка налички"
+                );
+
+                CashReconciliationService.Resolve(
+                    reconciliation.Id,
+                    "Система",
+                    "RealShortage",
+                    "Недостача налички автоматически оформлена на ответственного сотрудника."
+                );
+            }
+            else if (difference > 0)
+            {
+                CashReconciliationService.AddCashAcceptanceDifference(
+                    checkedByEmployeeName: checkedBy,
+                    responsibleEmployeeName: responsible,
+                    expectedAmount: _expectedCashAmount,
+                    actualAmount: actualCash,
+                    note: "Приёмка налички"
                 );
             }
 
+            ResolveSmallCashlessShortagesAfterCashAcceptance(actualCash);
             ShiftAcceptanceService.AcceptCash();
 
             string message =
@@ -683,15 +680,137 @@ namespace ClubTimerXbox
                 $"Фактически: {actualCash} сом\n";
 
             if (difference < 0)
-                message += $"Недостача: {Math.Abs(difference)} сом\nНедостача записана на предыдущую смену.";
+                message += $"Недостача: {Math.Abs(difference)} сом\nНедостача автоматически оформлена на ответственного сотрудника.";
             else if (difference > 0)
-                message += $"Излишек: {difference} сом.";
+                message += $"Излишек: {difference} сом\nРазница отправлена владельцу на разбор.";
             else
                 message += "Разница: 0.";
 
             MessageBox.Show(message, "Приёмка налички");
 
             FinishOrRefreshAfterPartAccepted();
+        }
+
+        private void ResolveSmallCashlessShortagesAfterCashAcceptance(int actualCash)
+        {
+            var shortages = CashReconciliationService.GetOpenSmallCashlessShortages();
+
+            if (shortages.Count == 0)
+                return;
+
+            foreach (var shortage in shortages)
+            {
+                if (shortage.Status == CashReconciliationStatus.Resolved ||
+                    shortage.Amount <= 0)
+                {
+                    continue;
+                }
+
+                DistributeCashlessShortage(
+                    shortage.Amount,
+                    shortage.ExpectedAmount,
+                    shortage.ActualAmount
+                );
+
+                CashReconciliationService.Resolve(
+                    shortage.Id,
+                    "Система",
+                    "RealShortage",
+                    $"После приёмки налички фактическая касса {actualCash} сом не дала излишек для закрытия безнала. Оформлено как реальная недостача."
+                );
+            }
+        }
+
+        private void DistributeCashlessShortage(
+            int shortageAmount,
+            int expectedCashlessBalance,
+            int actualCashless)
+        {
+            var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            var nextMonthStart = monthStart.AddMonths(1);
+
+            var groups = PaymentService.Records
+                .Where(record =>
+                    record.CreatedAt >= monthStart &&
+                    record.CreatedAt < nextMonthStart &&
+                    record.MBankAmount > 0)
+                .GroupBy(record =>
+                    string.IsNullOrWhiteSpace(record.EmployeeName)
+                        ? "Неизвестно"
+                        : record.EmployeeName)
+                .Select(group => new
+                {
+                    EmployeeName = group.Key,
+                    Amount = group.Sum(record => record.MBankAmount)
+                })
+                .Where(group => group.Amount > 0)
+                .OrderByDescending(group => group.Amount)
+                .ToList();
+
+            if (groups.Count == 0)
+            {
+                AddCashlessShortageForEmployee(
+                    "Неизвестно",
+                    shortageAmount,
+                    expectedCashlessBalance,
+                    actualCashless
+                );
+
+                return;
+            }
+
+            int total = groups.Sum(group => group.Amount);
+            int distributed = 0;
+
+            for (int index = 0; index < groups.Count; index++)
+            {
+                int amount = index == groups.Count - 1
+                    ? shortageAmount - distributed
+                    : (int)Math.Round(shortageAmount * (groups[index].Amount / (double)total));
+
+                if (amount <= 0)
+                    continue;
+
+                distributed += amount;
+
+                AddCashlessShortageForEmployee(
+                    groups[index].EmployeeName,
+                    amount,
+                    expectedCashlessBalance,
+                    actualCashless
+                );
+            }
+        }
+
+        private void AddCashlessShortageForEmployee(
+            string employeeName,
+            int amount,
+            int expectedCashlessBalance,
+            int actualCashless)
+        {
+            string description =
+                $"Автоматическая сверка безнала после приёмки налички.\n" +
+                $"Ожидаемый остаток безнала: {expectedCashlessBalance} сом\n" +
+                $"Фактический остаток: {actualCashless} сом\n" +
+                $"Доля сотрудника: {amount} сом";
+
+            CashService.AddShortage(
+                checkedByEmployeeName: "Система",
+                responsibleEmployeeName: employeeName,
+                title: "Недостача безнала",
+                description: description,
+                amount: amount
+            );
+
+            EmployeeLossService.AddLoss(
+                responsibleEmployeeName: employeeName,
+                checkedByEmployeeName: "Система",
+                lossType: "Недостача безнала",
+                title: "Недостача безнала",
+                description: description,
+                amount: amount,
+                note: "Автоматически создано после приёмки налички"
+            );
         }
 
         private Border CreateInfoCard(string title, string subtitle, Color color)
@@ -855,8 +974,47 @@ namespace ClubTimerXbox
             row.DifferenceText.Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225));
         }
 
+        private bool CanAcceptPart(string partName, bool alreadyAccepted)
+        {
+            if (alreadyAccepted)
+            {
+                MessageBox.Show(
+                    $"Эта часть приёмки уже завершена: {partName}. Повторно принять нельзя.",
+                    "Приёмка смены",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information
+                );
+
+                return false;
+            }
+
+            string currentEmployeeName = EmployeeService.CurrentEmployee?.Name ?? "";
+
+            if (!ShiftAcceptanceService.CanEmployeeAccept(currentEmployeeName))
+            {
+                string allowedEmployee = ShiftAcceptanceService.Current.NewEmployeeName;
+
+                if (string.IsNullOrWhiteSpace(allowedEmployee))
+                    allowedEmployee = "новый сотрудник текущей смены";
+
+                MessageBox.Show(
+                    $"Принять {partName} могут только следующие сотрудники:\n\n{allowedEmployee}",
+                    "Приёмка смены",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning
+                );
+
+                return false;
+            }
+
+            return true;
+        }
+
         private void AcceptProducts()
         {
+            if (!CanAcceptPart("товары", ShiftAcceptanceService.Current.ProductsAccepted))
+                return;
+
             string checkedBy = EmployeeService.CurrentEmployee?.Name ?? "Неизвестно";
             string responsible = GetResponsibleEmployeeName();
 

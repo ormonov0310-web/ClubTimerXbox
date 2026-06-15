@@ -10,6 +10,8 @@ namespace ClubTimerXbox.Models
 
         public bool CashAccepted { get; set; }
 
+        public string AcceptanceKey { get; set; } = "";
+
         public string NewEmployeeName { get; set; } = "";
 
         public string ResponsibleEmployeeName { get; set; } = "";

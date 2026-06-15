@@ -37,6 +37,9 @@ namespace ClubTimerXbox.Services
         {
             var range = GetDateRange(filter);
 
+            if (filter.Section == CashReportSection.Expenses)
+                return BuildExpenseReport(filter, range);
+
             var records = PaymentService.Records
                 .Where(record =>
                     record.CreatedAt >= range.FromInclusive &&
@@ -58,6 +61,33 @@ namespace ClubTimerXbox.Services
             result.Rows = BuildRows(lines, filter);
 
             return result;
+        }
+
+        private static CashReportResult BuildExpenseReport(
+            CashReportFilter filter,
+            (DateTime FromInclusive, DateTime ToExclusive, string Title) range)
+        {
+            var records = CashService
+                .GetRecordsByPeriodAndCategory(range.FromInclusive, range.ToExclusive, "Расходы")
+                .OrderByDescending(record => record.CreatedAt)
+                .ToList();
+
+            return new CashReportResult
+            {
+                Summary = new CashReportSummary
+                {
+                    Title = $"Итог за {range.Title}",
+                    TotalAmount = records.Sum(record => record.Amount),
+                    CashAmount = records
+                        .Where(record => IsCashPayment(record.PaymentMethod))
+                        .Sum(record => record.Amount),
+                    MBankAmount = records
+                        .Where(record => IsCashlessPayment(record.PaymentMethod))
+                        .Sum(record => record.Amount),
+                    RecordsCount = records.Count
+                },
+                Rows = BuildExpenseRows(records, filter)
+            };
         }
 
         public static DateTime GetPeriodStart(CashReportFilter filter)
@@ -164,6 +194,100 @@ namespace ClubTimerXbox.Services
             return BuildRecordRows(lines);
         }
 
+        private static List<CashReportRow> BuildExpenseRows(
+            List<CashRecord> records,
+            CashReportFilter filter)
+        {
+            if (filter.ViewMode == CashReportViewMode.Days)
+                return records
+                    .GroupBy(record => record.CreatedAt.Date)
+                    .OrderByDescending(group => group.Key)
+                    .Select(group => CreateExpenseGroupRow(
+                        group.Key.ToString("dd.MM.yyyy"),
+                        $"Записей: {group.Count()}",
+                        group))
+                    .ToList();
+
+            if (filter.ViewMode == CashReportViewMode.Employees)
+                return records
+                    .GroupBy(record =>
+                        string.IsNullOrWhiteSpace(record.EmployeeName)
+                            ? "Неизвестно"
+                            : record.EmployeeName)
+                    .OrderByDescending(group => group.Sum(record => record.Amount))
+                    .Select(group => CreateExpenseGroupRow(
+                        group.Key,
+                        $"Записей: {group.Count()}",
+                        group))
+                    .ToList();
+
+            if (filter.ViewMode == CashReportViewMode.Categories)
+                return records
+                    .GroupBy(record =>
+                        string.IsNullOrWhiteSpace(record.ExpenseCategory)
+                            ? "Другое"
+                            : record.ExpenseCategory)
+                    .OrderByDescending(group => group.Sum(record => record.Amount))
+                    .Select(group => CreateExpenseGroupRow(
+                        group.Key,
+                        $"Записей: {group.Count()}",
+                        group))
+                    .ToList();
+
+            return records
+                .OrderByDescending(record => record.CreatedAt)
+                .Select(CreateExpenseRecordRow)
+                .ToList();
+        }
+
+        private static CashReportRow CreateExpenseGroupRow(
+            string title,
+            string subtitle,
+            IEnumerable<CashRecord> records)
+        {
+            var list = records.ToList();
+
+            return new CashReportRow
+            {
+                Title = title,
+                Subtitle = subtitle,
+                TotalAmount = list.Sum(record => record.Amount),
+                CashAmount = list
+                    .Where(record => IsCashPayment(record.PaymentMethod))
+                    .Sum(record => record.Amount),
+                MBankAmount = list
+                    .Where(record => IsCashlessPayment(record.PaymentMethod))
+                    .Sum(record => record.Amount),
+                Category = title,
+                IsExpense = true
+            };
+        }
+
+        private static CashReportRow CreateExpenseRecordRow(CashRecord record)
+        {
+            string expenseCategory = string.IsNullOrWhiteSpace(record.ExpenseCategory)
+                ? "Другое"
+                : record.ExpenseCategory;
+
+            string subtitle = $"Категория: {expenseCategory}";
+
+            if (!string.IsNullOrWhiteSpace(record.Description))
+                subtitle += $"\n{record.Description}";
+
+            return new CashReportRow
+            {
+                Title = string.IsNullOrWhiteSpace(record.Title) ? "Расход" : record.Title,
+                Subtitle = subtitle,
+                TimeText = record.CreatedAt.ToString("dd.MM.yyyy HH:mm"),
+                TotalAmount = record.Amount,
+                CashAmount = IsCashPayment(record.PaymentMethod) ? record.Amount : 0,
+                MBankAmount = IsCashlessPayment(record.PaymentMethod) ? record.Amount : 0,
+                EmployeeName = record.EmployeeName,
+                Category = expenseCategory,
+                IsExpense = true
+            };
+        }
+
         private static List<AllocatedReportLine> BuildAllocatedLines(PaymentRecord record)
         {
             var result = new List<AllocatedReportLine>();
@@ -175,8 +299,25 @@ namespace ClubTimerXbox.Services
             int mBankLeft = record.MBankAmount;
 
             var items = record.Items
-                .Where(item => item.TotalAmount > 0)
+                .Where(item => item.TotalAmount != 0)
                 .ToList();
+
+            if (record.TotalAmount < 0)
+            {
+                foreach (var item in items)
+                {
+                    result.Add(CreateLine(
+                        record,
+                        item,
+                        record.CashAmount,
+                        record.MBankAmount
+                    ));
+                }
+
+                FixRoundingDifference(record, result);
+
+                return result;
+            }
 
             // Сначала товары, потом услуги, потом всё остальное кроме игр.
             // Цель: не дробить товар/услугу, если один способ оплаты может покрыть позицию целиком.
@@ -553,6 +694,18 @@ namespace ClubTimerXbox.Services
                 return line.Category == "Расходы";
 
             return true;
+        }
+
+        private static bool IsCashPayment(string paymentMethod)
+        {
+            return paymentMethod == "Наличные" || paymentMethod == "Нал";
+        }
+
+        private static bool IsCashlessPayment(string paymentMethod)
+        {
+            return paymentMethod == "Безнал" ||
+                   paymentMethod == "MBank" ||
+                   paymentMethod == "МБанк";
         }
     }
 }

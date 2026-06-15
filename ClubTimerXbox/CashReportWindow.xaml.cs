@@ -261,10 +261,15 @@ namespace ClubTimerXbox
                 HorizontalAlignment = HorizontalAlignment.Right
             };
 
+            Brush amountBrush = row.IsExpense
+                ? new SolidColorBrush(Color.FromRgb(248, 113, 113))
+                : new SolidColorBrush(Color.FromRgb(74, 222, 128));
+            string amountPrefix = row.IsExpense ? "-" : "";
+
             right.Children.Add(new TextBlock
             {
-                Text = $"{row.TotalAmount} сом",
-                Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128)),
+                Text = $"{amountPrefix}{row.TotalAmount} сом",
+                Foreground = amountBrush,
                 FontSize = 20,
                 FontWeight = FontWeights.Bold,
                 HorizontalAlignment = HorizontalAlignment.Right

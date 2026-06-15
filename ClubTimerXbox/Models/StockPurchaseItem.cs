@@ -10,6 +10,8 @@
 
         public int SalePrice { get; set; }
 
+        public int MinimumQuantity { get; set; }
+
         public int TotalAmount
         {
             get

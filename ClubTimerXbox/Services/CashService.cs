@@ -8,6 +8,10 @@ namespace ClubTimerXbox.Services
     public static class CashService
     {
         private static readonly List<CashRecord> _records = CashStorageService.Load();
+        private static readonly HashSet<string> NonClubExpenseCategories = new HashSet<string>(
+            new[] { "Зарплата", "Закупка", "Владелец" },
+            StringComparer.OrdinalIgnoreCase
+        );
 
         public static IReadOnlyList<CashRecord> Records => _records;
 
@@ -269,6 +273,16 @@ namespace ClubTimerXbox.Services
             return GetTotalByPeriodAndCategory(fromInclusive, toExclusive, "Расходы");
         }
 
+        public static int GetClubExpenseTotalByPeriod(DateTime fromInclusive, DateTime toExclusive)
+        {
+            return _records
+                .Where(record =>
+                    record.CreatedAt >= fromInclusive &&
+                    record.CreatedAt < toExclusive &&
+                    IsClubExpense(record))
+                .Sum(record => record.Amount);
+        }
+
         public static int GetSalaryTotalByPeriod(DateTime fromInclusive, DateTime toExclusive)
         {
             return GetExpenseTotalByPeriodAndExpenseCategory(
@@ -306,6 +320,17 @@ namespace ClubTimerXbox.Services
                 .Sum(record => record.Amount);
         }
 
+        public static int GetClubCashExpenseTotalByPeriod(DateTime fromInclusive, DateTime toExclusive)
+        {
+            return _records
+                .Where(record =>
+                    record.CreatedAt >= fromInclusive &&
+                    record.CreatedAt < toExclusive &&
+                    record.PaymentMethod == "Наличные" &&
+                    IsClubExpense(record))
+                .Sum(record => record.Amount);
+        }
+
         public static int GetCashlessExpenseTotalByPeriod(DateTime fromInclusive, DateTime toExclusive)
         {
             return _records
@@ -314,6 +339,17 @@ namespace ClubTimerXbox.Services
                     record.CreatedAt < toExclusive &&
                     record.Category == "Расходы" &&
                     record.PaymentMethod == "Безнал")
+                .Sum(record => record.Amount);
+        }
+
+        public static int GetClubCashlessExpenseTotalByPeriod(DateTime fromInclusive, DateTime toExclusive)
+        {
+            return _records
+                .Where(record =>
+                    record.CreatedAt >= fromInclusive &&
+                    record.CreatedAt < toExclusive &&
+                    record.PaymentMethod == "Безнал" &&
+                    IsClubExpense(record))
                 .Sum(record => record.Amount);
         }
 
@@ -441,6 +477,12 @@ namespace ClubTimerXbox.Services
             };
         }
 
+        private static bool IsClubExpense(CashRecord record)
+        {
+            return record.Category == "Расходы" &&
+                   !NonClubExpenseCategories.Contains(record.ExpenseCategory ?? "");
+        }
+
         public static string NormalizePaymentMethod(string paymentMethod)
         {
             if (paymentMethod == "Наличные")
@@ -468,7 +510,113 @@ namespace ClubTimerXbox.Services
             if (match != null)
                 return match;
 
-            return "Другое";
+            return expenseCategory;
+        }
+
+        public static bool DeleteRecord(Guid id, string category = "")
+        {
+            var record = _records.FirstOrDefault(item => item.Id == id);
+
+            if (record == null)
+                return false;
+
+            if (!string.IsNullOrWhiteSpace(category) &&
+                !record.Category.Equals(category, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            _records.Remove(record);
+            Save();
+
+            return true;
+        }
+
+        public static int RenameExpenseCategoryByPeriod(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string oldExpenseCategory,
+            string newExpenseCategory)
+        {
+            oldExpenseCategory = NormalizeExpenseCategory(oldExpenseCategory);
+            newExpenseCategory = NormalizeExpenseCategory(newExpenseCategory);
+
+            int changed = 0;
+
+            foreach (var record in _records.Where(record =>
+                         record.CreatedAt >= fromInclusive &&
+                         record.CreatedAt < toExclusive &&
+                         record.Category == "Расходы" &&
+                         record.ExpenseCategory == oldExpenseCategory))
+            {
+                record.ExpenseCategory = newExpenseCategory;
+                changed++;
+            }
+
+            if (changed > 0)
+                Save();
+
+            return changed;
+        }
+
+        public static int DeleteExpenseCategoryByPeriod(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string expenseCategory)
+        {
+            expenseCategory = NormalizeExpenseCategory(expenseCategory);
+
+            var records = _records
+                .Where(record =>
+                    record.CreatedAt >= fromInclusive &&
+                    record.CreatedAt < toExclusive &&
+                    record.Category == "Расходы" &&
+                    record.ExpenseCategory == expenseCategory)
+                .ToList();
+
+            foreach (var record in records)
+                _records.Remove(record);
+
+            if (records.Count > 0)
+                Save();
+
+            return records.Count;
+        }
+
+        public static int UpdateExpenseCategoryTotalByPeriod(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string expenseCategory,
+            int newTotalAmount)
+        {
+            if (newTotalAmount < 0)
+                newTotalAmount = 0;
+
+            expenseCategory = NormalizeExpenseCategory(expenseCategory);
+
+            var records = _records
+                .Where(record =>
+                    record.CreatedAt >= fromInclusive &&
+                    record.CreatedAt < toExclusive &&
+                    record.Category == "Расходы" &&
+                    record.ExpenseCategory == expenseCategory)
+                .OrderByDescending(record => record.CreatedAt)
+                .ToList();
+
+            if (records.Count == 0)
+                return 0;
+
+            int currentTotal = records.Sum(record => record.Amount);
+            int delta = newTotalAmount - currentTotal;
+            var latest = records[0];
+            latest.Amount += delta;
+
+            if (latest.Amount < 0)
+                throw new InvalidOperationException("Новая сумма слишком маленькая для корректировки последней записи.");
+
+            Save();
+
+            return latest.Amount;
         }
 
         public static void Clear()

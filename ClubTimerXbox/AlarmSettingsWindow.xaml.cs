@@ -17,7 +17,12 @@ namespace ClubTimerXbox
         {
             var settings = AlarmSettingsService.Current;
 
+            LoadSoundItems();
+
             AlarmEnabledCheckBox.IsChecked = settings.IsEnabled;
+            HoverSoundEnabledCheckBox.IsChecked = settings.IsHoverSoundEnabled;
+            ClickSoundEnabledCheckBox.IsChecked = settings.IsClickSoundEnabled;
+            ActionSoundEnabledCheckBox.IsChecked = settings.IsActionSoundEnabled;
 
             SelectComboBoxByTag(
                 TriggerSecondsComboBox,
@@ -33,6 +38,29 @@ namespace ClubTimerXbox
                 DurationComboBox,
                 settings.SoundDurationSeconds.ToString()
             );
+        }
+
+        private void LoadSoundItems()
+        {
+            SoundComboBox.Items.Clear();
+
+            foreach (string soundName in AlarmSoundService.GetAvailableAlarmSoundNames())
+            {
+                SoundComboBox.Items.Add(new ComboBoxItem
+                {
+                    Content = soundName,
+                    Tag = soundName
+                });
+            }
+
+            if (SoundComboBox.Items.Count == 0)
+            {
+                SoundComboBox.Items.Add(new ComboBoxItem
+                {
+                    Content = "Exclamation",
+                    Tag = "Exclamation"
+                });
+            }
         }
 
         private void SelectComboBoxByTag(ComboBox comboBox, string tagValue)
@@ -76,7 +104,10 @@ namespace ClubTimerXbox
                 IsEnabled = AlarmEnabledCheckBox.IsChecked == true,
                 TriggerBeforeEndSeconds = triggerSeconds,
                 SoundName = soundName,
-                SoundDurationSeconds = durationSeconds
+                SoundDurationSeconds = durationSeconds,
+                IsHoverSoundEnabled = HoverSoundEnabledCheckBox.IsChecked == true,
+                IsClickSoundEnabled = ClickSoundEnabledCheckBox.IsChecked == true,
+                IsActionSoundEnabled = ActionSoundEnabledCheckBox.IsChecked == true
             };
 
             AlarmSettingsService.Save(settings);

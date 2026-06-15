@@ -107,7 +107,8 @@ namespace ClubTimerXbox.Services
 
             StartAcceptanceIfNeeded(
                 newEmployeeName: employeeName,
-                responsibleShift: previousClosedShift
+                responsibleShift: previousClosedShift,
+                newShift: shift
             );
 
             SaveLogs();
@@ -149,13 +150,14 @@ namespace ClubTimerXbox.Services
         public static ShiftLogItem SwitchShift(string newEmployeeName)
         {
             var oldShift = CurrentShift;
-            string oldEmployeeName = oldShift?.EmployeeName ?? "Неизвестно";
+            var responsibleShift = oldShift ?? GetLastClosedShift();
+            string oldEmployeeName = responsibleShift?.EmployeeName ?? "Неизвестно";
 
             CloseCurrentShift();
 
             var newShift = new ShiftLogItem
             {
-                EmployeeName = newEmployeeName,
+                EmployeeName = newEmployeeName.Trim(),
                 StartedAt = DateTime.Now,
                 ClosedAt = null,
                 IsClosed = false
@@ -172,14 +174,15 @@ namespace ClubTimerXbox.Services
                     "Активные места не сброшены, таймеры продолжают работать."
             );
 
-            if (oldShift != null &&
+            if (responsibleShift != null &&
                 !string.IsNullOrWhiteSpace(oldEmployeeName) &&
                 !oldEmployeeName.Equals("Неизвестно", StringComparison.OrdinalIgnoreCase) &&
                 !oldEmployeeName.Equals(newEmployeeName, StringComparison.OrdinalIgnoreCase))
             {
                 ShiftAcceptanceService.StartRequiredAcceptance(
-                    newEmployeeName: newEmployeeName,
-                    responsibleEmployeeName: oldEmployeeName
+                    newEmployeeName: newEmployeeName.Trim(),
+                    responsibleEmployeeName: oldEmployeeName,
+                    acceptanceKey: BuildAcceptanceKey(responsibleShift.Id, newShift.Id)
                 );
             }
 
@@ -198,7 +201,8 @@ namespace ClubTimerXbox.Services
 
         private static void StartAcceptanceIfNeeded(
             string newEmployeeName,
-            ShiftLogItem? responsibleShift)
+            ShiftLogItem? responsibleShift,
+            ShiftLogItem newShift)
         {
             if (responsibleShift == null)
                 return;
@@ -213,7 +217,62 @@ namespace ClubTimerXbox.Services
 
             ShiftAcceptanceService.StartRequiredAcceptance(
                 newEmployeeName: newEmployeeName,
-                responsibleEmployeeName: responsibleEmployeeName
+                responsibleEmployeeName: responsibleEmployeeName,
+                acceptanceKey: BuildAcceptanceKey(responsibleShift.Id, newShift.Id)
+            );
+        }
+
+        private static string BuildAcceptanceKey(Guid responsibleShiftId, Guid newShiftId)
+        {
+            return $"{responsibleShiftId:N}->{newShiftId:N}";
+        }
+
+        public static void EnsureAcceptanceForCurrentShift()
+        {
+            var currentShift = CurrentShift;
+
+            if (currentShift == null)
+                return;
+
+            string newEmployeeName = currentShift.EmployeeName.Trim();
+
+            if (string.IsNullOrWhiteSpace(newEmployeeName))
+                return;
+
+            var responsibleShift = Shifts
+                .Where(shift =>
+                    shift.Id != currentShift.Id &&
+                    shift.IsClosed &&
+                    shift.ClosedAt != null &&
+                    shift.EmployeeName.Trim().Length > 0 &&
+                    !shift.EmployeeName.Trim().Equals(newEmployeeName, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(shift => shift.ClosedAt)
+                .FirstOrDefault();
+
+            if (responsibleShift == null)
+                return;
+
+            string acceptanceKey = BuildAcceptanceKey(responsibleShift.Id, currentShift.Id);
+
+            if (ShiftAcceptanceService.Current.AcceptanceKey.Equals(
+                    acceptanceKey,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (ShiftAcceptanceService.IsAcceptanceRequired() &&
+                ShiftAcceptanceService.Current.NewEmployeeName.Trim().Equals(
+                    newEmployeeName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            ShiftAcceptanceService.StartRequiredAcceptance(
+                newEmployeeName: newEmployeeName,
+                responsibleEmployeeName: responsibleShift.EmployeeName,
+                acceptanceKey: acceptanceKey
             );
         }
 
@@ -306,6 +365,7 @@ namespace ClubTimerXbox.Services
                 ItemName = item.Name,
                 ItemType = item.Type,
                 UnitPrice = item.SalePrice,
+                PurchasePrice = item.PurchasePrice,
                 Quantity = quantity,
                 TotalAmount = totalAmount,
                 IsPaid = false

@@ -74,14 +74,17 @@ namespace ClubTimerXbox
             _firebaseSyncTimer.Interval = TimeSpan.FromSeconds(5);
             _firebaseSyncTimer.Tick += async (_, _) =>
             {
-                await FirebaseSyncService.PushCurrentStateAsync(_places.ToList());
-                await FirebaseSyncService.CheckCommandsAsync();
+                var places = _places.ToList();
+                await FirebaseSyncService.PushCurrentStateAsync(places);
+                await FirebaseSyncService.CheckCommandsAsync(places);
+                await AppUpdateService.CheckAndReportAsync(places);
             };
 
             _firebaseSyncTimer.Start();
 
             _ = FirebaseSyncService.PushCurrentStateAsync(_places.ToList());
-            _ = FirebaseSyncService.CheckCommandsAsync();
+            _ = FirebaseSyncService.CheckCommandsAsync(_places.ToList());
+            _ = AppUpdateService.CheckAndReportAsync(_places.ToList());
         }
 
         private void SaveRuntimeClosedNow()

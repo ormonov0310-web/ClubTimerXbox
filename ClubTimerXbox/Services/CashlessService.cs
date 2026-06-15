@@ -86,6 +86,19 @@ namespace ClubTimerXbox.Services
                 .Sum(record => record.Amount);
         }
 
+        public static int? GetLatestAmountByPeriod(DateTime fromInclusive, DateTime toExclusive)
+        {
+            var record = _records
+                .Where(item =>
+                    item.Date >= fromInclusive.Date &&
+                    item.Date < toExclusive.Date)
+                .OrderByDescending(item => item.Date)
+                .ThenByDescending(item => item.UpdatedAt)
+                .FirstOrDefault();
+
+            return record?.Amount;
+        }
+
         public static void Clear()
         {
             _records.Clear();

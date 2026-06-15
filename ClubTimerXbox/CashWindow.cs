@@ -155,11 +155,9 @@ namespace ClubTimerXbox
             int income = CashService.GetCashIncomeTotalByPeriod(_periodFrom, _periodTo);
 
             int shortages = CashService.GetShortageTotalByPeriod(_periodFrom, _periodTo);
-            int expenses = CashService.GetExpenseTotalByPeriod(_periodFrom, _periodTo);
+            int expenses = CashService.GetClubExpenseTotalByPeriod(_periodFrom, _periodTo);
 
-            int purchases = ProductIncomingService
-                .GetByPeriod(_periodFrom, _periodTo)
-                .Sum(item => item.TotalPurchaseAmount);
+            int purchases = StockPurchaseService.GetTotalByPeriod(_periodFrom, _periodTo);
 
             int cashless = CashlessService.GetAmountByPeriod(_periodFrom, _periodTo);
             int expectedCash = income - cashless;
@@ -393,7 +391,10 @@ namespace ClubTimerXbox
         {
             AddSectionTitle("Расходы");
 
-            var records = CashService.GetRecordsByPeriodAndCategory(_periodFrom, _periodTo, "Расходы");
+            var records = CashService
+                .GetRecordsByPeriodAndCategory(_periodFrom, _periodTo, "Расходы")
+                .Where(record => !record.ExpenseCategory.Equals("Закупка", System.StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
             if (records.Count == 0)
             {
@@ -411,20 +412,17 @@ namespace ClubTimerXbox
         {
             AddSectionTitle("Закупка товара / приход");
 
-            var incomingItems = ProductIncomingService
-                .GetByPeriod(_periodFrom, _periodTo)
-                .OrderByDescending(item => item.CreatedAt)
-                .ToList();
+            var purchases = StockPurchaseService.GetPurchasesByPeriod(_periodFrom, _periodTo);
 
-            if (incomingItems.Count == 0)
+            if (purchases.Count == 0)
             {
-                _itemsPanel.Children.Add(CreateEmptyText("Прихода товара за выбранный период пока нет."));
+                _itemsPanel.Children.Add(CreateEmptyText("Закупов за выбранный период пока нет."));
                 return;
             }
 
-            foreach (var item in incomingItems)
+            foreach (var purchase in purchases)
             {
-                _itemsPanel.Children.Add(CreateIncomingCard(item));
+                _itemsPanel.Children.Add(CreateIncomingCard(purchase));
             }
         }
 
@@ -439,7 +437,7 @@ namespace ClubTimerXbox
 
             panel.Children.Add(new TextBlock
             {
-                Text = $"{record.CreatedAt:dd.MM.yyyy HH:mm:ss} • {record.Category}",
+                Text = GetRecordHeaderText(record),
                 Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
                 FontSize = 13
             });
@@ -489,30 +487,48 @@ namespace ClubTimerXbox
             return CreateCard(panel, Color.FromRgb(24, 32, 43));
         }
 
-        private Border CreateIncomingCard(ProductIncomingItem item)
+        private static string GetRecordHeaderText(CashRecord record)
+        {
+            string header = $"{record.CreatedAt:dd.MM.yyyy HH:mm:ss} • {record.Category}";
+
+            if (record.Category == "Расходы" &&
+                !string.IsNullOrWhiteSpace(record.ExpenseCategory))
+            {
+                header += $" • {record.ExpenseCategory}";
+            }
+
+            return header;
+        }
+
+        private Border CreateIncomingCard(StockPurchase purchase)
         {
             var panel = new StackPanel();
 
             panel.Children.Add(new TextBlock
             {
-                Text = $"{item.CreatedAt:dd.MM.yyyy HH:mm:ss} • {item.ProductName}",
+                Text = $"{purchase.CreatedAt:dd.MM.yyyy HH:mm:ss} • {purchase.AddedBy}",
                 Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
                 FontSize = 13
             });
 
             panel.Children.Add(new TextBlock
             {
-                Text = $"Закупка товара • -{item.TotalPurchaseAmount} сом",
+                Text = $"Закупка товара • -{purchase.TotalAmount} сом",
                 Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113)),
                 FontSize = 18,
                 FontWeight = FontWeights.Bold,
                 Margin = new Thickness(0, 4, 0, 4)
             });
 
-            panel.Children.Add(CreateSmallLine($"Добавлено: {item.QuantityAdded} шт"));
-            panel.Children.Add(CreateSmallLine($"Остаток: {item.QuantityBefore} → {item.QuantityAfter} шт"));
-            panel.Children.Add(CreateSmallLine($"Цена прихода: {item.PurchasePrice} сом"));
-            panel.Children.Add(CreateSmallLine($"Цена продажи: {item.SalePrice} сом"));
+            foreach (var item in purchase.Items)
+            {
+                panel.Children.Add(CreateSmallLine(
+                    $"{item.ProductName}: {item.Quantity} шт × {item.PurchasePrice} сом = {item.TotalAmount} сом"
+                ));
+            }
+
+            if (!string.IsNullOrWhiteSpace(purchase.Note))
+                panel.Children.Add(CreateSmallLine($"Комментарий: {purchase.Note}"));
 
             return CreateCard(panel, Color.FromRgb(24, 32, 43));
         }

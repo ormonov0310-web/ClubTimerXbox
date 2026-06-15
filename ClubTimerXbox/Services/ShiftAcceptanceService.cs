@@ -13,17 +13,41 @@ namespace ClubTimerXbox.Services
             return Current.IsRequired && !Current.IsCompleted;
         }
 
+        public static bool CanEmployeeAccept(string employeeName)
+        {
+            if (!IsAcceptanceRequired())
+                return false;
+
+            employeeName = employeeName.Trim();
+
+            if (string.IsNullOrWhiteSpace(Current.NewEmployeeName))
+                return true;
+
+            return Current.NewEmployeeName.Trim().Equals(
+                employeeName,
+                StringComparison.OrdinalIgnoreCase
+            );
+        }
+
         public static void StartRequiredAcceptance(
             string newEmployeeName,
-            string responsibleEmployeeName)
+            string responsibleEmployeeName,
+            string acceptanceKey = "")
         {
+            if (!string.IsNullOrWhiteSpace(acceptanceKey) &&
+                Current.AcceptanceKey.Equals(acceptanceKey, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
             Current = new ShiftAcceptanceStatus
             {
                 IsRequired = true,
                 ProductsAccepted = false,
                 CashAccepted = false,
-                NewEmployeeName = newEmployeeName,
-                ResponsibleEmployeeName = responsibleEmployeeName,
+                AcceptanceKey = acceptanceKey,
+                NewEmployeeName = newEmployeeName.Trim(),
+                ResponsibleEmployeeName = responsibleEmployeeName.Trim(),
                 CreatedAt = DateTime.Now,
                 ProductsAcceptedAt = null,
                 CashAcceptedAt = null,

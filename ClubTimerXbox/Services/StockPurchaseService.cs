@@ -38,12 +38,18 @@ namespace ClubTimerXbox.Services
                 if (salePrice < 0)
                     salePrice = 0;
 
+                int minimumQuantity = item.MinimumQuantity;
+
+                if (minimumQuantity < 0)
+                    minimumQuantity = 0;
+
                 safeItems.Add(new StockPurchaseItem
                 {
                     ProductName = productName,
                     Quantity = item.Quantity,
                     PurchasePrice = purchasePrice,
-                    SalePrice = salePrice
+                    SalePrice = salePrice,
+                    MinimumQuantity = minimumQuantity
                 });
             }
 
@@ -70,7 +76,7 @@ namespace ClubTimerXbox.Services
                         initialQuantity: item.Quantity,
                         purchasePrice: item.PurchasePrice,
                         salePrice: item.SalePrice,
-                        minimumQuantity: 0
+                        minimumQuantity: item.MinimumQuantity
                     );
                 }
                 else

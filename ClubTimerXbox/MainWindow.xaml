@@ -7,6 +7,77 @@
         WindowStartupLocation="CenterScreen"
         Background="#10141C">
 
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Background" Value="#253044"/>
+            <Setter Property="BorderBrush" Value="#344155"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+            <Setter Property="RenderTransform">
+                <Setter.Value>
+                    <ScaleTransform ScaleX="1" ScaleY="1"/>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonChrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="10"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonChrome" Property="Background" Value="#334155"/>
+                                <Setter TargetName="ButtonChrome" Property="BorderBrush" Value="#60A5FA"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonChrome" Property="Background" Value="#1D4ED8"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.55"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <EventTrigger RoutedEvent="MouseEnter">
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                             To="1.035"
+                                             Duration="0:0:0.12"/>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                             To="1.035"
+                                             Duration="0:0:0.12"/>
+                        </Storyboard>
+                    </BeginStoryboard>
+                </EventTrigger>
+                <EventTrigger RoutedEvent="MouseLeave">
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                             To="1"
+                                             Duration="0:0:0.16"/>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                             To="1"
+                                             Duration="0:0:0.16"/>
+                        </Storyboard>
+                    </BeginStoryboard>
+                </EventTrigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -18,8 +89,13 @@
                 CornerRadius="16"
                 Padding="18"
                 Margin="0,0,0,16">
-            <DockPanel>
-                <StackPanel DockPanel.Dock="Left">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
                     <TextBlock Text="Club Timer Xbox"
                                Foreground="White"
                                FontSize="30"
@@ -30,18 +106,38 @@
                                FontSize="15"
                                Margin="0,4,0,0"/>
 
-                    <Button x:Name="CurrentEmployeeButton"
-                            Content="Смена: не выбрана"
-                            Width="220"
-                            Height="34"
-                            FontSize="15"
-                            FontWeight="SemiBold"
-                            HorizontalAlignment="Left"
-                            Margin="0,12,0,0"
-                            Click="CurrentEmployeeButton_Click"/>
+                    <StackPanel Orientation="Horizontal"
+                                Margin="0,12,0,0">
+                        <Button x:Name="CurrentEmployeeButton"
+                                Content="Смена: не выбрана"
+                                Width="220"
+                                Height="34"
+                                FontSize="15"
+                                FontWeight="SemiBold"
+                                HorizontalAlignment="Left"
+                                Margin="0,0,8,0"
+                                Click="CurrentEmployeeButton_Click"/>
+
+                        <Button x:Name="PlacesViewButton"
+                                Content="ТВ / Рули"
+                                Width="110"
+                                Height="34"
+                                FontSize="14"
+                                FontWeight="SemiBold"
+                                Margin="0,0,8,0"
+                                Click="PlacesViewButton_Click"/>
+
+                        <Button x:Name="TuyaViewButton"
+                                Content="WiFi - Розетки"
+                                Width="140"
+                                Height="34"
+                                FontSize="14"
+                                FontWeight="SemiBold"
+                                Click="TuyaViewButton_Click"/>
+                    </StackPanel>
                 </StackPanel>
 
-                <StackPanel DockPanel.Dock="Right"
+                <StackPanel Grid.Column="1"
                             HorizontalAlignment="Right">
 
                     <StackPanel Orientation="Horizontal"
@@ -99,7 +195,7 @@
                                HorizontalAlignment="Right"
                                Margin="0,4,0,0"/>
                 </StackPanel>
-            </DockPanel>
+            </Grid>
         </Border>
 
         <!-- Здесь карточки создаются из C# кода -->

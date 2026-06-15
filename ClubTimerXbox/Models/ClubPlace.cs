@@ -20,6 +20,8 @@ namespace ClubTimerXbox.Models
         public bool IsCalculating { get; set; }
 
         public int PaidAmount { get; set; }
+        public int PrepaidCashAmount { get; set; }
+        public int PrepaidMBankAmount { get; set; }
         public DateTime? StartTime { get; set; }
 
         public int TotalMinutes { get; set; }

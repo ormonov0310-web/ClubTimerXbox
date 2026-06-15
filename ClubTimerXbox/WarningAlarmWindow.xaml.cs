@@ -7,12 +7,15 @@ namespace ClubTimerXbox
 {
     public partial class WarningAlarmWindow : Window
     {
-        private readonly DispatcherTimer _soundTimer = new DispatcherTimer();
-        private readonly DispatcherTimer _durationTimer = new DispatcherTimer();
+        private readonly DispatcherTimer _tickTimer = new DispatcherTimer();
+        private static readonly TimeSpan SoundRepeatGap = TimeSpan.FromSeconds(4);
 
         private readonly string _soundName;
         private readonly int _durationSeconds;
-        private int _playedSeconds;
+        private DateTime _nextSoundAllowedAt = DateTime.MinValue;
+        private int _remainingSeconds;
+        private int _elapsedSeconds;
+        private bool _isSoundActive = true;
 
         public string PlaceName { get; }
 
@@ -27,15 +30,13 @@ namespace ClubTimerXbox
             PlaceName = placeName;
             _soundName = soundName;
             _durationSeconds = durationSeconds;
+            _remainingSeconds = Math.Max(0, remainingSeconds);
 
             TitleText.Text = $"Скоро {placeName} время заканчивается";
-            MessageText.Text = $"Осталось: {remainingSeconds} секунд";
+            UpdateMessageText();
 
-            _soundTimer.Interval = TimeSpan.FromSeconds(1);
-            _soundTimer.Tick += SoundTimer_Tick;
-
-            _durationTimer.Interval = TimeSpan.FromSeconds(1);
-            _durationTimer.Tick += DurationTimer_Tick;
+            _tickTimer.Interval = TimeSpan.FromSeconds(1);
+            _tickTimer.Tick += TickTimer_Tick;
 
             Loaded += WarningAlarmWindow_Loaded;
             Closed += WarningAlarmWindow_Closed;
@@ -43,27 +44,39 @@ namespace ClubTimerXbox
 
         private void WarningAlarmWindow_Loaded(object sender, RoutedEventArgs e)
         {
-            AlarmSoundService.PlayOnce(_soundName);
-
-            _soundTimer.Start();
-
-            if (_durationSeconds > 0)
-                _durationTimer.Start();
+            TryPlaySound();
+            _tickTimer.Start();
         }
 
-        private void SoundTimer_Tick(object? sender, EventArgs e)
+        private void TickTimer_Tick(object? sender, EventArgs e)
         {
-            AlarmSoundService.PlayOnce(_soundName);
+            if (_remainingSeconds > 0)
+                _remainingSeconds--;
+
+            _elapsedSeconds++;
+            UpdateMessageText();
+
+            if (_remainingSeconds <= 0)
+                _isSoundActive = false;
+
+            if (_durationSeconds > 0 && _elapsedSeconds >= _durationSeconds)
+                _isSoundActive = false;
+
+            TryPlaySound();
         }
 
-        private void DurationTimer_Tick(object? sender, EventArgs e)
+        private void TryPlaySound()
         {
-            _playedSeconds++;
+            if (!_isSoundActive)
+                return;
 
-            if (_playedSeconds >= _durationSeconds)
-            {
-                StopSoundTimers();
-            }
+            var now = DateTime.UtcNow;
+
+            if (now < _nextSoundAllowedAt)
+                return;
+
+            AlarmSoundService.PlayOnce(_soundName);
+            _nextSoundAllowedAt = now.Add(SoundRepeatGap);
         }
 
         private void OkButton_Click(object sender, RoutedEventArgs e)
@@ -86,8 +99,29 @@ namespace ClubTimerXbox
 
         private void StopSoundTimers()
         {
-            _soundTimer.Stop();
-            _durationTimer.Stop();
+            _isSoundActive = false;
+            _tickTimer.Stop();
+        }
+
+        private void UpdateMessageText()
+        {
+            MessageText.Text = $"Осталось: {FormatRemainingTime(_remainingSeconds)}";
+        }
+
+        private static string FormatRemainingTime(int seconds)
+        {
+            if (seconds <= 0)
+                return "0 секунд";
+
+            if (seconds < 60)
+                return $"{seconds} сек.";
+
+            int minutes = seconds / 60;
+            int restSeconds = seconds % 60;
+
+            return restSeconds == 0
+                ? $"{minutes} мин."
+                : $"{minutes} мин. {restSeconds} сек.";
         }
     }
 }

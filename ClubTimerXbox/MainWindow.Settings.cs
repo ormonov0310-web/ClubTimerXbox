@@ -9,7 +9,8 @@ namespace ClubTimerXbox
             var window = new OwnerSettingsWindow(
                 openTariffSettings: OpenTariffSettings,
                 openStockSettings: OpenStockSettings,
-                openServiceSettings: OpenServiceSettings
+                openTuyaSettings: OpenTuyaSettings,
+                openAlarmSettings: OpenAlarmSettingsWindow
             )
             {
                 Owner = this
@@ -43,14 +44,14 @@ namespace ClubTimerXbox
             stockWindow.ShowDialog();
         }
 
-        private void OpenServiceSettings()
+        private void OpenTuyaSettings()
         {
-            var serviceWindow = new ServiceSettingsWindow
+            var tuyaWindow = new TuyaSettingsWindow
             {
                 Owner = this
             };
 
-            serviceWindow.ShowDialog();
+            tuyaWindow.ShowDialog();
         }
     }
 }

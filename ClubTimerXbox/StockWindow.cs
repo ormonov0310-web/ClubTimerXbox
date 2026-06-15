@@ -1,4 +1,6 @@
 ﻿using System.Linq;
+using System;
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -15,12 +17,11 @@ namespace ClubTimerXbox
         private readonly TextBox _newProductNameBox = new TextBox();
         private readonly TextBox _newProductQuantityBox = new TextBox();
         private readonly TextBox _newProductPurchasePriceBox = new TextBox();
-        private readonly TextBox _newProductSalePriceBox = new TextBox();
-        private readonly TextBox _newProductMinimumBox = new TextBox();
+        private readonly ComboBox _newProductPaymentMethodBox = new ComboBox();
 
         public StockWindow()
         {
-            Title = "Склад / товары";
+            Title = "Склад / закупы";
             Width = 930;
             Height = 790;
             MinWidth = 820;
@@ -31,7 +32,7 @@ namespace ClubTimerXbox
             Content = CreateContent();
 
             LoadStockItems();
-            LoadIncomingHistory();
+            LoadPurchaseHistory();
         }
 
         private UIElement CreateContent()
@@ -48,7 +49,7 @@ namespace ClubTimerXbox
 
             var titleText = new TextBlock
             {
-                Text = "Склад / товары",
+                Text = "Склад / закупы",
                 Foreground = Brushes.White,
                 FontSize = 30,
                 FontWeight = FontWeights.Bold
@@ -76,7 +77,7 @@ namespace ClubTimerXbox
             var subtitleText = new TextBlock
             {
                 Text =
-                    "Это окно для владельца. Здесь можно создавать новые товары, добавлять приход товара, менять цену прихода, цену продажи и минимальный остаток.",
+                    "Здесь админ принимает закупы. История уйдёт в телефон с именем того, кто принял товар.",
                 Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
                 FontSize = 15,
                 TextWrapping = TextWrapping.Wrap,
@@ -89,8 +90,6 @@ namespace ClubTimerXbox
 
             var mainPanel = new StackPanel();
 
-            mainPanel.Children.Add(CreateAddProductCard());
-
             mainPanel.Children.Add(new TextBlock
             {
                 Text = "Товары",
@@ -102,9 +101,11 @@ namespace ClubTimerXbox
 
             mainPanel.Children.Add(_itemsPanel);
 
+            mainPanel.Children.Add(CreateAddProductCard());
+
             mainPanel.Children.Add(new TextBlock
             {
-                Text = "История прихода",
+                Text = "История закупов",
                 Foreground = Brushes.White,
                 FontSize = 24,
                 FontWeight = FontWeights.Bold,
@@ -161,11 +162,6 @@ namespace ClubTimerXbox
                 Width = new GridLength(1, GridUnitType.Star)
             });
 
-            grid.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(1, GridUnitType.Star)
-            });
-
             var col1 = new StackPanel
             {
                 Margin = new Thickness(0, 0, 10, 0)
@@ -174,11 +170,6 @@ namespace ClubTimerXbox
             var col2 = new StackPanel
             {
                 Margin = new Thickness(5, 0, 5, 0)
-            };
-
-            var col3 = new StackPanel
-            {
-                Margin = new Thickness(10, 0, 0, 0)
             };
 
             _newProductNameBox.Text = "";
@@ -199,17 +190,7 @@ namespace ClubTimerXbox
             _newProductPurchasePriceBox.Padding = new Thickness(10, 5, 10, 5);
             _newProductPurchasePriceBox.Margin = new Thickness(0, 0, 0, 8);
 
-            _newProductSalePriceBox.Text = "0";
-            _newProductSalePriceBox.Height = 38;
-            _newProductSalePriceBox.FontSize = 16;
-            _newProductSalePriceBox.Padding = new Thickness(10, 5, 10, 5);
-            _newProductSalePriceBox.Margin = new Thickness(0, 0, 0, 8);
-
-            _newProductMinimumBox.Text = "0";
-            _newProductMinimumBox.Height = 38;
-            _newProductMinimumBox.FontSize = 16;
-            _newProductMinimumBox.Padding = new Thickness(10, 5, 10, 5);
-            _newProductMinimumBox.Margin = new Thickness(0, 0, 0, 8);
+            ConfigurePaymentMethodBox(_newProductPaymentMethodBox);
 
             col1.Children.Add(CreateFieldLabel("Название товара"));
             col1.Children.Add(_newProductNameBox);
@@ -220,32 +201,27 @@ namespace ClubTimerXbox
             col2.Children.Add(CreateFieldLabel("Цена прихода / закупки"));
             col2.Children.Add(_newProductPurchasePriceBox);
 
-            col2.Children.Add(CreateFieldLabel("Цена продажи"));
-            col2.Children.Add(_newProductSalePriceBox);
-
-            col3.Children.Add(CreateFieldLabel("Минимальный остаток"));
-            col3.Children.Add(_newProductMinimumBox);
+            col2.Children.Add(CreateFieldLabel("Оплата закупа"));
+            col2.Children.Add(_newProductPaymentMethodBox);
 
             var createButton = new Button
             {
-                Content = "Создать товар",
+                Content = "Создать товар / принять закуп",
                 Height = 42,
                 FontSize = 15,
                 FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 24, 0, 0)
+                Margin = new Thickness(0, 8, 0, 0)
             };
 
             createButton.Click += (_, _) => AddNewProduct();
 
-            col3.Children.Add(createButton);
+            col2.Children.Add(createButton);
 
             Grid.SetColumn(col1, 0);
             Grid.SetColumn(col2, 1);
-            Grid.SetColumn(col3, 2);
 
             grid.Children.Add(col1);
             grid.Children.Add(col2);
-            grid.Children.Add(col3);
 
             root.Children.Add(grid);
 
@@ -289,37 +265,58 @@ namespace ClubTimerXbox
             if (!ReadNumber(_newProductPurchasePriceBox, "Цена прихода", out int purchasePrice))
                 return;
 
-            if (!ReadNumber(_newProductSalePriceBox, "Цена продажи", out int salePrice))
-                return;
+            int salePrice = purchasePrice;
+            int minimum = 0;
 
-            if (!ReadNumber(_newProductMinimumBox, "Минимальный остаток", out int minimum))
-                return;
+            StockPurchase? purchase = null;
 
-            ProductStockService.AddNewProduct(
-                productName: productName,
-                initialQuantity: initialQuantity,
-                purchasePrice: purchasePrice,
-                salePrice: salePrice,
-                minimumQuantity: minimum
-            );
+            if (initialQuantity > 0)
+            {
+                purchase = StockPurchaseService.AddPurchase(
+                    items: new List<StockPurchaseItem>
+                    {
+                        new StockPurchaseItem
+                        {
+                            ProductName = productName,
+                            Quantity = initialQuantity,
+                            PurchasePrice = purchasePrice,
+                            SalePrice = salePrice,
+                            MinimumQuantity = minimum
+                        }
+                    },
+                    addedBy: GetCurrentActorName(),
+                    note: "Первый закуп нового товара"
+                );
+
+                AddPurchaseExpense(purchase, GetSelectedPaymentMethod(_newProductPaymentMethodBox));
+            }
+            else
+            {
+                ProductStockService.AddNewProduct(
+                    productName: productName,
+                    initialQuantity: 0,
+                    purchasePrice: purchasePrice,
+                    salePrice: salePrice,
+                    minimumQuantity: minimum
+                );
+            }
 
             MessageBox.Show(
                 $"{productName}\n\n" +
                 $"Товар создан.\n" +
                 $"Начальный остаток: {initialQuantity} шт\n" +
-                $"Цена прихода: {purchasePrice} сом\n" +
-                $"Цена продажи: {salePrice} сом",
+                $"Цена прихода: {purchasePrice} сом" +
+                (purchase == null ? "" : $"\nЗакуп записан: {purchase.TotalAmount} сом"),
                 "Новый товар"
             );
 
             _newProductNameBox.Text = "";
             _newProductQuantityBox.Text = "0";
             _newProductPurchasePriceBox.Text = "0";
-            _newProductSalePriceBox.Text = "0";
-            _newProductMinimumBox.Text = "0";
+            _newProductPaymentMethodBox.SelectedIndex = 0;
 
             LoadStockItems();
-            LoadIncomingHistory();
+            LoadPurchaseHistory();
         }
 
         private void LoadStockItems()
@@ -332,19 +329,20 @@ namespace ClubTimerXbox
             }
         }
 
-        private void LoadIncomingHistory()
+        private void LoadPurchaseHistory()
         {
             _historyPanel.Children.Clear();
 
-            var incomingItems = ProductIncomingService.GetAll()
+            var purchases = StockPurchaseService.Purchases
+                .OrderByDescending(purchase => purchase.CreatedAt)
                 .Take(15)
                 .ToList();
 
-            if (incomingItems.Count == 0)
+            if (purchases.Count == 0)
             {
                 _historyPanel.Children.Add(new TextBlock
                 {
-                    Text = "История прихода пока пустая.",
+                    Text = "История закупов пока пустая.",
                     Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
                     FontSize = 16,
                     Margin = new Thickness(0, 0, 0, 12)
@@ -353,9 +351,9 @@ namespace ClubTimerXbox
                 return;
             }
 
-            foreach (var item in incomingItems)
+            foreach (var purchase in purchases)
             {
-                _historyPanel.Children.Add(CreateIncomingHistoryCard(item));
+                _historyPanel.Children.Add(CreatePurchaseHistoryCard(purchase));
             }
         }
 
@@ -376,8 +374,6 @@ namespace ClubTimerXbox
                 Text =
                     $"Остаток сейчас: {item.Quantity} шт\n" +
                     $"Цена прихода: {item.PurchasePrice} сом\n" +
-                    $"Цена продажи: {item.SalePrice} сом\n" +
-                    $"Минимум: {item.MinimumQuantity} шт\n" +
                     $"Обновлено: {item.UpdatedAt:dd.MM.yyyy HH:mm}",
                 Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
                 FontSize = 14,
@@ -397,27 +393,7 @@ namespace ClubTimerXbox
                 });
             }
 
-            var grid = new Grid();
-
-            grid.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(1, GridUnitType.Star)
-            });
-
-            grid.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(1, GridUnitType.Star)
-            });
-
-            var settingsPanel = CreateSettingsPanel(item);
-            Grid.SetColumn(settingsPanel, 0);
-            grid.Children.Add(settingsPanel);
-
-            var incomingPanel = CreateIncomingPanel(item);
-            Grid.SetColumn(incomingPanel, 1);
-            grid.Children.Add(incomingPanel);
-
-            mainPanel.Children.Add(grid);
+            mainPanel.Children.Add(CreateIncomingPanel(item));
 
             return new Border
             {
@@ -429,75 +405,6 @@ namespace ClubTimerXbox
             };
         }
 
-        private UIElement CreateSettingsPanel(ProductStockItem item)
-        {
-            var panel = new StackPanel
-            {
-                Margin = new Thickness(0, 0, 10, 0)
-            };
-
-            panel.Children.Add(new TextBlock
-            {
-                Text = "Настройки товара",
-                Foreground = Brushes.White,
-                FontSize = 17,
-                FontWeight = FontWeights.Bold,
-                Margin = new Thickness(0, 0, 0, 10)
-            });
-
-            var purchasePriceBox = CreateNumberBox(item.PurchasePrice.ToString());
-            var salePriceBox = CreateNumberBox(item.SalePrice.ToString());
-            var minimumBox = CreateNumberBox(item.MinimumQuantity.ToString());
-
-            panel.Children.Add(CreateFieldLabel("Цена прихода / закупки"));
-            panel.Children.Add(purchasePriceBox);
-
-            panel.Children.Add(CreateFieldLabel("Цена продажи"));
-            panel.Children.Add(salePriceBox);
-
-            panel.Children.Add(CreateFieldLabel("Минимальный остаток"));
-            panel.Children.Add(minimumBox);
-
-            var saveButton = new Button
-            {
-                Content = "Сохранить настройки",
-                Height = 42,
-                FontSize = 15,
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 8, 0, 0)
-            };
-
-            saveButton.Click += (_, _) =>
-            {
-                if (!ReadNumber(purchasePriceBox, "Цена прихода", out int purchasePrice))
-                    return;
-
-                if (!ReadNumber(salePriceBox, "Цена продажи", out int salePrice))
-                    return;
-
-                if (!ReadNumber(minimumBox, "Минимальный остаток", out int minimum))
-                    return;
-
-                ProductStockService.UpdateProductSettings(
-                    productName: item.ProductName,
-                    purchasePrice: purchasePrice,
-                    salePrice: salePrice,
-                    minimumQuantity: minimum
-                );
-
-                MessageBox.Show(
-                    $"{item.ProductName}\n\nНастройки сохранены.",
-                    "Склад / товары"
-                );
-
-                LoadStockItems();
-            };
-
-            panel.Children.Add(saveButton);
-
-            return panel;
-        }
-
         private UIElement CreateIncomingPanel(ProductStockItem item)
         {
             var panel = new StackPanel
@@ -507,7 +414,7 @@ namespace ClubTimerXbox
 
             panel.Children.Add(new TextBlock
             {
-                Text = "Приход товара",
+                Text = "Принять закуп",
                 Foreground = Brushes.White,
                 FontSize = 17,
                 FontWeight = FontWeights.Bold,
@@ -516,24 +423,20 @@ namespace ClubTimerXbox
 
             var addQuantityBox = CreateNumberBox("0");
             var purchasePriceBox = CreateNumberBox(item.PurchasePrice.ToString());
-            var salePriceBox = CreateNumberBox(item.SalePrice.ToString());
-            var minimumBox = CreateNumberBox(item.MinimumQuantity.ToString());
+            var paymentMethodBox = CreatePaymentMethodBox();
 
             panel.Children.Add(CreateFieldLabel("Добавить товар, шт"));
             panel.Children.Add(addQuantityBox);
 
-            panel.Children.Add(CreateFieldLabel("Цена прихода для этого прихода"));
+            panel.Children.Add(CreateFieldLabel("Цена прихода этого товара"));
             panel.Children.Add(purchasePriceBox);
 
-            panel.Children.Add(CreateFieldLabel("Цена продажи"));
-            panel.Children.Add(salePriceBox);
-
-            panel.Children.Add(CreateFieldLabel("Минимальный остаток"));
-            panel.Children.Add(minimumBox);
+            panel.Children.Add(CreateFieldLabel("Оплата закупа"));
+            panel.Children.Add(paymentMethodBox);
 
             var addButton = new Button
             {
-                Content = "Добавить товар",
+                Content = "Принять закуп",
                 Height = 42,
                 FontSize = 15,
                 FontWeight = FontWeights.SemiBold,
@@ -548,17 +451,11 @@ namespace ClubTimerXbox
                 if (!ReadNumber(purchasePriceBox, "Цена прихода", out int purchasePrice))
                     return;
 
-                if (!ReadNumber(salePriceBox, "Цена продажи", out int salePrice))
-                    return;
-
-                if (!ReadNumber(minimumBox, "Минимальный остаток", out int minimum))
-                    return;
-
                 if (quantityToAdd <= 0)
                 {
                     MessageBox.Show(
                         "Количество добавления должно быть больше 0.",
-                        "Склад / товары"
+                        "Склад / закупы"
                     );
 
                     return;
@@ -566,25 +463,25 @@ namespace ClubTimerXbox
 
                 int quantityBefore = ProductStockService.GetQuantity(item.ProductName);
 
-                ProductStockService.AddIncomingProduct(
-                    productName: item.ProductName,
-                    quantityToAdd: quantityToAdd,
-                    purchasePrice: purchasePrice,
-                    salePrice: salePrice,
-                    minimumQuantity: minimum
+                var purchase = StockPurchaseService.AddPurchase(
+                    items: new List<StockPurchaseItem>
+                    {
+                        new StockPurchaseItem
+                        {
+                            ProductName = item.ProductName,
+                            Quantity = quantityToAdd,
+                            PurchasePrice = purchasePrice,
+                            SalePrice = item.SalePrice,
+                            MinimumQuantity = item.MinimumQuantity
+                        }
+                    },
+                    addedBy: GetCurrentActorName(),
+                    note: "Закуп принят на ПК"
                 );
 
                 int quantityAfter = ProductStockService.GetQuantity(item.ProductName);
 
-                ProductIncomingService.AddIncoming(
-                    productName: item.ProductName,
-                    quantityAdded: quantityToAdd,
-                    quantityBefore: quantityBefore,
-                    quantityAfter: quantityAfter,
-                    purchasePrice: purchasePrice,
-                    salePrice: salePrice,
-                    note: "Приход товара"
-                );
+                AddPurchaseExpense(purchase, GetSelectedPaymentMethod(paymentMethodBox));
 
                 MessageBox.Show(
                     $"{item.ProductName}\n\n" +
@@ -592,12 +489,13 @@ namespace ClubTimerXbox
                     $"Было: {quantityBefore} шт\n" +
                     $"Стало: {quantityAfter} шт\n" +
                     $"Цена прихода: {purchasePrice} сом\n" +
-                    $"Сумма закупки: {quantityToAdd * purchasePrice} сом",
-                    "Приход товара"
+                    $"Сумма закупки: {purchase.TotalAmount} сом\n" +
+                    $"Принял: {purchase.AddedBy}",
+                    "Закуп принят"
                 );
 
                 LoadStockItems();
-                LoadIncomingHistory();
+                LoadPurchaseHistory();
             };
 
             panel.Children.Add(addButton);
@@ -605,26 +503,26 @@ namespace ClubTimerXbox
             return panel;
         }
 
-        private Border CreateIncomingHistoryCard(ProductIncomingItem item)
+        private Border CreatePurchaseHistoryCard(StockPurchase purchase)
         {
             var panel = new StackPanel();
 
             panel.Children.Add(new TextBlock
             {
-                Text = $"{item.CreatedAt:dd.MM.yyyy HH:mm} • {item.ProductName}",
+                Text = $"{purchase.CreatedAt:dd.MM.yyyy HH:mm} • {purchase.TotalAmount} сом",
                 Foreground = Brushes.White,
                 FontSize = 18,
                 FontWeight = FontWeights.Bold
             });
 
+            panel.Children.Add(CreateSmallLine($"Закуп принял: {purchase.AddedBy}"));
+
+            if (!string.IsNullOrWhiteSpace(purchase.Note))
+                panel.Children.Add(CreateSmallLine($"Комментарий: {purchase.Note}"));
+
             panel.Children.Add(new TextBlock
             {
-                Text =
-                    $"Добавлено: {item.QuantityAdded} шт\n" +
-                    $"Остаток: {item.QuantityBefore} → {item.QuantityAfter} шт\n" +
-                    $"Цена прихода: {item.PurchasePrice} сом\n" +
-                    $"Цена продажи: {item.SalePrice} сом\n" +
-                    $"Сумма закупки: {item.TotalPurchaseAmount} сом",
+                Text = BuildPurchaseItemsText(purchase),
                 Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
                 FontSize = 14,
                 LineHeight = 22,
@@ -639,6 +537,89 @@ namespace ClubTimerXbox
                 Margin = new Thickness(0, 0, 0, 12),
                 Child = panel
             };
+        }
+
+        private static string BuildPurchaseItemsText(StockPurchase purchase)
+        {
+            return string.Join(
+                "\n",
+                purchase.Items.Select(item =>
+                    $"{item.ProductName}: {item.Quantity} шт × {item.PurchasePrice} сом = {item.TotalAmount} сом"
+                )
+            );
+        }
+
+        private static TextBlock CreateSmallLine(string text)
+        {
+            return new TextBlock
+            {
+                Text = text,
+                Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
+                FontSize = 14,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 6, 0, 0)
+            };
+        }
+
+        private ComboBox CreatePaymentMethodBox()
+        {
+            var comboBox = new ComboBox();
+            ConfigurePaymentMethodBox(comboBox);
+            return comboBox;
+        }
+
+        private static void ConfigurePaymentMethodBox(ComboBox comboBox)
+        {
+            comboBox.Height = 38;
+            comboBox.FontSize = 15;
+            comboBox.Margin = new Thickness(0, 0, 0, 8);
+            comboBox.Items.Clear();
+            comboBox.Items.Add("Наличные");
+            comboBox.Items.Add("Безнал");
+            comboBox.SelectedIndex = 0;
+        }
+
+        private static string GetSelectedPaymentMethod(ComboBox comboBox)
+        {
+            return comboBox.SelectedItem?.ToString() == "Безнал"
+                ? "Безнал"
+                : "Наличные";
+        }
+
+        private static string GetCurrentActorName()
+        {
+            return EmployeeService.CurrentEmployee?.Name ?? "Владелец";
+        }
+
+        private static void AddPurchaseExpense(StockPurchase purchase, string paymentMethod)
+        {
+            if (purchase.TotalAmount <= 0)
+                return;
+
+            CashService.AddExpense(
+                employeeName: purchase.AddedBy,
+                title: "Закуп товаров",
+                description: BuildPurchaseDescription(purchase),
+                amount: purchase.TotalAmount,
+                paymentMethod: paymentMethod,
+                expenseCategory: "Закупка"
+            );
+        }
+
+        private static string BuildPurchaseDescription(StockPurchase purchase)
+        {
+            var lines = new List<string>
+            {
+                $"Закуп принял: {purchase.AddedBy}"
+            };
+
+            if (!string.IsNullOrWhiteSpace(purchase.Note))
+                lines.Add(purchase.Note);
+
+            lines.AddRange(purchase.Items.Select(item =>
+                $"{item.ProductName}: {item.Quantity} шт × {item.PurchasePrice} сом = {item.TotalAmount} сом"));
+
+            return string.Join("\n", lines);
         }
 
         private TextBox CreateNumberBox(string text)
@@ -671,7 +652,7 @@ namespace ClubTimerXbox
             {
                 MessageBox.Show(
                     $"{fieldName} должно быть числом.",
-                    "Склад / товары"
+                    "Склад / закупы"
                 );
 
                 return false;

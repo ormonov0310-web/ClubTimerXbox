@@ -6,6 +6,26 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <InformationalVersion>1.0.0</InformationalVersion>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="Assets\ProductLogos\*.png" Exclude="Assets\ProductLogos\_preview.png" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Assets\ProductLogos\*.jpg" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Assets\AlarmSounds\*.wav" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Assets\AlarmSounds\*.mp3" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Assets\UiSounds\*.mp3" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CopyUpdaterToOutput" AfterTargets="Build">
+    <MSBuild Projects="..\ClubTimerUpdater\ClubTimerUpdater.csproj" Targets="Build" Properties="Configuration=$(Configuration);OutDir=$(MSBuildProjectDirectory)\.updater-build\" />
+    <ItemGroup>
+      <UpdaterFiles Include="$(MSBuildProjectDirectory)\.updater-build\ClubTimerUpdater.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(UpdaterFiles)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

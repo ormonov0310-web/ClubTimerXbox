@@ -9,16 +9,19 @@ namespace ClubTimerXbox
     {
         private readonly Action _openTariffSettings;
         private readonly Action _openStockSettings;
-        private readonly Action _openServiceSettings;
+        private readonly Action _openTuyaSettings;
+        private readonly Action _openAlarmSettings;
 
         public OwnerSettingsWindow(
             Action openTariffSettings,
             Action openStockSettings,
-            Action openServiceSettings)
+            Action openTuyaSettings,
+            Action openAlarmSettings)
         {
             _openTariffSettings = openTariffSettings;
             _openStockSettings = openStockSettings;
-            _openServiceSettings = openServiceSettings;
+            _openTuyaSettings = openTuyaSettings;
+            _openAlarmSettings = openAlarmSettings;
 
             Title = "Настройки";
             Width = 640;
@@ -51,7 +54,7 @@ namespace ClubTimerXbox
             {
                 Text =
                     "Здесь настройки, которые не должны быть доступны обычным сотрудникам. " +
-                    "Тарифы, склад, приход товара и услуги находятся здесь.",
+                    "Тарифы, склад, закупы и розетки находятся здесь.",
                 Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
                 FontSize = 15,
                 TextWrapping = TextWrapping.Wrap,
@@ -66,15 +69,21 @@ namespace ClubTimerXbox
             ));
 
             root.Children.Add(CreateSettingsButton(
-                "Склад / товары",
-                "Остатки товаров, приход товара, цены покупки и продажи.",
+                "Будильник",
+                "Предупреждение перед окончанием времени, звук и длительность сигнала.",
+                () => _openAlarmSettings()
+            ));
+
+            root.Children.Add(CreateSettingsButton(
+                "Склад / закупы",
+                "Остатки товаров, приёмка закупов, цены покупки и продажи.",
                 () => _openStockSettings()
             ));
 
             root.Children.Add(CreateSettingsButton(
-                "Услуги",
-                "Создание услуг без склада. Например: джойстик, VIP-услуги.",
-                () => _openServiceSettings()
+                "Tuya розетки",
+                "Подключение Wi-Fi розеток через облако Tuya. Пока безопасная проверка.",
+                () => _openTuyaSettings()
             ));
 
             var closeButton = new Button
