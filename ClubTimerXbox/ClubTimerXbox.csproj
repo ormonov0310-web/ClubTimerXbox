@@ -20,7 +20,7 @@
     <None Include="Assets\UiSounds\*.mp3" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <Target Name="CopyUpdaterToOutput" AfterTargets="Build">
+  <Target Name="CopyUpdaterToOutput" AfterTargets="Build" Condition="'$(SkipCopyUpdater)' != 'true'">
     <MSBuild Projects="..\ClubTimerUpdater\ClubTimerUpdater.csproj" Targets="Build" Properties="Configuration=$(Configuration);OutDir=$(MSBuildProjectDirectory)\.updater-build\" />
     <ItemGroup>
       <UpdaterFiles Include="$(MSBuildProjectDirectory)\.updater-build\ClubTimerUpdater.*" />
