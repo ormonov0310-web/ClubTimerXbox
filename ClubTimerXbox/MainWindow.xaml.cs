@@ -374,7 +374,7 @@ namespace ClubTimerXbox
             if (!place.IsBusy)
                 return new SolidColorBrush(Color.FromRgb(51, 65, 85));
 
-            if (GetActiveSessionProductsAndServicesTotal(place.Name) > 0)
+            if (GetActiveSessionPendingCheckoutTotal(place.Name) > 0)
                 return new SolidColorBrush(Color.FromRgb(251, 191, 36));
 
             return new SolidColorBrush(Color.FromRgb(74, 222, 128));
@@ -390,7 +390,7 @@ namespace ClubTimerXbox
                     return;
 
                 AnimateScale(card, 1.025, 120);
-                card.BorderBrush = GetActiveSessionProductsAndServicesTotal(place.Name) > 0
+                card.BorderBrush = GetActiveSessionPendingCheckoutTotal(place.Name) > 0
                     ? new SolidColorBrush(Color.FromRgb(253, 224, 71))
                     : new SolidColorBrush(Color.FromRgb(96, 165, 250));
 
@@ -1013,8 +1013,11 @@ namespace ClubTimerXbox
             var activeSession = ActionLogService.GetActiveGameSessionByPlace(place.Name);
             Guid? sessionId = activeSession?.Id;
 
-            int productsAmount = GetActiveSessionProductsAndServicesTotal(place.Name);
+            int productsAmount = GetActiveSessionPendingCheckoutTotal(place.Name);
+            int deferredCheckoutAmount = GetActiveSessionDeferredCheckoutTotal(place.Name);
+            int pendingCheckoutAmount = productsAmount + deferredCheckoutAmount;
             string productsDescription = BuildActiveSessionSalesDescription(place.Name);
+            string deferredCheckoutDescription = BuildActiveSessionDeferredCheckoutDescription(place.Name);
 
             string incomeEmployeeName;
 
@@ -1053,14 +1056,14 @@ namespace ClubTimerXbox
 
             if (wasOpenMode)
             {
-                totalClientMustPayNow = gameAmount + productsAmount;
+                totalClientMustPayNow = gameAmount + pendingCheckoutAmount;
             }
             else
             {
                 if (refund > 0)
-                    totalClientMustPayNow = productsAmount - refund;
+                    totalClientMustPayNow = pendingCheckoutAmount - refund;
                 else
-                    totalClientMustPayNow = needToPayForGame + productsAmount;
+                    totalClientMustPayNow = needToPayForGame + pendingCheckoutAmount;
             }
 
             string closedByEmployeeName = GetCurrentEmployeeName();
@@ -1110,12 +1113,20 @@ namespace ClubTimerXbox
                     }
                 }
 
+                var deferredCheckoutItems = ActionLogService.GetActiveSessionDeferredCheckoutItems(place.Name);
+
+                foreach (var item in deferredCheckoutItems)
+                {
+                    checkoutItems.Add(item);
+                }
+
                 var checkoutWindow = new CashCheckoutWindow(
                     employeeName: closedByEmployeeName,
                     operationTitle: "Закрытие открытого режима",
                     items: checkoutItems,
                     placeName: place.Name,
-                    gameSessionId: sessionId
+                    gameSessionId: sessionId,
+                    allowTransferToPlace: true
                 )
                 {
                     Owner = this
@@ -1123,7 +1134,7 @@ namespace ClubTimerXbox
 
                 bool? checkoutResult = checkoutWindow.ShowDialog();
 
-                if (checkoutResult != true || checkoutWindow.PaymentRecord == null)
+                if (checkoutResult != true)
                 {
                     place.IsCalculating = false;
                     place.IsOpenMode = true;
@@ -1136,11 +1147,54 @@ namespace ClubTimerXbox
                     return;
                 }
 
-                if (productsAmount > 0)
+                if (checkoutWindow.ResultType == CashCheckoutResultType.TransferToPlace)
                 {
-                    checkoutWindow.PaymentRecord.Comment =
-                        $"Товар/услуга был оформлен на {place.Name}:\n" +
-                        productsDescription;
+                    var transferred = TryTransferCheckoutToAnotherPlace(
+                        sourcePlace: place,
+                        checkoutItems: checkoutItems,
+                        sourceGameAmount: gameAmount,
+                        sourceProductsAmount: productsAmount,
+                        sourceProductsDescription: productsDescription,
+                        closedByEmployeeName: closedByEmployeeName);
+
+                    if (transferred)
+                    {
+                        UpdateMainCashText();
+                        DrawPlaces();
+                        SaveActivePlacesToStorage();
+                        return;
+                    }
+
+                    place.IsCalculating = false;
+                    place.IsOpenMode = true;
+                    place.StartTime = DateTime.Now;
+                    place.AccruedAmountBeforeCurrentSegment = gameAmount;
+
+                    DrawPlaces();
+                    SaveActivePlacesToStorage();
+
+                    return;
+                }
+
+                if (checkoutWindow.PaymentRecord == null)
+                {
+                    place.IsCalculating = false;
+                    place.IsOpenMode = true;
+                    place.StartTime = DateTime.Now;
+                    place.AccruedAmountBeforeCurrentSegment = gameAmount;
+
+                    DrawPlaces();
+                    SaveActivePlacesToStorage();
+
+                    return;
+                }
+
+                if (productsAmount > 0 || deferredCheckoutAmount > 0)
+                {
+                    checkoutWindow.PaymentRecord.Comment = BuildCheckoutPaymentComment(
+                        place.Name,
+                        productsDescription,
+                        deferredCheckoutDescription);
                 }
 
                 PaymentService.AddPayment(checkoutWindow.PaymentRecord);
@@ -1210,12 +1264,12 @@ namespace ClubTimerXbox
             UpdateMainCashText();
 
             MessageBox.Show(
-                BuildStopMessage(
-                    wasOpenMode,
-                    gameAmount,
-                    productsAmount,
-                    place.PaidAmount,
-                    refund,
+                    BuildStopMessage(
+                        wasOpenMode,
+                        gameAmount,
+                        pendingCheckoutAmount,
+                        place.PaidAmount,
+                        refund,
                     needToPayForGame,
                     totalClientMustPayNow,
                     incomeEmployeeName
@@ -1226,6 +1280,109 @@ namespace ClubTimerXbox
             ClearPlace(place);
             DrawPlaces();
             SaveActivePlacesToStorage();
+        }
+
+        private bool TryTransferCheckoutToAnotherPlace(
+            ClubPlace sourcePlace,
+            List<CheckoutItem> checkoutItems,
+            int sourceGameAmount,
+            int sourceProductsAmount,
+            string sourceProductsDescription,
+            string closedByEmployeeName)
+        {
+            var activePlaces = _places
+                .Where(place =>
+                    place.IsBusy &&
+                    place.IsOpenMode &&
+                    !place.IsCalculating &&
+                    !place.Name.Equals(sourcePlace.Name, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (activePlaces.Count == 0)
+            {
+                MessageBox.Show(
+                    "Нет другого активного ТВ или руля.\n\n" +
+                    "Для переноса нужен другой активный открытый режим. " +
+                    "Откройте второе место в открытом режиме или примите оплату здесь.",
+                    "Оформить на другой ТВ");
+
+                return false;
+            }
+
+            var selectWindow = new ActivePlaceSelectWindow(
+                activePlaces,
+                title: "Оформить на другой ТВ.",
+                subtitle:
+                    "Выберите открытый ТВ или руль, куда нужно перенести этот расчёт. " +
+                    "Деньги будут приняты позже, когда закроете выбранное место.")
+            {
+                Owner = this
+            };
+
+            bool? result = selectWindow.ShowDialog();
+
+            if (result != true || selectWindow.SelectedPlace == null)
+                return false;
+
+            string targetPlaceName = selectWindow.SelectedPlace.Name;
+            string incomeEmployeeName =
+                sourcePlace.IncomeEmployeeName ??
+                sourcePlace.StartedByEmployeeName ??
+                closedByEmployeeName;
+
+            var activeSession = ActionLogService.GetActiveGameSessionByPlace(sourcePlace.Name);
+            Guid? sessionId = activeSession?.Id;
+
+            ActionLogService.AddDeferredCheckoutItemsToActiveSession(
+                targetPlaceName: targetPlaceName,
+                sourcePlaceName: sourcePlace.Name,
+                employeeName: closedByEmployeeName,
+                items: checkoutItems);
+
+            ActionLogService.CloseActiveGameSession(
+                placeName: sourcePlace.Name,
+                closedByEmployeeName: closedByEmployeeName,
+                actualPlayedAmount: sourceGameAmount,
+                refundAmount: 0,
+                needToPayAmount: 0,
+                cashIncomeAmount: sourceGameAmount,
+                incomeEmployeeName: incomeEmployeeName);
+
+            CashService.AddGameSessionIncome(
+                employeeName: closedByEmployeeName,
+                incomeEmployeeName: incomeEmployeeName,
+                placeName: sourcePlace.Name,
+                title: "Игровой сеанс",
+                description:
+                    $"{sourcePlace.Name}. Клиент играл: {sourceGameAmount} сом. " +
+                    $"Оплата перенесена на {targetPlaceName}.",
+                amount: sourceGameAmount,
+                gameSessionId: sessionId);
+
+            if (sourceProductsAmount > 0)
+            {
+                CashService.AddProductOrServiceIncome(
+                    employeeName: closedByEmployeeName,
+                    title: "Товары/услуги по сеансу",
+                    description:
+                        $"{sourcePlace.Name}. Оплата перенесена на {targetPlaceName}.\n" +
+                        sourceProductsDescription,
+                    amount: sourceProductsAmount,
+                    placeName: sourcePlace.Name,
+                    gameSessionId: sessionId);
+            }
+
+            int transferredTotal = checkoutItems.Sum(item => item.TotalAmount);
+
+            MessageBox.Show(
+                $"{sourcePlace.Name} закрыт.\n\n" +
+                $"К оплате перенесено на {targetPlaceName}: {transferredTotal} сом.\n" +
+                "Когда закроете второе место, эти позиции появятся в ККМ вместе с его оплатой.",
+                "Оформлено на другой ТВ");
+
+            ClearPlace(sourcePlace);
+
+            return true;
         }
 
         private string BuildStopMessage(
@@ -3161,7 +3318,7 @@ namespace ClubTimerXbox
             if (place.IsCalculating)
             {
                 if (productsAmount > 0)
-                    return $"Ожидает расчёта • товары/услуги: {productsAmount} сом";
+                    return $"Ожидает расчёта • доп. позиции: {productsAmount} сом";
 
                 return "Ожидает расчёта";
             }
@@ -3171,7 +3328,7 @@ namespace ClubTimerXbox
                 int gamePrice = GetActualPrice(place);
 
                 if (productsAmount > 0)
-                    return $"Время: {gamePrice} сом • товары: {productsAmount} сом • итого: {gamePrice + productsAmount} сом";
+                    return $"Время: {gamePrice} сом • доп. позиции: {productsAmount} сом • итого: {gamePrice + productsAmount} сом";
 
                 return $"По факту сейчас: {gamePrice} сом";
             }
@@ -3183,7 +3340,7 @@ namespace ClubTimerXbox
                 : $"Оплачено: {place.PaidAmount} сом";
 
             if (productsAmount > 0)
-                text += $" • товары: {productsAmount} сом";
+                text += $" • доп. позиции: {productsAmount} сом";
 
             return text;
         }
@@ -3210,17 +3367,22 @@ namespace ClubTimerXbox
 
             var session = ActionLogService.GetActiveGameSessionByPlace(place.Name);
 
-            if (session == null || session.SaleLines.Count == 0)
+            if (session == null)
                 return "";
 
             var unpaidLines = session.SaleLines
                 .Where(line => !line.IsPaid)
                 .ToList();
 
-            if (unpaidLines.Count == 0)
+            session.DeferredCheckoutItems ??= new List<CheckoutItem>();
+            var deferredItems = session.DeferredCheckoutItems;
+
+            if (unpaidLines.Count == 0 && deferredItems.Count == 0)
                 return "";
 
-            int total = unpaidLines.Sum(line => line.TotalAmount);
+            int total =
+                unpaidLines.Sum(line => line.TotalAmount) +
+                deferredItems.Sum(item => item.TotalAmount);
 
             string text = $"Оформлено: {total} сом";
 
@@ -3229,8 +3391,18 @@ namespace ClubTimerXbox
                 text += $"\n• {line.ItemName} × {line.Quantity} = {line.TotalAmount} сом";
             }
 
-            if (unpaidLines.Count > 2)
-                text += $"\n• ещё {unpaidLines.Count - 2} поз.";
+            int displayed = unpaidLines.Take(2).Count();
+
+            foreach (var item in deferredItems.Take(2 - displayed))
+            {
+                text += $"\n• {item.Name} × {item.Quantity} = {item.TotalAmount} сом";
+                displayed++;
+            }
+
+            int remaining = unpaidLines.Count + deferredItems.Count - displayed;
+
+            if (remaining > 0)
+                text += $"\n• ещё {remaining} поз.";
 
             return text;
         }
@@ -3238,6 +3410,17 @@ namespace ClubTimerXbox
         private int GetActiveSessionProductsAndServicesTotal(string placeName)
         {
             return ActionLogService.GetActiveSessionProductsAndServicesTotal(placeName);
+        }
+
+        private int GetActiveSessionDeferredCheckoutTotal(string placeName)
+        {
+            return ActionLogService.GetActiveSessionDeferredCheckoutTotal(placeName);
+        }
+
+        private int GetActiveSessionPendingCheckoutTotal(string placeName)
+        {
+            return GetActiveSessionProductsAndServicesTotal(placeName) +
+                   GetActiveSessionDeferredCheckoutTotal(placeName);
         }
 
         private string BuildActiveSessionSalesDescription(string placeName)
@@ -3269,6 +3452,51 @@ namespace ClubTimerXbox
             }
 
             return text.Trim();
+        }
+
+        private string BuildActiveSessionDeferredCheckoutDescription(string placeName)
+        {
+            var deferredItems = ActionLogService.GetActiveSessionDeferredCheckoutItems(placeName);
+
+            if (deferredItems.Count == 0)
+                return "";
+
+            string text = "";
+
+            foreach (var item in deferredItems)
+            {
+                text +=
+                    $"Перенесено: {item.Name}, " +
+                    $"кол-во: {item.Quantity}, " +
+                    $"цена: {item.UnitPrice} сом, " +
+                    $"сумма: {item.TotalAmount} сом\n";
+            }
+
+            return text.Trim();
+        }
+
+        private string BuildCheckoutPaymentComment(
+            string placeName,
+            string productsDescription,
+            string deferredCheckoutDescription)
+        {
+            var parts = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(productsDescription))
+            {
+                parts.Add(
+                    $"Товар/услуга был оформлен на {placeName}:\n" +
+                    productsDescription);
+            }
+
+            if (!string.IsNullOrWhiteSpace(deferredCheckoutDescription))
+            {
+                parts.Add(
+                    $"Перенесённые позиции, оплаченные при закрытии {placeName}:\n" +
+                    deferredCheckoutDescription);
+            }
+
+            return string.Join("\n\n", parts);
         }
 
         private Brush GetStatusBrush(ClubPlace place)

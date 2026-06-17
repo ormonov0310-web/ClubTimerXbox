@@ -11,11 +11,18 @@ namespace ClubTimerXbox
         public ClubPlace? SelectedPlace { get; private set; }
 
         private readonly List<ClubPlace> _activePlaces;
+        private readonly string _title;
+        private readonly string _subtitle;
         private readonly StackPanel _placesPanel = new StackPanel();
 
-        public ActivePlaceSelectWindow(List<ClubPlace> activePlaces)
+        public ActivePlaceSelectWindow(
+            List<ClubPlace> activePlaces,
+            string title = "Оформить на ТВ.",
+            string subtitle = "Выберите активный ТВ или руль, на который нужно оформить товар/услугу. Оплата будет добавлена при закрытии этого сеанса.")
         {
             _activePlaces = activePlaces;
+            _title = title;
+            _subtitle = subtitle;
 
             Title = "Выбрать место";
             Width = 520;
@@ -39,7 +46,7 @@ namespace ClubTimerXbox
 
             var titleText = new TextBlock
             {
-                Text = "Оформить на ТВ.",
+                Text = _title,
                 Foreground = Brushes.White,
                 FontSize = 30,
                 FontWeight = FontWeights.Bold,
@@ -51,7 +58,7 @@ namespace ClubTimerXbox
 
             var subtitleText = new TextBlock
             {
-                Text = "Выберите активный ТВ или руль, на который нужно оформить товар/услугу. Оплата будет добавлена при закрытии этого сеанса.",
+                Text = _subtitle,
                 Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
                 FontSize = 15,
                 TextWrapping = TextWrapping.Wrap,

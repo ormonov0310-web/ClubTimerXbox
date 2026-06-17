@@ -86,11 +86,9 @@ namespace ClubTimerXbox.Services
                 })
                 .ToList();
 
-            double totalHours = employeeInputs.Sum(item => item.WorkHours);
             int totalGameRevenue = employeeInputs.Sum(item => item.Summary.MonthGameIncome);
 
             int gameDistributed = 0;
-            int timeDistributed = 0;
 
             for (int index = 0; index < employeeInputs.Count; index++)
             {
@@ -100,10 +98,7 @@ namespace ClubTimerXbox.Services
                 int timeAmount = CalculateTimeAmount(
                     fund: report.TimeFundAmount,
                     plannedHours: Settings.TimeMonthlyPlannedHours,
-                    employeeHours: input.WorkHours,
-                    totalHours: totalHours,
-                    distributed: ref timeDistributed,
-                    isLast: isLast
+                    employeeHours: input.WorkHours
                 );
                 int gameAmount = Allocate(
                     report.GameRevenueFundAmount,
@@ -447,24 +442,10 @@ namespace ClubTimerXbox.Services
         private static int CalculateTimeAmount(
             int fund,
             int plannedHours,
-            double employeeHours,
-            double totalHours,
-            ref int distributed,
-            bool isLast)
+            double employeeHours)
         {
             if (fund <= 0 || plannedHours <= 0 || employeeHours <= 0)
                 return 0;
-
-            if (totalHours > plannedHours)
-            {
-                return Allocate(
-                    fund,
-                    employeeHours,
-                    totalHours,
-                    ref distributed,
-                    isLast
-                );
-            }
 
             return (int)Math.Round(fund * (employeeHours / plannedHours));
         }

@@ -25,6 +25,10 @@ namespace ClubTimerXbox.Models
         // но оплатит потом вместе с закрытием сеанса.
         public List<GameSessionSaleLine> SaleLines { get; set; } = new List<GameSessionSaleLine>();
 
+        // Позиции, перенесённые с другого места: например,
+        // ТВ1 закрыли, но оплату клиент попросил добавить к ТВ2.
+        public List<CheckoutItem> DeferredCheckoutItems { get; set; } = new List<CheckoutItem>();
+
         public string ClosedByEmployeeName { get; set; } = "";
         public DateTime? ClosedAt { get; set; }
 

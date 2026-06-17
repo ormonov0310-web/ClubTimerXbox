@@ -83,6 +83,8 @@
                                     FontSize="18"
                                     FontWeight="Bold"
                                     Background="#16A34A"
+                                    BorderBrush="#16A34A"
+                                    BorderThickness="2"
                                     Foreground="White"
                                     Click="FullCashButton_Click"/>
 
@@ -92,6 +94,8 @@
                                     FontSize="18"
                                     FontWeight="Bold"
                                     Background="#2563EB"
+                                    BorderBrush="#2563EB"
+                                    BorderThickness="2"
                                     Foreground="White"
                                     Click="FullMBankButton_Click"/>
                         </Grid>
@@ -103,7 +107,8 @@
                     </StackPanel>
                 </Border>
 
-                <Border Background="#0F172A"
+                <Border x:Name="PartialPaymentCard"
+                        Background="#0F172A"
                         BorderBrush="#334155"
                         BorderThickness="1"
                         CornerRadius="14"
@@ -116,6 +121,13 @@
                                    FontWeight="Bold"
                                    Margin="0,0,0,10"/>
 
+                        <TextBlock x:Name="PaymentModeText"
+                                   Text="Быстрый режим выбран выше."
+                                   Foreground="#94A3B8"
+                                   FontSize="14"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,12"/>
+
                         <TextBlock Text="Наличные"
                                    Foreground="#CBD5E1"
                                    FontSize="14"/>
@@ -124,6 +136,9 @@
                                  Height="42"
                                  FontSize="18"
                                  Margin="0,6,0,12"
+                                 GotKeyboardFocus="AmountTextBox_GotKeyboardFocus"
+                                 PreviewMouseLeftButtonDown="AmountTextBox_PreviewMouseLeftButtonDown"
+                                 PreviewTextInput="AmountTextBox_PreviewTextInput"
                                  TextChanged="CashTextBox_TextChanged"/>
 
                         <TextBlock Text="М Банк"
@@ -134,6 +149,9 @@
                                  Height="42"
                                  FontSize="18"
                                  Margin="0,6,0,10"
+                                 GotKeyboardFocus="AmountTextBox_GotKeyboardFocus"
+                                 PreviewMouseLeftButtonDown="AmountTextBox_PreviewMouseLeftButtonDown"
+                                 PreviewTextInput="AmountTextBox_PreviewTextInput"
                                  TextChanged="MBankTextBox_TextChanged"/>
 
                         <TextBlock x:Name="PaymentCheckText"
@@ -150,6 +168,16 @@
                         Background="#16A34A"
                         Foreground="White"
                         Click="ConfirmButton_Click"
+                        Margin="0,0,0,10"/>
+
+                <Button x:Name="TransferToPlaceButton"
+                        Content="Оформить на другой ТВ"
+                        Height="48"
+                        FontSize="16"
+                        FontWeight="Bold"
+                        Background="#F59E0B"
+                        Foreground="White"
+                        Click="TransferToPlaceButton_Click"
                         Margin="0,0,0,10"/>
 
                 <Button Content="Отмена"

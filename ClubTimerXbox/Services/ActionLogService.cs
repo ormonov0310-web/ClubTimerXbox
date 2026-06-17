@@ -386,6 +386,69 @@ namespace ClubTimerXbox.Services
                 .Sum(line => line.TotalAmount);
         }
 
+        public static int GetActiveSessionDeferredCheckoutTotal(string placeName)
+        {
+            var session = GetActiveGameSessionByPlace(placeName);
+
+            if (session == null)
+                return 0;
+
+            session.DeferredCheckoutItems ??= new List<CheckoutItem>();
+
+            return session.DeferredCheckoutItems.Sum(item => item.TotalAmount);
+        }
+
+        public static List<CheckoutItem> GetActiveSessionDeferredCheckoutItems(string placeName)
+        {
+            var session = GetActiveGameSessionByPlace(placeName);
+
+            if (session == null)
+                return new List<CheckoutItem>();
+
+            session.DeferredCheckoutItems ??= new List<CheckoutItem>();
+
+            return session.DeferredCheckoutItems
+                .Select(CloneCheckoutItem)
+                .ToList();
+        }
+
+        public static void AddDeferredCheckoutItemsToActiveSession(
+            string targetPlaceName,
+            string sourcePlaceName,
+            string employeeName,
+            List<CheckoutItem> items)
+        {
+            var session = GetActiveGameSessionByPlace(targetPlaceName);
+
+            if (session == null || items == null || items.Count == 0)
+                return;
+
+            session.DeferredCheckoutItems ??= new List<CheckoutItem>();
+
+            foreach (var item in items)
+            {
+                if (item.TotalAmount <= 0)
+                    continue;
+
+                var copy = CloneCheckoutItem(item);
+                copy.Name = $"{copy.Name} ({sourcePlaceName})";
+                session.DeferredCheckoutItems.Add(copy);
+            }
+
+            session.ExtraLines.Add(new GameSessionExtraLine
+            {
+                CreatedAt = DateTime.Now,
+                Type = "Перенос оплаты",
+                EmployeeName = employeeName,
+                Description =
+                    $"На {targetPlaceName} перенесены позиции к оплате с {sourcePlaceName}. " +
+                    $"Сумма: {items.Sum(item => item.TotalAmount)} сом.",
+                Amount = items.Sum(item => item.TotalAmount)
+            });
+
+            SaveLogs();
+        }
+
         public static void MarkActiveSessionSalesAsPaid(string placeName)
         {
             var session = GetActiveGameSessionByPlace(placeName);
@@ -443,7 +506,10 @@ namespace ClubTimerXbox.Services
             if (session == null)
                 return;
 
+            session.DeferredCheckoutItems ??= new List<CheckoutItem>();
+
             int productsAndServicesAmount = session.SaleLines.Sum(line => line.TotalAmount);
+            int deferredAmount = session.DeferredCheckoutItems.Sum(item => item.TotalAmount);
 
             foreach (var line in session.SaleLines)
             {
@@ -457,11 +523,24 @@ namespace ClubTimerXbox.Services
             session.NeedToPayAmount = needToPayAmount;
             session.CashIncomeAmount = cashIncomeAmount;
             session.ProductsAndServicesAmount = productsAndServicesAmount;
-            session.TotalToPayAmount = cashIncomeAmount + productsAndServicesAmount;
+            session.TotalToPayAmount = cashIncomeAmount + productsAndServicesAmount + deferredAmount;
             session.IncomeEmployeeName = incomeEmployeeName;
             session.IsClosed = true;
 
             SaveLogs();
+        }
+
+        private static CheckoutItem CloneCheckoutItem(CheckoutItem item)
+        {
+            return new CheckoutItem
+            {
+                Name = item.Name,
+                Quantity = item.Quantity,
+                UnitPrice = item.UnitPrice,
+                PurchasePrice = item.PurchasePrice,
+                Category = item.Category,
+                ItemType = item.ItemType
+            };
         }
 
         public static List<GameSessionLogItem> GetAllGameSessions()
