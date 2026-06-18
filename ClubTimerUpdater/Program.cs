@@ -1,37 +1,213 @@
 using System.Diagnostics;
+using System.Drawing;
 using System.IO.Compression;
+using System.Windows.Forms;
 
 namespace ClubTimerUpdater
 {
     internal static class Program
     {
+        [STAThread]
         private static int Main(string[] args)
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+
+            var options = UpdateOptions.Parse(args);
+            if (!options.IsValid(out string error))
+            {
+                UpdateLog.Write(error);
+                MessageBox.Show(
+                    error,
+                    "ClubTimerXbox update",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return 2;
+            }
+
+            using var form = new UpdateProgressForm(options);
+            Application.Run(form);
+            return form.ExitCode;
+        }
+    }
+
+    internal sealed class UpdateProgressForm : Form
+    {
+        private readonly UpdateOptions _options;
+        private readonly Label _statusLabel;
+        private readonly Label _detailsLabel;
+        private readonly ProgressBar _progressBar;
+
+        public int ExitCode { get; private set; }
+
+        public UpdateProgressForm(UpdateOptions options)
+        {
+            _options = options;
+
+            Text = "Обновление ClubTimerXbox";
+            StartPosition = FormStartPosition.CenterScreen;
+            Width = 560;
+            Height = 260;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ControlBox = false;
+            TopMost = true;
+            BackColor = Color.FromArgb(15, 17, 23);
+            ForeColor = Color.White;
+
+            var root = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 5,
+                Padding = new Padding(28, 24, 28, 24),
+                BackColor = BackColor
+            };
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+            var title = new Label
+            {
+                AutoSize = true,
+                Text = "Идёт обновление программы",
+                Font = new Font("Segoe UI", 20, FontStyle.Bold),
+                ForeColor = Color.White,
+                Margin = new Padding(0, 0, 0, 10)
+            };
+
+            var message = new Label
+            {
+                AutoSize = true,
+                Text = "Пожалуйста, подождите. Не выключайте компьютер.\nПрограмма сама откроется после завершения обновления.",
+                Font = new Font("Segoe UI", 11, FontStyle.Regular),
+                ForeColor = Color.FromArgb(209, 213, 219),
+                Margin = new Padding(0, 0, 0, 20)
+            };
+
+            _progressBar = new ProgressBar
+            {
+                Dock = DockStyle.Fill,
+                Minimum = 0,
+                Maximum = 100,
+                Value = 0,
+                Style = ProgressBarStyle.Continuous,
+                Margin = new Padding(0, 5, 0, 14)
+            };
+
+            _statusLabel = new Label
+            {
+                AutoSize = true,
+                Text = "0% - Подготовка обновления",
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                ForeColor = Color.FromArgb(147, 168, 255),
+                Margin = new Padding(0, 0, 0, 4)
+            };
+
+            _detailsLabel = new Label
+            {
+                AutoSize = true,
+                Text = "",
+                Font = new Font("Segoe UI", 9, FontStyle.Regular),
+                ForeColor = Color.FromArgb(156, 163, 175)
+            };
+
+            root.Controls.Add(title, 0, 0);
+            root.Controls.Add(message, 0, 1);
+            root.Controls.Add(_progressBar, 0, 2);
+            root.Controls.Add(_statusLabel, 0, 3);
+            root.Controls.Add(_detailsLabel, 0, 4);
+            Controls.Add(root);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            _ = RunUpdateAsync();
+        }
+
+        private async Task RunUpdateAsync()
         {
             try
             {
-                var options = UpdateOptions.Parse(args);
-                if (!options.IsValid(out string error))
-                {
-                    Console.Error.WriteLine(error);
-                    return 2;
-                }
-
-                WaitForProcessExit(options.ProcessName, TimeSpan.FromSeconds(options.WaitSeconds));
-
-                string backupPath = CreateBackup(options.TargetDir, options.BackupRoot);
-                InstallPackage(options.PackagePath, options.TargetDir);
-
-                if (!string.IsNullOrWhiteSpace(options.MainExe))
-                    StartApp(Path.Combine(options.TargetDir, options.MainExe));
-
-                Console.WriteLine($"Update installed. Backup: {backupPath}");
-                return 0;
+                await Task.Run(RunUpdate);
+                SetProgress(100, "100% - Готово", "Новая версия запускается.");
+                await Task.Delay(1500);
+                CloseFromUi();
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine(ex);
-                return 1;
+                ExitCode = 1;
+                UpdateLog.Write(ex.ToString());
+                SetProgress(
+                    Math.Max(_progressBar.Value, 1),
+                    "Обновление не удалось. Позовите владельца.",
+                    "Подробности записаны в updater.log. Пробуем открыть программу обратно.");
+                TryStartApp();
+                await Task.Delay(10000);
+                CloseFromUi();
             }
+        }
+
+        private void RunUpdate()
+        {
+            UpdateLog.Write("Started");
+            UpdateLog.Write($"Package path: {_options.PackagePath}");
+            UpdateLog.Write($"Target dir: {_options.TargetDir}");
+
+            SetProgress(0, "0% - Подготовка обновления");
+
+            SetProgress(10, "10% - Закрываем программу");
+            UpdateLog.Write("Waiting for process exit");
+            WaitForProcessExit(_options.ProcessName, TimeSpan.FromSeconds(_options.WaitSeconds));
+
+            SetProgress(25, "25% - Создаём резервную копию");
+            string backupPath = CreateBackup(_options.TargetDir, _options.BackupRoot);
+            UpdateLog.Write($"Backup created: {backupPath}");
+
+            SetProgress(50, "50% - Устанавливаем новую версию");
+            InstallPackage(_options.PackagePath, _options.TargetDir);
+            UpdateLog.Write("Package installed");
+
+            SetProgress(80, "80% - Запускаем программу");
+            TryStartApp();
+            UpdateLog.Write("App restart requested");
+        }
+
+        private void CloseFromUi()
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(CloseFromUi));
+                return;
+            }
+
+            Close();
+        }
+
+        private void SetProgress(int value, string status, string details = "")
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => SetProgress(value, status, details)));
+                return;
+            }
+
+            int safeValue = Math.Max(_progressBar.Minimum, Math.Min(_progressBar.Maximum, value));
+            _progressBar.Value = safeValue;
+            _statusLabel.Text = status;
+            _detailsLabel.Text = details;
+        }
+
+        private void TryStartApp()
+        {
+            if (string.IsNullOrWhiteSpace(_options.MainExe))
+                return;
+
+            StartApp(Path.Combine(_options.TargetDir, _options.MainExe));
         }
 
         private static void WaitForProcessExit(string processName, TimeSpan timeout)
@@ -77,11 +253,28 @@ namespace ClubTimerUpdater
                 "ClubTimerUpdater",
                 Guid.NewGuid().ToString("N"));
 
-            Directory.CreateDirectory(extractDir);
-            ZipFile.ExtractToDirectory(packagePath, extractDir);
+            try
+            {
+                Directory.CreateDirectory(extractDir);
+                UpdateLog.Write("Extract started");
+                ZipFile.ExtractToDirectory(packagePath, extractDir);
 
-            string sourceDir = FindPackageRoot(extractDir);
-            CopyDirectory(sourceDir, targetDir, overwrite: true);
+                string sourceDir = FindPackageRoot(extractDir);
+                UpdateLog.Write($"Copy started: {sourceDir}");
+                CopyDirectory(sourceDir, targetDir, overwrite: true);
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(extractDir))
+                        Directory.Delete(extractDir, recursive: true);
+                }
+                catch
+                {
+                    // Temp cleanup must not hide update errors.
+                }
+            }
         }
 
         private static string FindPackageRoot(string extractDir)
@@ -121,7 +314,10 @@ namespace ClubTimerUpdater
         private static void StartApp(string exePath)
         {
             if (!File.Exists(exePath))
+            {
+                UpdateLog.Write($"App exe not found: {exePath}");
                 return;
+            }
 
             Process.Start(new ProcessStartInfo
             {
@@ -129,6 +325,34 @@ namespace ClubTimerUpdater
                 WorkingDirectory = Path.GetDirectoryName(exePath) ?? "",
                 UseShellExecute = true
             });
+        }
+    }
+
+    internal static class UpdateLog
+    {
+        private static readonly object Sync = new object();
+
+        private static string LogPath
+        {
+            get
+            {
+                string backupRoot = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "ClubTimerXbox",
+                    "backups");
+                Directory.CreateDirectory(backupRoot);
+                return Path.Combine(backupRoot, "updater.log");
+            }
+        }
+
+        public static void Write(string message)
+        {
+            lock (Sync)
+            {
+                File.AppendAllText(
+                    LogPath,
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}");
+            }
         }
     }
 

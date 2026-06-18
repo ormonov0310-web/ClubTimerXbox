@@ -201,7 +201,7 @@ namespace ClubTimerXbox.Services
 
             Directory.CreateDirectory(runnerDir);
 
-            foreach (string file in Directory.GetFiles(appDir, "ClubTimerUpdater.*"))
+            foreach (string file in Directory.GetFiles(appDir, "*", SearchOption.TopDirectoryOnly))
             {
                 string target = Path.Combine(runnerDir, Path.GetFileName(file));
                 File.Copy(file, target, overwrite: true);
@@ -235,7 +235,7 @@ namespace ClubTimerXbox.Services
                 Arguments = string.Join(" ", args.Select(QuoteArg)),
                 WorkingDirectory = runnerDir,
                 UseShellExecute = false,
-                CreateNoWindow = true
+                CreateNoWindow = false
             });
         }
 

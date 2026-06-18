@@ -82,7 +82,7 @@ $updaterPublishArgs = @(
 Invoke-NativeCommand "dotnet" $mainPublishArgs
 Invoke-NativeCommand "dotnet" $updaterPublishArgs
 
-Copy-Item (Join-Path $updaterPublish "ClubTimerUpdater.*") $mainPublish -Force
+Copy-Item (Join-Path $updaterPublish "*") $mainPublish -Recurse -Force
 
 $zipPath = Join-Path $releaseRoot "ClubTimerXbox-$Version.zip"
 if (Test-Path $zipPath) {
