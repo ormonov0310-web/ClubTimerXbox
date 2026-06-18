@@ -5,6 +5,9 @@ namespace ClubTimerXbox.Services
 {
     public static class TariffService
     {
+        public const int OpenModeBillingStepAmount = 5;
+        public const int OpenModeFirstChargeAfterSeconds = 60;
+
         public static double GetPricePerSecond(TariffSettings tariff)
         {
             if (tariff.OneHourPrice <= 0)
@@ -51,6 +54,48 @@ namespace ClubTimerXbox.Services
                 return 0;
 
             return CalculatePriceBySeconds(tariff, minutes * 60);
+        }
+
+        public static int CalculateOpenModePlayedMinutes(DateTime? startTime)
+        {
+            return CalculateOpenModePlayedMinutes(startTime, DateTime.Now);
+        }
+
+        public static int CalculateOpenModePlayedMinutes(DateTime? startTime, DateTime now)
+        {
+            if (startTime == null)
+                return 0;
+
+            double totalSeconds = (now - startTime.Value).TotalSeconds;
+
+            if (totalSeconds < OpenModeFirstChargeAfterSeconds)
+                return 0;
+
+            return Math.Max(1, (int)Math.Ceiling(totalSeconds / 60.0));
+        }
+
+        public static int CalculateOpenModePrice(double accruedAmount, double pricePerMinute, DateTime? startTime)
+        {
+            int minutes = CalculateOpenModePlayedMinutes(startTime);
+            double segmentPrice = minutes * pricePerMinute;
+            return RoundUpToStep(accruedAmount + segmentPrice, OpenModeBillingStepAmount);
+        }
+
+        public static int CalculateOpenModeSegmentPrice(double pricePerMinute, DateTime? startTime)
+        {
+            int minutes = CalculateOpenModePlayedMinutes(startTime);
+            return RoundUpToStep(minutes * pricePerMinute, OpenModeBillingStepAmount);
+        }
+
+        private static int RoundUpToStep(double amount, int step)
+        {
+            if (amount <= 0)
+                return 0;
+
+            if (step <= 0)
+                return (int)Math.Ceiling(amount);
+
+            return (int)(Math.Ceiling(amount / step) * step);
         }
 
         public static string FormatTime(int totalSeconds)

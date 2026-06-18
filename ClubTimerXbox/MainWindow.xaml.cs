@@ -3167,32 +3167,24 @@ namespace ClubTimerXbox
 
         private int GetCurrentSegmentPlayedMinutes(ClubPlace place)
         {
-            if (place.StartTime == null)
-                return 0;
-
-            var totalSeconds = (DateTime.Now - place.StartTime.Value).TotalSeconds;
-            int minutes = (int)Math.Ceiling(totalSeconds / 60.0);
-
-            if (minutes < 1)
-                minutes = 1;
-
-            return minutes;
+            return TariffService.CalculateOpenModePlayedMinutes(place.StartTime);
         }
 
         private int GetCurrentSegmentPrice(ClubPlace place)
         {
-            int minutes = GetCurrentSegmentPlayedMinutes(place);
-            return CalculatePriceForMinutes(place.ActivePricePerMinute, minutes);
+            return TariffService.CalculateOpenModeSegmentPrice(
+                place.ActivePricePerMinute,
+                place.StartTime);
         }
 
         private int GetActualPrice(ClubPlace place)
         {
             if (place.IsOpenMode)
             {
-                double openModeTotal =
-                    place.AccruedAmountBeforeCurrentSegment + GetCurrentSegmentPrice(place);
-
-                return (int)Math.Ceiling(openModeTotal);
+                return TariffService.CalculateOpenModePrice(
+                    place.AccruedAmountBeforeCurrentSegment,
+                    place.ActivePricePerMinute,
+                    place.StartTime);
             }
 
             int remainingValue = CalculatePriceBySeconds(place.ActivePricePerMinute, place.RemainingSeconds);

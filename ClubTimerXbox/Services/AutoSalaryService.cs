@@ -86,27 +86,16 @@ namespace ClubTimerXbox.Services
                 })
                 .ToList();
 
-            int totalGameRevenue = employeeInputs.Sum(item => item.Summary.MonthGameIncome);
-
-            int gameDistributed = 0;
-
             for (int index = 0; index < employeeInputs.Count; index++)
             {
                 var input = employeeInputs[index];
-                bool isLast = index == employeeInputs.Count - 1;
 
                 int timeAmount = CalculateTimeAmount(
                     fund: report.TimeFundAmount,
                     plannedHours: Settings.TimeMonthlyPlannedHours,
                     employeeHours: input.WorkHours
                 );
-                int gameAmount = Allocate(
-                    report.GameRevenueFundAmount,
-                    input.Summary.MonthGameIncome,
-                    totalGameRevenue,
-                    ref gameDistributed,
-                    isLast
-                );
+                int gameAmount = CalculateGameRevenueAmount(input.Summary.MonthGameIncome);
                 int productBonus = Percent(
                     input.Summary.MonthProductsIncome,
                     Settings.ProductBonusPercent
@@ -448,6 +437,16 @@ namespace ClubTimerXbox.Services
                 return 0;
 
             return (int)Math.Round(fund * (employeeHours / plannedHours));
+        }
+
+        private static int CalculateGameRevenueAmount(int employeeGameRevenue)
+        {
+            if (employeeGameRevenue <= 0)
+                return 0;
+
+            int expenseReserve = Percent(employeeGameRevenue, Settings.ExpenseReservePercent);
+            int salaryBase = Math.Max(0, employeeGameRevenue - expenseReserve);
+            return Percent(salaryBase, Settings.SalaryFundPercent);
         }
 
         private static int Percent(int amount, int percent)

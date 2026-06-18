@@ -1438,19 +1438,10 @@ namespace ClubTimerXbox.Services
 
             if (place.IsOpenMode)
             {
-                if (place.StartTime == null)
-                    return (int)Math.Ceiling(place.AccruedAmountBeforeCurrentSegment);
-
-                double totalSeconds = (DateTime.Now - place.StartTime.Value).TotalSeconds;
-                int minutes = (int)Math.Ceiling(totalSeconds / 60.0);
-
-                if (minutes < 1)
-                    minutes = 1;
-
-                double openModeTotal =
-                    place.AccruedAmountBeforeCurrentSegment + (minutes * place.ActivePricePerMinute);
-
-                return (int)Math.Ceiling(openModeTotal);
+                return TariffService.CalculateOpenModePrice(
+                    place.AccruedAmountBeforeCurrentSegment,
+                    place.ActivePricePerMinute,
+                    place.StartTime);
             }
 
             return place.PaidAmount;
