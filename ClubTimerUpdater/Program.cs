@@ -1,7 +1,12 @@
 using System.Diagnostics;
-using System.Drawing;
+using System.IO;
 using System.IO.Compression;
-using System.Windows.Forms;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace ClubTimerUpdater
 {
@@ -10,9 +15,6 @@ namespace ClubTimerUpdater
         [STAThread]
         private static int Main(string[] args)
         {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-
             var options = UpdateOptions.Parse(args);
             if (!options.IsValid(out string error))
             {
@@ -20,113 +22,106 @@ namespace ClubTimerUpdater
                 MessageBox.Show(
                     error,
                     "ClubTimerXbox update",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
                 return 2;
             }
 
-            using var form = new UpdateProgressForm(options);
-            Application.Run(form);
-            return form.ExitCode;
+            var app = new Application
+            {
+                ShutdownMode = ShutdownMode.OnMainWindowClose
+            };
+
+            var window = new UpdateProgressWindow(options);
+            app.Run(window);
+            return window.ExitCode;
         }
     }
 
-    internal sealed class UpdateProgressForm : Form
+    internal sealed class UpdateProgressWindow : Window
     {
         private readonly UpdateOptions _options;
-        private readonly Label _statusLabel;
-        private readonly Label _detailsLabel;
+        private readonly TextBlock _statusText;
+        private readonly TextBlock _detailsText;
         private readonly ProgressBar _progressBar;
+        private bool _allowClose;
 
         public int ExitCode { get; private set; }
 
-        public UpdateProgressForm(UpdateOptions options)
+        public UpdateProgressWindow(UpdateOptions options)
         {
             _options = options;
 
-            Text = "Обновление ClubTimerXbox";
-            StartPosition = FormStartPosition.CenterScreen;
+            Title = "Обновление ClubTimerXbox";
             Width = 560;
             Height = 260;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = false;
-            MinimizeBox = false;
-            ControlBox = false;
-            TopMost = true;
-            BackColor = Color.FromArgb(15, 17, 23);
-            ForeColor = Color.White;
+            ResizeMode = ResizeMode.NoResize;
+            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            Topmost = true;
+            Background = Brush("#0F1117");
+            Foreground = Brushes.White;
 
-            var root = new TableLayoutPanel
+            Closing += (_, e) =>
             {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 5,
-                Padding = new Padding(28, 24, 28, 24),
-                BackColor = BackColor
+                if (!_allowClose)
+                    e.Cancel = true;
             };
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            var title = new Label
+            var root = new StackPanel
             {
-                AutoSize = true,
+                Margin = new Thickness(28, 24, 28, 24)
+            };
+
+            root.Children.Add(new TextBlock
+            {
                 Text = "Идёт обновление программы",
-                Font = new Font("Segoe UI", 20, FontStyle.Bold),
-                ForeColor = Color.White,
-                Margin = new Padding(0, 0, 0, 10)
-            };
+                FontSize = 28,
+                FontWeight = FontWeights.Bold,
+                Foreground = Brushes.White,
+                Margin = new Thickness(0, 0, 0, 10)
+            });
 
-            var message = new Label
+            root.Children.Add(new TextBlock
             {
-                AutoSize = true,
-                Text = "Пожалуйста, подождите. Не выключайте компьютер.\nПрограмма сама откроется после завершения обновления.",
-                Font = new Font("Segoe UI", 11, FontStyle.Regular),
-                ForeColor = Color.FromArgb(209, 213, 219),
-                Margin = new Padding(0, 0, 0, 20)
-            };
+                Text =
+                    "Пожалуйста, подождите. Не выключайте компьютер.\n" +
+                    "Программа сама откроется после завершения обновления.",
+                FontSize = 15,
+                Foreground = Brush("#D1D5DB"),
+                Margin = new Thickness(0, 0, 0, 20)
+            });
 
             _progressBar = new ProgressBar
             {
-                Dock = DockStyle.Fill,
                 Minimum = 0,
                 Maximum = 100,
+                Height = 30,
                 Value = 0,
-                Style = ProgressBarStyle.Continuous,
-                Margin = new Padding(0, 5, 0, 14)
+                Margin = new Thickness(0, 0, 0, 14)
             };
+            root.Children.Add(_progressBar);
 
-            _statusLabel = new Label
+            _statusText = new TextBlock
             {
-                AutoSize = true,
                 Text = "0% - Подготовка обновления",
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                ForeColor = Color.FromArgb(147, 168, 255),
-                Margin = new Padding(0, 0, 0, 4)
+                FontSize = 17,
+                FontWeight = FontWeights.Bold,
+                Foreground = Brush("#93A8FF"),
+                Margin = new Thickness(0, 0, 0, 6)
             };
+            root.Children.Add(_statusText);
 
-            _detailsLabel = new Label
+            _detailsText = new TextBlock
             {
-                AutoSize = true,
                 Text = "",
-                Font = new Font("Segoe UI", 9, FontStyle.Regular),
-                ForeColor = Color.FromArgb(156, 163, 175)
+                FontSize = 13,
+                Foreground = Brush("#9CA3AF"),
+                TextWrapping = TextWrapping.Wrap
             };
+            root.Children.Add(_detailsText);
 
-            root.Controls.Add(title, 0, 0);
-            root.Controls.Add(message, 0, 1);
-            root.Controls.Add(_progressBar, 0, 2);
-            root.Controls.Add(_statusLabel, 0, 3);
-            root.Controls.Add(_detailsLabel, 0, 4);
-            Controls.Add(root);
-        }
-
-        protected override void OnShown(EventArgs e)
-        {
-            base.OnShown(e);
-            _ = RunUpdateAsync();
+            Content = root;
+            Loaded += async (_, _) => await RunUpdateAsync();
         }
 
         private async Task RunUpdateAsync()
@@ -143,7 +138,7 @@ namespace ClubTimerUpdater
                 ExitCode = 1;
                 UpdateLog.Write(ex.ToString());
                 SetProgress(
-                    Math.Max(_progressBar.Value, 1),
+                    Math.Max((int)_progressBar.Value, 1),
                     "Обновление не удалось. Позовите владельца.",
                     "Подробности записаны в updater.log. Пробуем открыть программу обратно.");
                 TryStartApp();
@@ -179,27 +174,22 @@ namespace ClubTimerUpdater
 
         private void CloseFromUi()
         {
-            if (InvokeRequired)
+            Dispatcher.Invoke(() =>
             {
-                BeginInvoke(new Action(CloseFromUi));
-                return;
-            }
-
-            Close();
+                _allowClose = true;
+                Close();
+            });
         }
 
         private void SetProgress(int value, string status, string details = "")
         {
-            if (InvokeRequired)
+            Dispatcher.Invoke(() =>
             {
-                BeginInvoke(new Action(() => SetProgress(value, status, details)));
-                return;
-            }
-
-            int safeValue = Math.Max(_progressBar.Minimum, Math.Min(_progressBar.Maximum, value));
-            _progressBar.Value = safeValue;
-            _statusLabel.Text = status;
-            _detailsLabel.Text = details;
+                int safeValue = Math.Max((int)_progressBar.Minimum, Math.Min((int)_progressBar.Maximum, value));
+                _progressBar.Value = safeValue;
+                _statusText.Text = status;
+                _detailsText.Text = details;
+            });
         }
 
         private void TryStartApp()
@@ -325,6 +315,11 @@ namespace ClubTimerUpdater
                 WorkingDirectory = Path.GetDirectoryName(exePath) ?? "",
                 UseShellExecute = true
             });
+        }
+
+        private static SolidColorBrush Brush(string hex)
+        {
+            return new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
         }
     }
 
