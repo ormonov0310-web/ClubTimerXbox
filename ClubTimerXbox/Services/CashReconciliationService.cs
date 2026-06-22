@@ -109,27 +109,48 @@ namespace ClubTimerXbox.Services
 
         public static void AutoResolveSmallPaymentMistakes()
         {
-            var cashExtras = _items
+            AutoResolveOppositeSmallItems(
+                extraKind: CashReconciliationKind.CashExtra,
+                shortageKind: CashReconciliationKind.CashlessShortage,
+                extraResolvedNote: "Автоматически закрыто: безнал указали в программе, а деньги оказались наличными.",
+                shortageResolvedNote: "Автоматически закрыто излишком налички: ошибка типа оплаты."
+            );
+
+            AutoResolveOppositeSmallItems(
+                extraKind: CashReconciliationKind.CashlessExtra,
+                shortageKind: CashReconciliationKind.CashShortage,
+                extraResolvedNote: "Автоматически закрыто: наличку указали в программе, а деньги оказались безналом.",
+                shortageResolvedNote: "Автоматически закрыто излишком безнала: ошибка типа оплаты."
+            );
+        }
+
+        private static void AutoResolveOppositeSmallItems(
+            CashReconciliationKind extraKind,
+            CashReconciliationKind shortageKind,
+            string extraResolvedNote,
+            string shortageResolvedNote)
+        {
+            var extras = _items
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
-                    item.Kind == CashReconciliationKind.CashExtra &&
+                    item.Kind == extraKind &&
                     item.Amount > 0 &&
                     item.Amount < AutoResolveLimit)
                 .OrderBy(item => item.CreatedAt)
                 .ToList();
 
-            var cashlessShortages = _items
+            var shortages = _items
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
-                    item.Kind == CashReconciliationKind.CashlessShortage &&
+                    item.Kind == shortageKind &&
                     item.Amount > 0 &&
                     item.Amount < AutoResolveLimit)
                 .OrderBy(item => item.CreatedAt)
                 .ToList();
 
-            foreach (var shortage in cashlessShortages)
+            foreach (var shortage in shortages)
             {
-                foreach (var extra in cashExtras)
+                foreach (var extra in extras)
                 {
                     if (shortage.Amount <= 0)
                         break;
@@ -147,7 +168,7 @@ namespace ClubTimerXbox.Services
                         extra.Status = CashReconciliationStatus.Resolved;
                         extra.ResolvedAt = DateTime.Now;
                         extra.ResolvedBy = "Система";
-                        extra.ResolutionNote = "Автоматически закрыто: безнал указали в программе, а деньги оказались наличными.";
+                        extra.ResolutionNote = extraResolvedNote;
                     }
 
                     if (shortage.Amount == 0)
@@ -155,7 +176,7 @@ namespace ClubTimerXbox.Services
                         shortage.Status = CashReconciliationStatus.Resolved;
                         shortage.ResolvedAt = DateTime.Now;
                         shortage.ResolvedBy = "Система";
-                        shortage.ResolutionNote = "Автоматически закрыто излишком налички: ошибка типа оплаты.";
+                        shortage.ResolutionNote = shortageResolvedNote;
                     }
                 }
             }
@@ -193,7 +214,48 @@ namespace ClubTimerXbox.Services
                     item.Status = CashReconciliationStatus.Resolved;
                     item.ResolvedAt = DateTime.Now;
                     item.ResolvedBy = "Система";
-                    item.ResolutionNote = "Закрыто как ошибка типа оплаты: безнал был принят наличными.";
+                    item.ResolutionNote = "Зачтено как ошибка типа оплаты: безнал был принят наличными.";
+                }
+            }
+
+            Save();
+
+            return consumed;
+        }
+
+        public static int ConsumeOpenCashlessExtra(int amount)
+        {
+            if (amount <= 0)
+                return 0;
+
+            int remaining = amount;
+            int consumed = 0;
+
+            var extras = _items
+                .Where(item =>
+                    item.Status == CashReconciliationStatus.Open &&
+                    item.Kind == CashReconciliationKind.CashlessExtra &&
+                    item.Amount > 0)
+                .OrderBy(item => item.CreatedAt)
+                .ToList();
+
+            foreach (var item in extras)
+            {
+                if (remaining <= 0)
+                    break;
+
+                int useAmount = Math.Min(item.Amount, remaining);
+
+                item.Amount -= useAmount;
+                consumed += useAmount;
+                remaining -= useAmount;
+
+                if (item.Amount == 0)
+                {
+                    item.Status = CashReconciliationStatus.Resolved;
+                    item.ResolvedAt = DateTime.Now;
+                    item.ResolvedBy = "Система";
+                    item.ResolutionNote = "Зачтено как ошибка типа оплаты: наличка была принята безналом.";
                 }
             }
 
@@ -283,7 +345,7 @@ namespace ClubTimerXbox.Services
             }
             catch
             {
-                // История сверок не должна ломать работу кассы.
+                // Ошибка очистки сверок не должна ломать работу кассы.
             }
         }
 

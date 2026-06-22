@@ -2333,19 +2333,34 @@ namespace ClubTimerXbox.Services
 
             if (difference >= 0)
             {
-                CashReconciliationService.AddCashlessVerification(
+                var cashlessExtra = CashReconciliationService.AddCashlessVerification(
                     expectedAmount: expectedCashlessBalance,
                     actualAmount: actualCashless,
                     amount: difference,
-                    status: CashReconciliationStatus.Resolved,
+                    status: difference == 0
+                        ? CashReconciliationStatus.Resolved
+                        : CashReconciliationStatus.Open,
                     note: difference == 0
                         ? "Остаток безнала сошелся."
-                        : $"Фактический остаток безнала больше программы на {difference} сом."
+                        : $"Фактический остаток безнала больше программы на {difference} сом. Оставлено как резерв для ошибок типа оплаты."
                 );
 
-                return difference == 0
-                    ? "Остаток безнала сошелся."
-                    : $"Остаток безнала больше программы на {difference} сом. Записано как излишек безнала.";
+                if (difference == 0)
+                    return "Остаток безнала сошелся.";
+
+                if (cashlessExtra.Status == CashReconciliationStatus.Resolved)
+                    return $"Остаток безнала больше программы на {difference} сом. Излишек автоматически зачтен против недостачи налички.";
+
+                int forgivenCashShortage = ForgiveExistingCashShortagesWithCashlessExtra(
+                    cashlessExtra.Amount,
+                    monthStart,
+                    nextMonthStart
+                );
+
+                if (forgivenCashShortage > 0)
+                    return $"Остаток безнала больше программы на {difference} сом. {forgivenCashShortage} сом зачтено против старой недостачи налички. Остаток излишка: {cashlessExtra.Amount} сом.";
+
+                return $"Остаток безнала больше программы на {difference} сом. Излишек оставлен как резерв.";
             }
 
             int shortage = Math.Abs(difference);
@@ -2396,6 +2411,36 @@ namespace ClubTimerXbox.Services
 
             notes.Add($"Остаток недостачи {finalShortage} сом оформлен на сотрудников по доле безнал-выручки.");
             return string.Join(" ", notes);
+        }
+
+        private static int ForgiveExistingCashShortagesWithCashlessExtra(
+            int cashlessExtraAmount,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            if (cashlessExtraAmount <= 0 ||
+                cashlessExtraAmount >= CashReconciliationService.AutoResolveLimit)
+            {
+                return 0;
+            }
+
+            int reducedInCashRecords = CashService.ReduceCashShortagesByPaymentMistake(
+                amount: cashlessExtraAmount,
+                fromInclusive: fromInclusive,
+                toExclusive: toExclusive,
+                titleKeyword: "налич"
+            );
+            int reducedInEmployeeLosses = EmployeeLossService.ForgiveCashShortagesByPaymentMistake(
+                amount: cashlessExtraAmount,
+                fromInclusive: fromInclusive,
+                toExclusive: toExclusive
+            );
+            int consumed = Math.Max(reducedInCashRecords, reducedInEmployeeLosses);
+
+            if (consumed <= 0)
+                return 0;
+
+            return CashReconciliationService.ConsumeOpenCashlessExtra(consumed);
         }
 
         private static void DistributeCashlessShortage(

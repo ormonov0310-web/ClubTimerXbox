@@ -610,6 +610,9 @@ namespace ClubTimerXbox
             string responsible = GetResponsibleEmployeeName();
 
             int difference = actualCash - _expectedCashAmount;
+            int originalCashShortage = 0;
+            int coveredByCashlessExtra = 0;
+            int finalCashShortage = 0;
 
             CashAcceptanceService.AddItem(
                 checkedByEmployeeName: checkedBy,
@@ -621,29 +624,7 @@ namespace ClubTimerXbox
 
             if (difference < 0)
             {
-                int shortage = Math.Abs(difference);
-                string description =
-                    $"Автоматическая недостача налички при приёмке.\n" +
-                    $"Передача: {responsible} → {checkedBy}\n" +
-                    $"Должно быть: {_expectedCashAmount} сом\n" +
-                    $"Фактически: {actualCash} сом\n" +
-                    $"Недостача: {shortage} сом";
-
-                CashService.AddShortage(
-                    checkedByEmployeeName: checkedBy,
-                    responsibleEmployeeName: responsible,
-                    title: "Недостача наличных",
-                    description: description,
-                    amount: shortage
-                );
-
-                EmployeeLossService.AddCashShortage(
-                    responsibleEmployeeName: responsible,
-                    checkedByEmployeeName: checkedBy,
-                    description: description,
-                    amount: shortage
-                );
-
+                originalCashShortage = Math.Abs(difference);
                 var reconciliation = CashReconciliationService.AddCashAcceptanceDifference(
                     checkedByEmployeeName: checkedBy,
                     responsibleEmployeeName: responsible,
@@ -652,12 +633,46 @@ namespace ClubTimerXbox
                     note: "Приёмка налички"
                 );
 
-                CashReconciliationService.Resolve(
-                    reconciliation.Id,
-                    "Система",
-                    "RealShortage",
-                    "Недостача налички автоматически оформлена на ответственного сотрудника."
-                );
+                finalCashShortage = reconciliation.Status == CashReconciliationStatus.Resolved
+                    ? 0
+                    : reconciliation.Amount;
+                coveredByCashlessExtra = originalCashShortage - finalCashShortage;
+
+                if (finalCashShortage > 0)
+                {
+                    string description =
+                        $"Автоматическая недостача налички при приёмке.\n" +
+                        $"Передача: {responsible} → {checkedBy}\n" +
+                        $"Должно быть: {_expectedCashAmount} сом\n" +
+                        $"Фактически: {actualCash} сом\n" +
+                        $"Недостача: {originalCashShortage} сом\n" +
+                        $"Зачтено излишком безнала: {coveredByCashlessExtra} сом\n" +
+                        $"К удержанию: {finalCashShortage} сом";
+
+                    CashService.AddShortage(
+                        checkedByEmployeeName: checkedBy,
+                        responsibleEmployeeName: responsible,
+                        title: "Недостача наличных",
+                        description: description,
+                        amount: finalCashShortage
+                    );
+
+                    EmployeeLossService.AddCashShortage(
+                        responsibleEmployeeName: responsible,
+                        checkedByEmployeeName: checkedBy,
+                        description: description,
+                        amount: finalCashShortage
+                    );
+
+                    CashReconciliationService.Resolve(
+                        reconciliation.Id,
+                        "Система",
+                        "RealShortage",
+                        coveredByCashlessExtra > 0
+                            ? $"Часть {coveredByCashlessExtra} сом закрыта излишком безнала. Остаток {finalCashShortage} сом оформлен на ответственного сотрудника."
+                            : "Недостача налички автоматически оформлена на ответственного сотрудника."
+                    );
+                }
             }
             else if (difference > 0)
             {
@@ -680,7 +695,17 @@ namespace ClubTimerXbox
                 $"Фактически: {actualCash} сом\n";
 
             if (difference < 0)
-                message += $"Недостача: {Math.Abs(difference)} сом\nНедостача автоматически оформлена на ответственного сотрудника.";
+            {
+                message += $"Недостача: {originalCashShortage} сом\n";
+
+                if (coveredByCashlessExtra > 0)
+                    message += $"Зачтено излишком безнала: {coveredByCashlessExtra} сом\n";
+
+                if (finalCashShortage > 0)
+                    message += $"К удержанию: {finalCashShortage} сом\nНедостача автоматически оформлена на ответственного сотрудника.";
+                else
+                    message += "Недостача закрыта излишком безнала как ошибка типа оплаты.";
+            }
             else if (difference > 0)
                 message += $"Излишек: {difference} сом\nРазница отправлена владельцу на разбор.";
             else

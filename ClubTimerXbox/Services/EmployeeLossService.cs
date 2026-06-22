@@ -133,6 +133,59 @@ namespace ClubTimerXbox.Services
             );
         }
 
+        public static int ForgiveCashShortagesByPaymentMistake(
+            int amount,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            if (amount <= 0)
+                return 0;
+
+            int remaining = amount;
+            int forgiven = 0;
+
+            var losses = Items
+                .Where(item =>
+                    !item.IsPaid &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    item.Amount > 0 &&
+                    item.LossType.Contains("налич", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(item => item.CreatedAt)
+                .ToList();
+
+            foreach (var loss in losses)
+            {
+                if (remaining <= 0)
+                    break;
+
+                int useAmount = Math.Min(loss.Amount, remaining);
+
+                loss.Amount -= useAmount;
+                forgiven += useAmount;
+                remaining -= useAmount;
+
+                string note = $"Зачтено излишком безнала как ошибка типа оплаты: {useAmount} сом.";
+                loss.Description = string.IsNullOrWhiteSpace(loss.Description)
+                    ? note
+                    : $"{loss.Description}\n{note}";
+                loss.Note = string.IsNullOrWhiteSpace(loss.Note)
+                    ? note
+                    : $"{loss.Note}\n{note}";
+
+                if (loss.Amount == 0)
+                {
+                    loss.IsPaid = true;
+                    loss.PaidAt = DateTime.Now;
+                }
+            }
+
+            if (forgiven > 0)
+                Save();
+
+            return forgiven;
+        }
+
         public static void MarkPaid(Guid id)
         {
             var item = Items.FirstOrDefault(loss => loss.Id == id);

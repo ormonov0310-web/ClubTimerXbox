@@ -114,6 +114,54 @@ namespace ClubTimerXbox.Services
             });
         }
 
+        public static int ReduceCashShortagesByPaymentMistake(
+            int amount,
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string titleKeyword)
+        {
+            if (amount <= 0)
+                return 0;
+
+            titleKeyword = titleKeyword.Trim();
+            int remaining = amount;
+            int reduced = 0;
+
+            var records = _records
+                .Where(record =>
+                    record.CreatedAt >= fromInclusive &&
+                    record.CreatedAt < toExclusive &&
+                    record.Category == "Недостачи" &&
+                    record.Amount > 0 &&
+                    (string.IsNullOrWhiteSpace(titleKeyword) ||
+                        record.Title.Contains(titleKeyword, StringComparison.OrdinalIgnoreCase) ||
+                        record.Description.Contains(titleKeyword, StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(record => record.CreatedAt)
+                .ToList();
+
+            foreach (var record in records)
+            {
+                if (remaining <= 0)
+                    break;
+
+                int useAmount = Math.Min(record.Amount, remaining);
+
+                record.Amount -= useAmount;
+                reduced += useAmount;
+                remaining -= useAmount;
+
+                string note = $"Зачтено излишком безнала как ошибка типа оплаты: {useAmount} сом.";
+                record.Description = string.IsNullOrWhiteSpace(record.Description)
+                    ? note
+                    : $"{record.Description}\n{note}";
+            }
+
+            if (reduced > 0)
+                Save();
+
+            return reduced;
+        }
+
         public static void AddExpense(
             string employeeName,
             string title,

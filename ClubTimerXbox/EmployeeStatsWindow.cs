@@ -27,6 +27,7 @@ namespace ClubTimerXbox
 
         private readonly string _employeeName;
         private readonly TextBlock _monthText = new TextBlock();
+        private readonly TextBlock _grossValueText = new TextBlock();
         private readonly TextBlock _salaryValueText = new TextBlock();
         private readonly TextBlock _incomeValueText = new TextBlock();
         private readonly TextBlock _timeValueText = new TextBlock();
@@ -220,14 +221,15 @@ namespace ClubTimerXbox
         {
             var grid = new UniformGrid
             {
-                Columns = 4,
+                Columns = 5,
                 Margin = new Thickness(0, 0, 0, 14)
             };
 
+            grid.Children.Add(CreateSummaryCard("Общий", _grossValueText, Color.FromRgb(248, 250, 252)));
             grid.Children.Add(CreateSummaryCard(
                 "Взял",
                 _salaryValueText,
-                Color.FromRgb(74, 222, 128),
+                Color.FromRgb(96, 165, 250),
                 () =>
                 {
                     _section = StatsSection.TakenHistory;
@@ -244,7 +246,7 @@ namespace ClubTimerXbox
                     window.ShowDialog();
                     Render();
                 }));
-            grid.Children.Add(CreateSummaryCard("Осталось", _incomeValueText, Color.FromRgb(96, 165, 250)));
+            grid.Children.Add(CreateSummaryCard("Осталось", _incomeValueText, Color.FromRgb(74, 222, 128)));
             grid.Children.Add(CreateSummaryCard("Премия/бонусы", _timeValueText, Color.FromRgb(250, 204, 21)));
             grid.Children.Add(CreateSummaryCard("Штрафы", _lossValueText, Color.FromRgb(248, 113, 113)));
 
@@ -347,6 +349,7 @@ namespace ClubTimerXbox
                 .FirstOrDefault(employee => employee.EmployeeName == _employeeName);
 
             _monthText.Text = GetMonthTitle(_monthStart);
+            _grossValueText.Text = $"{autoSalary?.GrossAmount ?? 0} сом";
             _salaryValueText.Text = $"{autoSalary?.PaidAmount ?? 0} сом";
             _incomeValueText.Text = $"{autoSalary?.RemainingAmount ?? 0} сом";
             _timeValueText.Text = $"{(autoSalary?.ProductBonusAmount ?? 0) + (autoSalary?.BonusAmount ?? 0)} сом";
