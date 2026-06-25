@@ -195,6 +195,41 @@ namespace ClubTimerXbox.Services
             Save();
         }
 
+        public static void ChangeName(string employeeName, string newEmployeeName)
+        {
+            employeeName = employeeName.Trim();
+            newEmployeeName = newEmployeeName.Trim();
+
+            if (string.IsNullOrWhiteSpace(employeeName))
+                return;
+
+            if (string.IsNullOrWhiteSpace(newEmployeeName))
+                return;
+
+            var employee = FindByName(employeeName);
+
+            if (employee == null)
+                return;
+
+            bool duplicate = Employees.Any(item =>
+                !item.Name.Equals(employee.Name, StringComparison.OrdinalIgnoreCase) &&
+                item.Name.Equals(newEmployeeName, StringComparison.OrdinalIgnoreCase)
+            );
+
+            if (duplicate)
+                return;
+
+            employee.Name = newEmployeeName;
+
+            if (CurrentEmployee != null &&
+                CurrentEmployee.Name.Equals(employeeName, StringComparison.OrdinalIgnoreCase))
+            {
+                CurrentEmployee.Name = newEmployeeName;
+            }
+
+            Save();
+        }
+
         public static void SetEmployeeActive(string employeeName, bool isActive)
         {
             employeeName = employeeName.Trim();

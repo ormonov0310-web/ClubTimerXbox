@@ -292,6 +292,37 @@ namespace ClubTimerXbox.Services
                 .ToList();
         }
 
+        public static int CloseOpenItemsForBalance(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string resolvedBy,
+            string note)
+        {
+            int closed = 0;
+
+            foreach (var item in _items
+                .Where(item =>
+                    item.Status == CashReconciliationStatus.Open &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive)
+                .OrderBy(item => item.CreatedAt)
+                .ToList())
+            {
+                item.Status = CashReconciliationStatus.Resolved;
+                item.ResolvedAt = DateTime.Now;
+                item.ResolvedBy = string.IsNullOrWhiteSpace(resolvedBy)
+                    ? "Владелец"
+                    : resolvedBy.Trim();
+                item.ResolutionNote = note.Trim();
+                closed++;
+            }
+
+            if (closed > 0)
+                Save();
+
+            return closed;
+        }
+
         public static CashReconciliationItem Resolve(
             Guid id,
             string resolvedBy,
