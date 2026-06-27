@@ -74,6 +74,12 @@ namespace ClubTimerXbox.Models
 
         public int LossesAmount { get; set; }
 
+        public int MoneyLossesAmount { get; set; }
+
+        public int RawMoneyLossesAmount { get; set; }
+
+        public int ProductLossesAmount { get; set; }
+
         public int PaidAmount { get; set; }
 
         public int RemainingAmount { get; set; }

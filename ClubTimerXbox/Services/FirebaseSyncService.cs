@@ -112,22 +112,11 @@ namespace ClubTimerXbox.Services
                     monthStart,
                     nextMonthStart
                 );
-                int? actualCashlessBalanceMonth = CalculateActualCashlessBalanceByPeriod(
-                    monthStart,
-                    nextMonthStart
-                );
-                int? programCashlessBalanceMonth = CalculateProgramCashlessBalanceByPeriod(
-                    monthStart,
-                    nextMonthStart
-                );
-                int? actualCashBalanceMonth = CalculateActualCashBalanceByPeriod(
-                    monthStart,
-                    nextMonthStart
-                );
-                int? programCashBalanceMonth = CalculateProgramCashBalanceByPeriod(
-                    monthStart,
-                    nextMonthStart
-                );
+                var cashBalanceSummary = CashBalanceSummaryService.Build(monthStart, nextMonthStart);
+                int? actualCashlessBalanceMonth = cashBalanceSummary.ActualCashlessBalance;
+                int? programCashlessBalanceMonth = cashBalanceSummary.ProgramCashlessBalance;
+                int? actualCashBalanceMonth = cashBalanceSummary.ActualCashBalance;
+                int? programCashBalanceMonth = cashBalanceSummary.ProgramCashBalance;
                 bool cashlessVerifiedMonth = CashlessService.Records.Any(record =>
                     record.Date >= monthStart.Date &&
                     record.Date < nextMonthStart.Date);
@@ -370,6 +359,13 @@ namespace ClubTimerXbox.Services
                         programCashBalanceMonth,
                         actualCashlessBalanceMonth,
                         programCashlessBalanceMonth,
+                        expectedCashBalanceMonth = cashBalanceSummary.ExpectedCashBalance,
+                        expectedCashlessBalanceMonth = cashBalanceSummary.ExpectedCashlessBalance,
+                        moneyProgramBalanceMonth = cashBalanceSummary.ProgramTotal,
+                        moneyActualBalanceMonth = cashBalanceSummary.ActualTotal,
+                        moneyDifferenceMonth = cashBalanceSummary.Difference,
+                        moneyShortageMonth = cashBalanceSummary.MoneyShortage,
+                        moneyExtraMonth = cashBalanceSummary.MoneyExtra,
                         cashlessVerifiedMonth,
                         expensesMonth,
                         cashExpenseMonth,
@@ -463,6 +459,7 @@ namespace ClubTimerXbox.Services
                             {
                                 createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                                 type = item.Type,
+                                lossKind = item.LossKind,
                                 title = item.Title,
                                 description = item.Description,
                                 amount = item.Amount
@@ -479,6 +476,7 @@ namespace ClubTimerXbox.Services
                             {
                                 createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                                 type = item.Type,
+                                lossKind = item.LossKind,
                                 title = item.Title,
                                 description = item.Description,
                                 amount = item.Amount
@@ -488,11 +486,13 @@ namespace ClubTimerXbox.Services
                         var shortageJournal = journal
                             .Where(item =>
                                 item.Type == "Недостача" ||
+                                item.Type == "Потеря" ||
                                 item.Type.Contains("Штраф"))
                             .Select(item => new
                             {
                                 createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                                 type = item.Type,
+                                lossKind = item.LossKind,
                                 title = item.Title,
                                 description = item.Description,
                                 amount = item.Amount
@@ -520,6 +520,9 @@ namespace ClubTimerXbox.Services
 
                             todayShortages = summary.TodayShortages,
                             monthShortages = summary.MonthShortages,
+                            monthMoneyLosses = summary.MonthUnpaidMoneyLosses,
+                            monthRawMoneyLosses = summary.MonthRawUnpaidMoneyLosses,
+                            monthProductLosses = summary.MonthUnpaidProductLosses,
 
                             monthSalaryPaid = salaryForMonth,
                             autoSalary = autoSalary == null
@@ -534,6 +537,9 @@ namespace ClubTimerXbox.Services
                                     bonusAmount = autoSalary.BonusAmount,
                                     grossAmount = autoSalary.GrossAmount,
                                     lossesAmount = autoSalary.LossesAmount,
+                                    moneyLossesAmount = autoSalary.MoneyLossesAmount,
+                                    rawMoneyLossesAmount = autoSalary.RawMoneyLossesAmount,
+                                    productLossesAmount = autoSalary.ProductLossesAmount,
                                     paidAmount = autoSalary.PaidAmount,
                                     remainingAmount = autoSalary.RemainingAmount
                                 },
@@ -1097,6 +1103,9 @@ namespace ClubTimerXbox.Services
                     }).ToList(),
                     grossAmount = employee.GrossAmount,
                     lossesAmount = employee.LossesAmount,
+                    moneyLossesAmount = employee.MoneyLossesAmount,
+                    rawMoneyLossesAmount = employee.RawMoneyLossesAmount,
+                    productLossesAmount = employee.ProductLossesAmount,
                     paidAmount = employee.PaidAmount,
                     remainingAmount = employee.RemainingAmount
                 }).ToList()
@@ -1449,10 +1458,11 @@ namespace ClubTimerXbox.Services
             var incomePayment = GetCombinedPaymentSummary(CashReportPeriodMode.Month, monthStart);
             int cashExpense = CashService.GetClubCashExpenseTotalByPeriod(monthStart, nextMonthStart);
             int cashlessExpense = CashService.GetClubCashlessExpenseTotalByPeriod(monthStart, nextMonthStart);
-            int? actualCashBalance = CalculateActualCashBalanceByPeriod(monthStart, nextMonthStart);
-            int? programCashBalance = CalculateProgramCashBalanceByPeriod(monthStart, nextMonthStart);
-            int? actualCashlessBalance = CalculateActualCashlessBalanceByPeriod(monthStart, nextMonthStart);
-            int? programCashlessBalance = CalculateProgramCashlessBalanceByPeriod(monthStart, nextMonthStart);
+            var cashBalanceSummary = CashBalanceSummaryService.Build(monthStart, nextMonthStart);
+            int? actualCashBalance = cashBalanceSummary.ActualCashBalance;
+            int? programCashBalance = cashBalanceSummary.ProgramCashBalance;
+            int? actualCashlessBalance = cashBalanceSummary.ActualCashlessBalance;
+            int? programCashlessBalance = cashBalanceSummary.ProgramCashlessBalance;
 
             var expenseRecords = BuildCashRecordItems(monthStart, nextMonthStart, "Расходы");
             var expensesByCategory = CashService
@@ -1504,6 +1514,13 @@ namespace ClubTimerXbox.Services
                     programCashBalanceMonth = programCashBalance,
                     actualCashlessBalanceMonth = actualCashlessBalance,
                     programCashlessBalanceMonth = programCashlessBalance,
+                    expectedCashBalanceMonth = cashBalanceSummary.ExpectedCashBalance,
+                    expectedCashlessBalanceMonth = cashBalanceSummary.ExpectedCashlessBalance,
+                    moneyProgramBalanceMonth = cashBalanceSummary.ProgramTotal,
+                    moneyActualBalanceMonth = cashBalanceSummary.ActualTotal,
+                    moneyDifferenceMonth = cashBalanceSummary.Difference,
+                    moneyShortageMonth = cashBalanceSummary.MoneyShortage,
+                    moneyExtraMonth = cashBalanceSummary.MoneyExtra,
                     cashExpenseMonth = cashExpense,
                     cashlessExpenseMonth = cashlessExpense
                 },
@@ -1593,6 +1610,7 @@ namespace ClubTimerXbox.Services
                         {
                             createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                             type = item.Type,
+                            lossKind = item.LossKind,
                             title = item.Title,
                             description = item.Description,
                             amount = item.Amount
@@ -1609,6 +1627,7 @@ namespace ClubTimerXbox.Services
                         {
                             createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                             type = item.Type,
+                            lossKind = item.LossKind,
                             title = item.Title,
                             description = item.Description,
                             amount = item.Amount
@@ -1624,6 +1643,7 @@ namespace ClubTimerXbox.Services
                         {
                             createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                             type = item.Type,
+                            lossKind = item.LossKind,
                             title = item.Title,
                             description = item.Description,
                             amount = item.Amount
@@ -1641,6 +1661,9 @@ namespace ClubTimerXbox.Services
                         monthGameIncome = summary.MonthGameIncome,
                         monthProductsIncome = summary.MonthProductsIncome,
                         monthShortages = summary.MonthShortages,
+                        monthMoneyLosses = summary.MonthUnpaidMoneyLosses,
+                        monthRawMoneyLosses = summary.MonthRawUnpaidMoneyLosses,
+                        monthProductLosses = summary.MonthUnpaidProductLosses,
                         monthSalaryPaid = salaryForMonth,
                         autoSalary = autoSalary == null
                             ? null
@@ -1656,6 +1679,9 @@ namespace ClubTimerXbox.Services
                                 bonusAmount = autoSalary.BonusAmount,
                                 grossAmount = autoSalary.GrossAmount,
                                 lossesAmount = autoSalary.LossesAmount,
+                                moneyLossesAmount = autoSalary.MoneyLossesAmount,
+                                rawMoneyLossesAmount = autoSalary.RawMoneyLossesAmount,
+                                productLossesAmount = autoSalary.ProductLossesAmount,
                                 paidAmount = autoSalary.PaidAmount,
                                 remainingAmount = autoSalary.RemainingAmount
                             },
@@ -2607,7 +2633,8 @@ namespace ClubTimerXbox.Services
                     responsibleEmployeeName: item.ResponsibleEmployeeName,
                     checkedByEmployeeName: item.CheckedByEmployeeName,
                     description: description,
-                    amount: item.Amount
+                    amount: item.Amount,
+                    isFixed: true
                 );
             }
 
@@ -2715,29 +2742,46 @@ namespace ClubTimerXbox.Services
                 return string.Join(" ", notes);
             }
 
-            if (reconciliation.Amount >= CashReconciliationService.AutoResolveLimit)
+            int? moneyShortageCap = CashBalanceSummaryService.GetMoneyShortageCap(
+                monthStart,
+                nextMonthStart
+            );
+            int rawExistingMoneyLosses = EmployeeLossService
+                .GetCappedUnpaidMoneyTotalsByEmployee(monthStart, nextMonthStart, null)
+                .Values
+                .Sum();
+            int allowedNewMoneyShortage = moneyShortageCap.HasValue
+                ? Math.Max(0, moneyShortageCap.Value - rawExistingMoneyLosses)
+                : reconciliation.Amount;
+            int finalShortage = Math.Min(reconciliation.Amount, allowedNewMoneyShortage);
+
+            if (finalShortage <= 0)
             {
-                notes.Add($"Сумма {reconciliation.Amount} сом требует ручной разборки владельцем.");
+                CashReconciliationService.Resolve(
+                    reconciliation.Id,
+                    "Система",
+                    "PaymentTypeMistake",
+                    "Общая касса нал+безнал уже покрыта существующими денежными удержаниями. Новый штраф не создан."
+                );
+                notes.Add("Общая денежная недостача уже покрыта существующими удержаниями. Новый штраф не создан.");
                 return string.Join(" ", notes);
             }
 
-            int finalShortage = reconciliation.Amount;
-            DistributeCashlessShortage(
-                finalShortage,
-                monthStart,
-                nextMonthStart,
-                expectedCashlessBalance,
-                actualCashless
-            );
-
-            CashReconciliationService.Resolve(
+            CashReconciliationService.UpdateOpenAmount(
                 reconciliation.Id,
-                "Система",
-                "RealShortage",
-                $"После автоматического сопоставления с наличкой осталась реальная недостача безнала {finalShortage} сом."
+                finalShortage,
+                finalShortage == shortage
+                    ? "Оставлено активной карточкой в разделе Разница кассы."
+                    : $"После общего сопоставления нал+безнал активная сумма уменьшена до {finalShortage} сом."
             );
 
-            notes.Add($"Остаток недостачи {finalShortage} сом оформлен на сотрудников по доле безнал-выручки.");
+            if (moneyShortageCap.HasValue)
+            {
+                notes.Add($"Общая денежная недостача кассы: {moneyShortageCap.Value} сом.");
+                notes.Add($"Уже было денежных удержаний: {rawExistingMoneyLosses} сом.");
+            }
+
+            notes.Add($"Активная карточка на {finalShortage} сом добавлена в Разница кассы. Владелец может закрыть её или оформить как потери.");
             return string.Join(" ", notes);
         }
 
@@ -2850,7 +2894,8 @@ namespace ClubTimerXbox.Services
                     "Неизвестно",
                     shortageAmount,
                     expectedCashless,
-                    actualCashless
+                    actualCashless,
+                    isFixed: true
                 );
 
                 return;
@@ -2874,7 +2919,8 @@ namespace ClubTimerXbox.Services
                     groups[index].EmployeeName,
                     amount,
                     expectedCashless,
-                    actualCashless
+                    actualCashless,
+                    isFixed: true
                 );
             }
         }
@@ -2883,7 +2929,8 @@ namespace ClubTimerXbox.Services
             string employeeName,
             int amount,
             int expectedCashlessBalance,
-            int actualCashless)
+            int actualCashless,
+            bool isFixed)
         {
             string description =
                 $"Автоматическая сверка безнала владельцем.\n" +
@@ -2906,7 +2953,9 @@ namespace ClubTimerXbox.Services
                 title: "Недостача безнала",
                 description: description,
                 amount: amount,
-                note: "Автоматически создано при сверке безнала"
+                note: "Оформлено владельцем из активной корректировки",
+                lossKind: "money",
+                isFixed: isFixed
             );
         }
 

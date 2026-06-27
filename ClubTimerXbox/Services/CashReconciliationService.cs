@@ -292,6 +292,41 @@ namespace ClubTimerXbox.Services
                 .ToList();
         }
 
+        public static CashReconciliationItem UpdateOpenAmount(
+            Guid id,
+            int amount,
+            string note = "")
+        {
+            var item = _items.FirstOrDefault(entry => entry.Id == id);
+
+            if (item == null)
+                throw new Exception("Сверочная запись не найдена.");
+
+            if (item.Status == CashReconciliationStatus.Resolved)
+                return item;
+
+            item.Amount = Math.Max(0, amount);
+
+            if (!string.IsNullOrWhiteSpace(note))
+            {
+                item.Note = string.IsNullOrWhiteSpace(item.Note)
+                    ? note.Trim()
+                    : $"{item.Note.Trim()}\n{note.Trim()}";
+            }
+
+            if (item.Amount == 0)
+            {
+                item.Status = CashReconciliationStatus.Resolved;
+                item.ResolvedAt = DateTime.Now;
+                item.ResolvedBy = "Система";
+                item.ResolutionNote = "Активная сумма стала 0, карточка закрыта.";
+            }
+
+            Save();
+
+            return item;
+        }
+
         public static int CloseOpenItemsForBalance(
             DateTime fromInclusive,
             DateTime toExclusive,

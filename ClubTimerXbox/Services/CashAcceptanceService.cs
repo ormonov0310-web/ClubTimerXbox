@@ -54,13 +54,25 @@ namespace ClubTimerXbox.Services
             string responsibleEmployeeName,
             int expectedCashAmount,
             int actualCashAmount,
-            string note = "Приёмка налички")
+            string note = "Приёмка налички",
+            string acceptanceKey = "")
         {
             if (expectedCashAmount < 0)
                 expectedCashAmount = 0;
 
             if (actualCashAmount < 0)
                 actualCashAmount = 0;
+
+            acceptanceKey = acceptanceKey.Trim();
+
+            if (!string.IsNullOrWhiteSpace(acceptanceKey))
+            {
+                var existing = Items.FirstOrDefault(item =>
+                    item.AcceptanceKey.Equals(acceptanceKey, StringComparison.OrdinalIgnoreCase));
+
+                if (existing != null)
+                    return existing;
+            }
 
             int difference = actualCashAmount - expectedCashAmount;
 
@@ -70,6 +82,7 @@ namespace ClubTimerXbox.Services
                 CreatedAt = DateTime.Now,
                 CheckedByEmployeeName = checkedByEmployeeName.Trim(),
                 ResponsibleEmployeeName = responsibleEmployeeName.Trim(),
+                AcceptanceKey = acceptanceKey,
                 ExpectedCashAmount = expectedCashAmount,
                 ActualCashAmount = actualCashAmount,
                 Difference = difference,
@@ -80,6 +93,17 @@ namespace ClubTimerXbox.Services
             Save();
 
             return item;
+        }
+
+        public static bool HasAcceptanceKey(string acceptanceKey)
+        {
+            acceptanceKey = acceptanceKey.Trim();
+
+            if (string.IsNullOrWhiteSpace(acceptanceKey))
+                return false;
+
+            return Items.Any(item =>
+                item.AcceptanceKey.Equals(acceptanceKey, StringComparison.OrdinalIgnoreCase));
         }
 
         public static List<CashAcceptanceItem> GetByPeriod(DateTime fromInclusive, DateTime toExclusive)

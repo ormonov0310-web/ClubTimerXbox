@@ -608,6 +608,21 @@ namespace ClubTimerXbox
 
             string checkedBy = EmployeeService.CurrentEmployee?.Name ?? "Неизвестно";
             string responsible = GetResponsibleEmployeeName();
+            string acceptanceKey = ShiftAcceptanceService.Current.AcceptanceKey;
+
+            if (CashAcceptanceService.HasAcceptanceKey(acceptanceKey))
+            {
+                ShiftAcceptanceService.AcceptCash();
+                MessageBox.Show(
+                    "Наличка по этой передаче смены уже была принята ранее.\n\n" +
+                    "Повторная запись и повторный штраф не созданы.",
+                    "Приёмка смены",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information
+                );
+                FinishOrRefreshAfterPartAccepted();
+                return;
+            }
 
             int difference = actualCash - _expectedCashAmount;
             int originalCashShortage = 0;
@@ -619,7 +634,8 @@ namespace ClubTimerXbox
                 responsibleEmployeeName: responsible,
                 expectedCashAmount: _expectedCashAmount,
                 actualCashAmount: actualCash,
-                note: "Приёмка налички"
+                note: "Приёмка налички",
+                acceptanceKey: acceptanceKey
             );
 
             if (difference < 0)
@@ -637,42 +653,6 @@ namespace ClubTimerXbox
                     ? 0
                     : reconciliation.Amount;
                 coveredByCashlessExtra = originalCashShortage - finalCashShortage;
-
-                if (finalCashShortage > 0)
-                {
-                    string description =
-                        $"Автоматическая недостача налички при приёмке.\n" +
-                        $"Передача: {responsible} → {checkedBy}\n" +
-                        $"Должно быть: {_expectedCashAmount} сом\n" +
-                        $"Фактически: {actualCash} сом\n" +
-                        $"Недостача: {originalCashShortage} сом\n" +
-                        $"Зачтено излишком безнала: {coveredByCashlessExtra} сом\n" +
-                        $"К удержанию: {finalCashShortage} сом";
-
-                    CashService.AddShortage(
-                        checkedByEmployeeName: checkedBy,
-                        responsibleEmployeeName: responsible,
-                        title: "Недостача наличных",
-                        description: description,
-                        amount: finalCashShortage
-                    );
-
-                    EmployeeLossService.AddCashShortage(
-                        responsibleEmployeeName: responsible,
-                        checkedByEmployeeName: checkedBy,
-                        description: description,
-                        amount: finalCashShortage
-                    );
-
-                    CashReconciliationService.Resolve(
-                        reconciliation.Id,
-                        "Система",
-                        "RealShortage",
-                        coveredByCashlessExtra > 0
-                            ? $"Часть {coveredByCashlessExtra} сом закрыта излишком безнала. Остаток {finalCashShortage} сом оформлен на ответственного сотрудника."
-                            : "Недостача налички автоматически оформлена на ответственного сотрудника."
-                    );
-                }
             }
             else if (difference > 0)
             {
@@ -685,7 +665,6 @@ namespace ClubTimerXbox
                 );
             }
 
-            ResolveSmallCashlessShortagesAfterCashAcceptance(actualCash);
             ShiftAcceptanceService.AcceptCash();
 
             string message =
@@ -702,7 +681,7 @@ namespace ClubTimerXbox
                     message += $"Зачтено излишком безнала: {coveredByCashlessExtra} сом\n";
 
                 if (finalCashShortage > 0)
-                    message += $"К удержанию: {finalCashShortage} сом\nНедостача автоматически оформлена на ответственного сотрудника.";
+                    message += $"Активная разница: {finalCashShortage} сом\nОткройте на телефоне Разница кассы, чтобы закрыть её или оформить как потери.";
                 else
                     message += "Недостача закрыта излишком безнала как ошибка типа оплаты.";
             }
@@ -1042,6 +1021,21 @@ namespace ClubTimerXbox
 
             string checkedBy = EmployeeService.CurrentEmployee?.Name ?? "Неизвестно";
             string responsible = GetResponsibleEmployeeName();
+            string acceptanceKey = ShiftAcceptanceService.Current.AcceptanceKey;
+
+            if (StockAuditService.HasAcceptanceKey(acceptanceKey))
+            {
+                ShiftAcceptanceService.AcceptProducts();
+                MessageBox.Show(
+                    "Товары по этой передаче смены уже были приняты ранее.\n\n" +
+                    "Повторная запись и повторный штраф не созданы.",
+                    "Приёмка смены",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information
+                );
+                FinishOrRefreshAfterPartAccepted();
+                return;
+            }
 
             Guid batchId = Guid.NewGuid();
 
@@ -1094,7 +1088,8 @@ namespace ClubTimerXbox
                     expectedQuantity: row.ExpectedQuantity,
                     actualQuantity: actualQuantity,
                     salePrice: row.SalePrice,
-                    note: "Приёмка смены"
+                    note: "Приёмка смены",
+                    acceptanceKey: acceptanceKey
                 );
 
                 ProductStockService.SetQuantity(row.ProductName, actualQuantity);

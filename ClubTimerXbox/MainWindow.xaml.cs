@@ -32,6 +32,8 @@ namespace ClubTimerXbox
         // Мигание кнопки "Приёмка", если новый админ ещё не принял товары и наличку.
         private readonly DispatcherTimer _stockAuditBlinkTimer = new DispatcherTimer();
         private bool _stockAuditBlinkState = false;
+        private AppUpdateService.AppUpdateInfo? _settingsUpdateInfo;
+        private bool _settingsUpdateBlinkState = false;
 
         // Совместимость со старым именем.
         public MainWindow()
@@ -46,6 +48,7 @@ namespace ClubTimerXbox
             UpdateMainViewButtons();
             UpdateMainCashText();
             UpdateStockAuditButtonState();
+            UpdateSettingsButtonUpdateState();
 
             _mainTimer.Interval = TimeSpan.FromSeconds(1);
             _mainTimer.Tick += MainTimer_Tick;
@@ -59,6 +62,8 @@ namespace ClubTimerXbox
             _tuyaRefreshTimer.Tick += async (_, _) => await RefreshTuyaDevicesIfNeededAsync();
 
             Closing += (_, _) => HandleWindowClosing();
+
+            _ = RefreshSettingsUpdateIndicatorAsync(forceRefresh: true);
         }
 
         private void HandleWindowClosing()
@@ -1547,6 +1552,9 @@ namespace ClubTimerXbox
         {
             bool needRedraw = false;
             bool needSave = false;
+
+            _settingsUpdateBlinkState = !_settingsUpdateBlinkState;
+            UpdateSettingsButtonUpdateState();
 
             foreach (var place in _places)
             {

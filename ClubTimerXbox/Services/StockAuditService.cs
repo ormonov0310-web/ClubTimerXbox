@@ -19,7 +19,8 @@ namespace ClubTimerXbox.Services
             int expectedQuantity,
             int actualQuantity,
             int salePrice,
-            string note = "")
+            string note = "",
+            string acceptanceKey = "")
         {
             int difference = actualQuantity - expectedQuantity;
             int differenceAmount = Math.Abs(difference) * salePrice;
@@ -30,6 +31,7 @@ namespace ClubTimerXbox.Services
                 CreatedAt = DateTime.Now,
                 CheckedByEmployeeName = checkedByEmployeeName,
                 ResponsibleEmployeeName = responsibleEmployeeName,
+                AcceptanceKey = acceptanceKey.Trim(),
                 ProductName = productName,
                 ExpectedQuantity = expectedQuantity,
                 ActualQuantity = actualQuantity,
@@ -81,6 +83,17 @@ namespace ClubTimerXbox.Services
                 .GroupBy(item => item.BatchId)
                 .OrderByDescending(group => group.Max(item => item.CreatedAt))
                 .ToList();
+        }
+
+        public static bool HasAcceptanceKey(string acceptanceKey)
+        {
+            acceptanceKey = acceptanceKey.Trim();
+
+            if (string.IsNullOrWhiteSpace(acceptanceKey))
+                return false;
+
+            return _items.Any(item =>
+                item.AcceptanceKey.Equals(acceptanceKey, StringComparison.OrdinalIgnoreCase));
         }
 
         public static int GetTodayShortageAmount()

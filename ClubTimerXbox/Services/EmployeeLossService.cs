@@ -66,6 +66,161 @@ namespace ClubTimerXbox.Services
                 .Sum(item => item.Amount);
         }
 
+        public static int GetUnpaidProductTotalByEmployee(
+            string employeeName,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            employeeName = employeeName.Trim();
+
+            return Items
+                .Where(item =>
+                    !item.IsPaid &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    item.ResponsibleEmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase) &&
+                    IsProductLoss(item))
+                .Sum(item => item.Amount);
+        }
+
+        public static int GetRawUnpaidMoneyTotalByEmployee(
+            string employeeName,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            employeeName = employeeName.Trim();
+
+            return Items
+                .Where(item =>
+                    !item.IsPaid &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    item.ResponsibleEmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase) &&
+                    IsMoneyLoss(item))
+                .Sum(item => item.Amount);
+        }
+
+        public static int GetCappedUnpaidMoneyTotalByEmployee(
+            string employeeName,
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            int? moneyShortageCap)
+        {
+            employeeName = employeeName.Trim();
+
+            var totals = GetCappedUnpaidMoneyTotalsByEmployee(
+                fromInclusive,
+                toExclusive,
+                moneyShortageCap
+            );
+
+            return totals.TryGetValue(employeeName, out int amount)
+                ? amount
+                : 0;
+        }
+
+        public static Dictionary<string, int> GetCappedUnpaidMoneyTotalsByEmployee(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            int? moneyShortageCap)
+        {
+            var fixedTotals = Items
+                .Where(item =>
+                    !item.IsPaid &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    item.Amount > 0 &&
+                    IsMoneyLoss(item) &&
+                    item.IsFixed)
+                .GroupBy(item => item.ResponsibleEmployeeName.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Where(group => !string.IsNullOrWhiteSpace(group.Key))
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Sum(item => item.Amount),
+                    StringComparer.OrdinalIgnoreCase
+                );
+
+            var automaticTotals = Items
+                .Where(item =>
+                    !item.IsPaid &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    item.Amount > 0 &&
+                    IsMoneyLoss(item) &&
+                    !item.IsFixed)
+                .GroupBy(item => item.ResponsibleEmployeeName.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Where(group => !string.IsNullOrWhiteSpace(group.Key))
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Sum(item => item.Amount),
+                    StringComparer.OrdinalIgnoreCase
+                );
+
+            var rawTotals = MergeMoneyTotals(fixedTotals, automaticTotals);
+
+            if (!moneyShortageCap.HasValue)
+                return rawTotals;
+
+            int cap = Math.Max(0, moneyShortageCap.Value);
+            int fixedTotal = fixedTotals.Values.Sum();
+            int automaticCap = Math.Max(0, cap - fixedTotal);
+            int rawTotal = automaticTotals.Values.Sum();
+
+            var result = new Dictionary<string, int>(fixedTotals, StringComparer.OrdinalIgnoreCase);
+
+            if (rawTotal <= automaticCap)
+                return rawTotals;
+
+            if (automaticCap == 0 || rawTotal == 0)
+            {
+                foreach (string employeeName in automaticTotals.Keys)
+                {
+                    if (!result.ContainsKey(employeeName))
+                        result[employeeName] = 0;
+                }
+
+                return result;
+            }
+
+            int distributed = 0;
+            var ordered = automaticTotals
+                .OrderByDescending(pair => pair.Value)
+                .ThenBy(pair => pair.Key)
+                .ToList();
+
+            for (int index = 0; index < ordered.Count; index++)
+            {
+                var pair = ordered[index];
+                int amount = index == ordered.Count - 1
+                    ? automaticCap - distributed
+                    : (int)Math.Round(automaticCap * (pair.Value / (double)rawTotal));
+
+                amount = Math.Max(0, Math.Min(amount, pair.Value));
+                distributed += amount;
+                result[pair.Key] = result.TryGetValue(pair.Key, out int fixedAmount)
+                    ? fixedAmount + amount
+                    : amount;
+            }
+
+            return result;
+        }
+
+        private static Dictionary<string, int> MergeMoneyTotals(
+            Dictionary<string, int> first,
+            Dictionary<string, int> second)
+        {
+            var result = new Dictionary<string, int>(first, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var pair in second)
+            {
+                result[pair.Key] = result.TryGetValue(pair.Key, out int amount)
+                    ? amount + pair.Value
+                    : pair.Value;
+            }
+
+            return result;
+        }
+
         public static EmployeeLossItem AddLoss(
             string responsibleEmployeeName,
             string checkedByEmployeeName,
@@ -73,7 +228,9 @@ namespace ClubTimerXbox.Services
             string title,
             string description,
             int amount,
-            string note = "")
+            string note = "",
+            string lossKind = "",
+            bool isFixed = false)
         {
             if (amount < 0)
                 amount = 0;
@@ -85,10 +242,12 @@ namespace ClubTimerXbox.Services
                 ResponsibleEmployeeName = responsibleEmployeeName.Trim(),
                 CheckedByEmployeeName = checkedByEmployeeName.Trim(),
                 LossType = lossType.Trim(),
+                LossKind = NormalizeLossKind(lossKind, lossType, title, description, note),
                 Title = title.Trim(),
                 Description = description.Trim(),
                 Amount = amount,
                 IsPaid = false,
+                IsFixed = isFixed,
                 PaidAt = null,
                 Note = note.Trim()
             };
@@ -112,7 +271,8 @@ namespace ClubTimerXbox.Services
                 title: "Недостача товара",
                 description: description,
                 amount: amount,
-                note: "Автоматически создано при приёмке товаров"
+                note: "Автоматически создано при приёмке товаров",
+                lossKind: "product"
             );
         }
 
@@ -120,7 +280,8 @@ namespace ClubTimerXbox.Services
             string responsibleEmployeeName,
             string checkedByEmployeeName,
             string description,
-            int amount)
+            int amount,
+            bool isFixed = false)
         {
             return AddLoss(
                 responsibleEmployeeName: responsibleEmployeeName,
@@ -129,8 +290,67 @@ namespace ClubTimerXbox.Services
                 title: "Недостача наличных",
                 description: description,
                 amount: amount,
-                note: "Автоматически создано при приёмке налички"
+                note: "Автоматически создано при приёмке налички",
+                lossKind: "money",
+                isFixed: isFixed
             );
+        }
+
+        public static bool IsProductLoss(EmployeeLossItem item)
+        {
+            if (item.LossKind.Equals("product", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (item.LossKind.Equals("money", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            string text = $"{item.LossType} {item.Title} {item.Description} {item.Note}";
+
+            return text.Contains("товар", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("склад", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("приёмка товаров", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("приемка товаров", StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static bool IsMoneyLoss(EmployeeLossItem item)
+        {
+            if (item.LossKind.Equals("money", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (item.LossKind.Equals("product", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return !IsProductLoss(item);
+        }
+
+        public static string GetLossKind(EmployeeLossItem item)
+        {
+            return IsProductLoss(item) ? "product" : "money";
+        }
+
+        private static string NormalizeLossKind(
+            string lossKind,
+            string lossType,
+            string title,
+            string description,
+            string note)
+        {
+            lossKind = (lossKind ?? "").Trim().ToLowerInvariant();
+
+            if (lossKind == "product" || lossKind == "money")
+                return lossKind;
+
+            string text = $"{lossType} {title} {description} {note}";
+
+            if (text.Contains("товар", StringComparison.OrdinalIgnoreCase) ||
+                text.Contains("склад", StringComparison.OrdinalIgnoreCase) ||
+                text.Contains("приёмка товаров", StringComparison.OrdinalIgnoreCase) ||
+                text.Contains("приемка товаров", StringComparison.OrdinalIgnoreCase))
+            {
+                return "product";
+            }
+
+            return "money";
         }
 
         public static int ForgiveCashShortagesByPaymentMistake(

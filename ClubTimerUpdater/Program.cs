@@ -1,3 +1,4 @@
+using System;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
@@ -74,7 +75,7 @@ namespace ClubTimerUpdater
 
             root.Children.Add(new TextBlock
             {
-                Text = "Идёт обновление программы",
+                Text = "Идет обновление программы",
                 FontSize = 28,
                 FontWeight = FontWeights.Bold,
                 Foreground = Brushes.White,
@@ -159,7 +160,7 @@ namespace ClubTimerUpdater
             UpdateLog.Write("Waiting for process exit");
             WaitForProcessExit(_options.ProcessName, TimeSpan.FromSeconds(_options.WaitSeconds));
 
-            SetProgress(25, "25% - Создаём резервную копию");
+            SetProgress(25, "25% - Создаем резервную копию");
             string backupPath = CreateBackup(_options.TargetDir, _options.BackupRoot);
             UpdateLog.Write($"Backup created: {backupPath}");
 

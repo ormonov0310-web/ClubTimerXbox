@@ -17,6 +17,7 @@ namespace ClubTimerXbox.Services
         private static readonly HttpClient _httpClient = new HttpClient();
         private static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(1);
         private static DateTime _lastCheck = DateTime.MinValue;
+        private static AppUpdateInfo? _lastInfo;
 
         private static string BaseUrl => FirebaseSettings.DatabaseUrl.TrimEnd('/');
 
@@ -38,13 +39,30 @@ namespace ClubTimerXbox.Services
 
             try
             {
-                var manifest = await ReadManifestAsync();
-                await ReportStatusAsync(manifest, places, "checked", "");
+                await GetLatestUpdateInfoAsync(places, forceRefresh: true);
             }
             catch
             {
                 // Update checks must never interrupt the club workflow.
             }
+        }
+
+        public static async Task<AppUpdateInfo> GetLatestUpdateInfoAsync(
+            IReadOnlyList<ClubPlace> places,
+            bool forceRefresh = false)
+        {
+            if (!forceRefresh &&
+                _lastInfo != null &&
+                DateTime.Now - _lastInfo.CheckedAt < CheckInterval)
+            {
+                return _lastInfo.WithPlaces(places);
+            }
+
+            var manifest = await ReadManifestAsync();
+            var info = BuildUpdateInfo(manifest, places);
+            _lastInfo = info;
+            await ReportStatusAsync(info, "checked", "");
+            return info;
         }
 
         public static async Task<string> PrepareLatestUpdateAsync()
@@ -140,33 +158,58 @@ namespace ClubTimerXbox.Services
         }
 
         private static async Task ReportStatusAsync(
-            UpdateManifest? manifest,
-            IReadOnlyList<ClubPlace> places,
+            AppUpdateInfo info,
             string state,
             string message)
         {
-            bool safeToInstall = places.Count == 0 || places.All(place => !place.IsBusy);
-            int activePlaces = places.Count(place => place.IsBusy);
-            bool hasUpdate = manifest != null &&
-                             IsNewerVersion(manifest.LatestVersion, AppVersionService.Version);
-
             var payload = new
             {
                 currentVersion = AppVersionService.Version,
-                latestVersion = manifest?.LatestVersion ?? "",
+                latestVersion = info.LatestVersion,
                 channel = AppVersionService.UpdateChannel,
-                hasUpdate,
+                hasUpdate = info.HasUpdate,
                 state,
                 message,
-                safeToInstall,
-                activePlaces,
-                notes = manifest?.Notes ?? "",
-                url = manifest?.DownloadUrl ?? "",
+                safeToInstall = info.SafeToInstall,
+                activePlaces = info.ActivePlaces,
+                notes = info.Notes,
+                url = info.DownloadUrl,
                 checkedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
             };
 
             await PutAsync(ClubUpdateStatusPath, payload);
             await PutAsync(OwnerClubUpdateStatusPath, payload);
+        }
+
+        private static async Task ReportStatusAsync(
+            UpdateManifest? manifest,
+            IReadOnlyList<ClubPlace> places,
+            string state,
+            string message)
+        {
+            await ReportStatusAsync(BuildUpdateInfo(manifest, places), state, message);
+        }
+
+        private static AppUpdateInfo BuildUpdateInfo(
+            UpdateManifest? manifest,
+            IReadOnlyList<ClubPlace> places)
+        {
+            bool hasUpdate = manifest != null &&
+                             IsNewerVersion(manifest.LatestVersion, AppVersionService.Version);
+            int activePlaces = places.Count(place => place.IsBusy);
+
+            return new AppUpdateInfo
+            {
+                CurrentVersion = AppVersionService.Version,
+                LatestVersion = manifest?.LatestVersion ?? "",
+                DisplayLatestVersion = FormatDisplayVersion(manifest?.LatestVersion ?? ""),
+                HasUpdate = hasUpdate,
+                SafeToInstall = activePlaces == 0,
+                ActivePlaces = activePlaces,
+                Notes = manifest?.Notes ?? "",
+                DownloadUrl = manifest?.DownloadUrl ?? "",
+                CheckedAt = DateTime.Now
+            };
         }
 
         private static async Task<string> DownloadPackageAsync(UpdateManifest manifest)
@@ -277,6 +320,11 @@ namespace ClubTimerXbox.Services
             return clean;
         }
 
+        public static string FormatDisplayVersion(string value)
+        {
+            return value.Split('+')[0].Split('-')[0].Trim();
+        }
+
         private static string SafePathPart(string value)
         {
             var invalid = Path.GetInvalidFileNameChars();
@@ -329,6 +377,37 @@ namespace ClubTimerXbox.Services
                 {
                     ShouldShutdown = true,
                     Message = message
+                };
+            }
+        }
+
+        public sealed class AppUpdateInfo
+        {
+            public string CurrentVersion { get; set; } = "";
+            public string LatestVersion { get; set; } = "";
+            public string DisplayLatestVersion { get; set; } = "";
+            public bool HasUpdate { get; set; }
+            public bool SafeToInstall { get; set; }
+            public int ActivePlaces { get; set; }
+            public string Notes { get; set; } = "";
+            public string DownloadUrl { get; set; } = "";
+            public DateTime CheckedAt { get; set; } = DateTime.Now;
+
+            public AppUpdateInfo WithPlaces(IReadOnlyList<ClubPlace> places)
+            {
+                int activePlaces = places.Count(place => place.IsBusy);
+
+                return new AppUpdateInfo
+                {
+                    CurrentVersion = CurrentVersion,
+                    LatestVersion = LatestVersion,
+                    DisplayLatestVersion = DisplayLatestVersion,
+                    HasUpdate = HasUpdate,
+                    SafeToInstall = activePlaces == 0,
+                    ActivePlaces = activePlaces,
+                    Notes = Notes,
+                    DownloadUrl = DownloadUrl,
+                    CheckedAt = CheckedAt
                 };
             }
         }

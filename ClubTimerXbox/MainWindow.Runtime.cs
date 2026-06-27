@@ -78,6 +78,7 @@ namespace ClubTimerXbox
                 await FirebaseSyncService.PushCurrentStateAsync(places);
                 await FirebaseSyncService.CheckCommandsAsync(places);
                 await AppUpdateService.CheckAndReportAsync(places);
+                await RefreshSettingsUpdateIndicatorAsync(forceRefresh: false);
             };
 
             _firebaseSyncTimer.Start();
@@ -85,6 +86,7 @@ namespace ClubTimerXbox
             _ = FirebaseSyncService.PushCurrentStateAsync(_places.ToList());
             _ = FirebaseSyncService.CheckCommandsAsync(_places.ToList());
             _ = AppUpdateService.CheckAndReportAsync(_places.ToList());
+            _ = RefreshSettingsUpdateIndicatorAsync(forceRefresh: false);
         }
 
         private void SaveRuntimeClosedNow()

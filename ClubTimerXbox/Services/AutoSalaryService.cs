@@ -122,6 +122,9 @@ namespace ClubTimerXbox.Services
                         .ToList(),
                     GrossAmount = gross,
                     LossesAmount = input.Summary.MonthUnpaidLosses,
+                    MoneyLossesAmount = input.Summary.MonthUnpaidMoneyLosses,
+                    RawMoneyLossesAmount = input.Summary.MonthRawUnpaidMoneyLosses,
+                    ProductLossesAmount = input.Summary.MonthUnpaidProductLosses,
                     PaidAmount = input.PaidSalary,
                     RemainingAmount = remaining
                 });

@@ -24,6 +24,9 @@ namespace ClubTimerXbox.Services
         public int MonthShortages { get; set; }
         public int MonthUnpaidLosses { get; set; }
         public int MonthPaidLosses { get; set; }
+        public int MonthUnpaidMoneyLosses { get; set; }
+        public int MonthRawUnpaidMoneyLosses { get; set; }
+        public int MonthUnpaidProductLosses { get; set; }
 
         public int ClosedGameSessionsCount { get; set; }
         public int ProductServiceOperationsCount { get; set; }
@@ -83,6 +86,7 @@ namespace ClubTimerXbox.Services
     {
         public DateTime CreatedAt { get; set; }
         public string Type { get; set; } = "";
+        public string LossKind { get; set; } = "";
         public string Title { get; set; } = "";
         public string Description { get; set; } = "";
         public int Amount { get; set; }
@@ -108,6 +112,22 @@ namespace ClubTimerXbox.Services
 
             var todayLosses = GetLossRecordsForEmployee(employeeName, todayStart, tomorrowStart);
             var monthLosses = GetLossRecordsForEmployee(employeeName, monthStart, nextMonthStart);
+            int unpaidProductLosses = EmployeeLossService.GetUnpaidProductTotalByEmployee(
+                employeeName,
+                monthStart,
+                nextMonthStart
+            );
+            int rawUnpaidMoneyLosses = EmployeeLossService.GetRawUnpaidMoneyTotalByEmployee(
+                employeeName,
+                monthStart,
+                nextMonthStart
+            );
+            int cappedUnpaidMoneyLosses = EmployeeLossService.GetCappedUnpaidMoneyTotalByEmployee(
+                employeeName,
+                monthStart,
+                nextMonthStart,
+                CashBalanceSummaryService.GetMoneyShortageCap(monthStart, nextMonthStart)
+            );
 
             var monthSessions = GetGameSessions(employeeName, monthStart, nextMonthStart);
 
@@ -144,8 +164,11 @@ namespace ClubTimerXbox.Services
 
                 TodayShortages = todayLosses.Sum(record => record.Amount),
                 MonthShortages = monthLosses.Sum(record => record.Amount),
-                MonthUnpaidLosses = monthLosses.Where(record => !record.IsPaid).Sum(record => record.Amount),
+                MonthUnpaidLosses = unpaidProductLosses + cappedUnpaidMoneyLosses,
                 MonthPaidLosses = monthLosses.Where(record => record.IsPaid).Sum(record => record.Amount),
+                MonthUnpaidMoneyLosses = cappedUnpaidMoneyLosses,
+                MonthRawUnpaidMoneyLosses = rawUnpaidMoneyLosses,
+                MonthUnpaidProductLosses = unpaidProductLosses,
 
                 ClosedGameSessionsCount = monthSessions.Count,
                 ProductServiceOperationsCount = monthRecords.Count(record => record.Category == "Товары и услуги"),
@@ -360,6 +383,7 @@ namespace ClubTimerXbox.Services
                 {
                     CreatedAt = record.CreatedAt,
                     Type = "Потеря",
+                    LossKind = EmployeeLossService.GetLossKind(record),
                     Title = record.Title,
                     Description = record.Description,
                     Amount = record.Amount

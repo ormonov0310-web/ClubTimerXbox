@@ -17,6 +17,12 @@ namespace ClubTimerXbox.Models
         // Например: "Недостача товара", "Недостача наличных", "Поломка", "Ошибка", "Прочее".
         public string LossType { get; set; } = "";
 
+        // Stable machine-readable category: "money" or "product".
+        public string LossKind { get; set; } = "";
+
+        // Owner-confirmed losses should not be changed by later automatic reconciliation caps.
+        public bool IsFixed { get; set; }
+
         public string Title { get; set; } = "";
 
         public string Description { get; set; } = "";

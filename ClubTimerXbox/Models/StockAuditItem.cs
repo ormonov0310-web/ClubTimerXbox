@@ -19,6 +19,8 @@ namespace ClubTimerXbox.Models
         // Обычно это предыдущий сотрудник.
         public string ResponsibleEmployeeName { get; set; } = "";
 
+        public string AcceptanceKey { get; set; } = "";
+
         public string ProductName { get; set; } = "";
 
         // Сколько было по программе до приёмки.
