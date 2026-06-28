@@ -417,6 +417,7 @@ namespace ClubTimerXbox.Services
                         isBusy = place.IsBusy,
                         isOpenMode = place.IsOpenMode,
                         isCalculating = place.IsCalculating,
+                        isTimeExpiredAwaitingAcknowledgement = place.IsTimeExpiredAwaitingAcknowledgement,
                         paidAmount = place.PaidAmount,
                         currentGameAmount = GetCurrentGameAmount(place),
                         remainingSeconds = place.RemainingSeconds,

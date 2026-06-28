@@ -9,7 +9,8 @@
         ResizeMode="NoResize"
         Topmost="True">
     <Grid Margin="18">
-        <Border Background="#171B26"
+        <Border x:Name="AlarmBorder"
+                Background="#171B26"
                 BorderBrush="#FBBF24"
                 BorderThickness="1"
                 CornerRadius="18"
@@ -33,7 +34,8 @@
                        TextWrapping="Wrap"
                        Margin="0,0,0,24"/>
 
-            <Button Content="Понятно"
+            <Button x:Name="OkButton"
+                    Content="Понятно"
                     Height="46"
                     FontSize="18"
                     FontWeight="Bold"

@@ -195,6 +195,7 @@ namespace ClubTimerXbox.Services
                 isBusy = place.IsBusy,
                 isOpenMode = place.IsOpenMode,
                 isCalculating = place.IsCalculating,
+                isTimeExpiredAwaitingAcknowledgement = place.IsTimeExpiredAwaitingAcknowledgement,
                 paidAmount = place.PaidAmount,
                 startedByEmployeeName = place.StartedByEmployeeName,
                 incomeEmployeeName = place.IncomeEmployeeName,

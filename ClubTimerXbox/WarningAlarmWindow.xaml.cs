@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Threading;
 using ClubTimerXbox.Services;
 
@@ -16,8 +17,10 @@ namespace ClubTimerXbox
         private int _remainingSeconds;
         private int _elapsedSeconds;
         private bool _isSoundActive = true;
+        private bool _isExpired;
 
         public string PlaceName { get; }
+        public event EventHandler? Acknowledged;
 
         public WarningAlarmWindow(
             string placeName,
@@ -54,10 +57,11 @@ namespace ClubTimerXbox
                 _remainingSeconds--;
 
             _elapsedSeconds++;
-            UpdateMessageText();
 
             if (_remainingSeconds <= 0)
-                _isSoundActive = false;
+                MarkExpired();
+            else
+                UpdateMessageText();
 
             if (_durationSeconds > 0 && _elapsedSeconds >= _durationSeconds)
                 _isSoundActive = false;
@@ -81,7 +85,10 @@ namespace ClubTimerXbox
 
         private void OkButton_Click(object sender, RoutedEventArgs e)
         {
-            Close();
+            Acknowledged?.Invoke(this, EventArgs.Empty);
+
+            if (IsVisible)
+                Close();
         }
 
         public void StopAlarm()
@@ -105,7 +112,34 @@ namespace ClubTimerXbox
 
         private void UpdateMessageText()
         {
+            if (_isExpired)
+            {
+                MessageText.Text = "Тариф закончился. Нажмите «Понятно», чтобы освободить место.";
+                return;
+            }
+
             MessageText.Text = $"Осталось: {FormatRemainingTime(_remainingSeconds)}";
+        }
+
+        public void MarkExpired()
+        {
+            if (_isExpired)
+                return;
+
+            AlarmSoundService.PlayOnce(_soundName);
+
+            _isExpired = true;
+            _remainingSeconds = 0;
+            _isSoundActive = false;
+
+            Title = "Время вышло";
+            TitleText.Text = $"{PlaceName}: время вышло";
+            TitleText.Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113));
+            AlarmBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(248, 113, 113));
+            AlarmBorder.Background = new SolidColorBrush(Color.FromRgb(69, 10, 10));
+            OkButton.Background = new SolidColorBrush(Color.FromRgb(220, 38, 38));
+
+            UpdateMessageText();
         }
 
         private static string FormatRemainingTime(int seconds)

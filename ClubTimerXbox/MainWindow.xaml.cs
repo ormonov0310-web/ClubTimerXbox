@@ -34,6 +34,7 @@ namespace ClubTimerXbox
         private bool _stockAuditBlinkState = false;
         private AppUpdateService.AppUpdateInfo? _settingsUpdateInfo;
         private bool _settingsUpdateBlinkState = false;
+        private bool _expiredCardBlinkState = false;
 
         // Совместимость со старым именем.
         public MainWindow()
@@ -101,6 +102,7 @@ namespace ClubTimerXbox
                 place.IsBusy = saved.IsBusy;
                 place.IsOpenMode = saved.IsOpenMode;
                 place.IsCalculating = saved.IsCalculating;
+                place.IsTimeExpiredAwaitingAcknowledgement = saved.IsTimeExpiredAwaitingAcknowledgement;
                 place.PaidAmount = saved.PaidAmount;
                 place.PrepaidCashAmount = saved.PrepaidCashAmount;
                 place.PrepaidMBankAmount = saved.PrepaidMBankAmount;
@@ -113,7 +115,11 @@ namespace ClubTimerXbox
                 place.StartedByEmployeeName = saved.StartedByEmployeeName;
                 place.IncomeEmployeeName = saved.IncomeEmployeeName;
 
-                if (place.IsBusy && !place.IsOpenMode && !place.IsCalculating)
+                if (
+                    place.IsBusy &&
+                    !place.IsOpenMode &&
+                    !place.IsCalculating &&
+                    !place.IsTimeExpiredAwaitingAcknowledgement)
                 {
                     DateTime now = DateTime.Now;
                     int passedSeconds = (int)(now - saved.LastSavedAt).TotalSeconds;
@@ -126,7 +132,7 @@ namespace ClubTimerXbox
                     if (place.RemainingSeconds <= 0)
                     {
                         place.RemainingSeconds = 0;
-                        place.IsCalculating = true;
+                        place.IsCalculating = false;
                         place.StartTime = null;
                     }
                     else
@@ -157,6 +163,7 @@ namespace ClubTimerXbox
                     IsBusy = place.IsBusy,
                     IsOpenMode = place.IsOpenMode,
                     IsCalculating = place.IsCalculating,
+                    IsTimeExpiredAwaitingAcknowledgement = place.IsTimeExpiredAwaitingAcknowledgement,
 
                     PaidAmount = place.PaidAmount,
                     PrepaidCashAmount = place.PrepaidCashAmount,
@@ -213,6 +220,9 @@ namespace ClubTimerXbox
                 return false;
 
             if (place.IsCalculating)
+                return false;
+
+            if (place.IsTimeExpiredAwaitingAcknowledgement)
                 return false;
 
             DateTime? startTime = place.StartTime;
@@ -446,6 +456,13 @@ namespace ClubTimerXbox
             if (!place.IsBusy)
                 return new SolidColorBrush(Color.FromRgb(51, 65, 85));
 
+            if (place.IsTimeExpiredAwaitingAcknowledgement)
+            {
+                return _expiredCardBlinkState
+                    ? new SolidColorBrush(Color.FromRgb(248, 113, 113))
+                    : new SolidColorBrush(Color.FromRgb(127, 29, 29));
+            }
+
             if (GetActiveSessionPendingCheckoutTotal(place.Name) > 0)
                 return new SolidColorBrush(Color.FromRgb(251, 191, 36));
 
@@ -456,15 +473,28 @@ namespace ClubTimerXbox
         {
             card.Cursor = Cursors.Hand;
 
+            card.PreviewMouseRightButtonDown += (_, e) =>
+            {
+                if (!place.IsTimeExpiredAwaitingAcknowledgement)
+                    return;
+
+                e.Handled = true;
+                AcknowledgeExpiredPlace(place.Name);
+            };
+
             card.MouseEnter += (_, _) =>
             {
                 if (!UiSoundService.TryPlayCardHover(place.Name))
                     return;
 
                 AnimateScale(card, 1.025, 120);
-                card.BorderBrush = GetActiveSessionPendingCheckoutTotal(place.Name) > 0
-                    ? new SolidColorBrush(Color.FromRgb(253, 224, 71))
-                    : new SolidColorBrush(Color.FromRgb(96, 165, 250));
+
+                if (!place.IsTimeExpiredAwaitingAcknowledgement)
+                {
+                    card.BorderBrush = GetActiveSessionPendingCheckoutTotal(place.Name) > 0
+                        ? new SolidColorBrush(Color.FromRgb(253, 224, 71))
+                        : new SolidColorBrush(Color.FromRgb(96, 165, 250));
+                }
 
                 if (card.Effect is DropShadowEffect shadow)
                 {
@@ -486,7 +516,16 @@ namespace ClubTimerXbox
             };
 
             card.PreviewMouseLeftButtonDown += (_, _) => AnimateScale(card, 0.985, 70);
-            card.PreviewMouseLeftButtonUp += (_, _) => AnimateScale(card, card.IsMouseOver ? 1.025 : 1, 120);
+            card.PreviewMouseLeftButtonUp += (_, e) =>
+            {
+                AnimateScale(card, card.IsMouseOver ? 1.025 : 1, 120);
+
+                if (!place.IsTimeExpiredAwaitingAcknowledgement)
+                    return;
+
+                e.Handled = true;
+                AcknowledgeExpiredPlace(place.Name);
+            };
         }
 
         private void AnimateScale(UIElement element, double scale, int milliseconds)
@@ -637,6 +676,7 @@ namespace ClubTimerXbox
             place.IsBusy = true;
             place.IsOpenMode = false;
             place.IsCalculating = false;
+            place.IsTimeExpiredAwaitingAcknowledgement = false;
             place.PaidAmount = paidAmount;
             place.PrepaidCashAmount = checkoutWindow.PaymentRecord.CashAmount;
             place.PrepaidMBankAmount = checkoutWindow.PaymentRecord.MBankAmount;
@@ -677,6 +717,7 @@ namespace ClubTimerXbox
             place.IsBusy = true;
             place.IsOpenMode = true;
             place.IsCalculating = false;
+            place.IsTimeExpiredAwaitingAcknowledgement = false;
             place.PaidAmount = 0;
             place.PrepaidCashAmount = 0;
             place.PrepaidMBankAmount = 0;
@@ -706,6 +747,12 @@ namespace ClubTimerXbox
             if (!place.IsBusy)
             {
                 MessageBox.Show("Сначала запустите место.", "Добавить время");
+                return;
+            }
+
+            if (place.IsTimeExpiredAwaitingAcknowledgement)
+            {
+                AcknowledgeExpiredPlace(place.Name);
                 return;
             }
 
@@ -813,6 +860,12 @@ namespace ClubTimerXbox
                 return;
             }
 
+            if (place.IsTimeExpiredAwaitingAcknowledgement)
+            {
+                AcknowledgeExpiredPlace(place.Name);
+                return;
+            }
+
             if (place.IsCalculating)
             {
                 MessageBox.Show("Это место сейчас в расчёте.", "Добавить штраф");
@@ -908,6 +961,12 @@ namespace ClubTimerXbox
                 return;
             }
 
+            if (fromPlace.IsTimeExpiredAwaitingAcknowledgement)
+            {
+                AcknowledgeExpiredPlace(fromPlace.Name);
+                return;
+            }
+
             if (fromPlace.IsCalculating)
             {
                 MessageBox.Show("Это место сейчас в расчёте.", "Пересадить");
@@ -991,6 +1050,7 @@ namespace ClubTimerXbox
             toPlace.IsBusy = true;
             toPlace.IsOpenMode = true;
             toPlace.IsCalculating = false;
+            toPlace.IsTimeExpiredAwaitingAcknowledgement = false;
             toPlace.PaidAmount = 0;
             toPlace.PrepaidCashAmount = 0;
             toPlace.PrepaidMBankAmount = 0;
@@ -1024,6 +1084,7 @@ namespace ClubTimerXbox
             toPlace.IsBusy = true;
             toPlace.IsOpenMode = false;
             toPlace.IsCalculating = false;
+            toPlace.IsTimeExpiredAwaitingAcknowledgement = false;
             toPlace.PaidAmount = fromPlace.PaidAmount;
             toPlace.PrepaidCashAmount = fromPlace.PrepaidCashAmount;
             toPlace.PrepaidMBankAmount = fromPlace.PrepaidMBankAmount;
@@ -1080,6 +1141,12 @@ namespace ClubTimerXbox
             if (!place.IsBusy)
             {
                 MessageBox.Show($"{place.Name} уже свободен.", "Остановить");
+                return;
+            }
+
+            if (place.IsTimeExpiredAwaitingAcknowledgement)
+            {
+                AcknowledgeExpiredPlace(place.Name);
                 return;
             }
 
@@ -1219,6 +1286,7 @@ namespace ClubTimerXbox
                 if (checkoutResult != true)
                 {
                     place.IsCalculating = false;
+                    place.IsTimeExpiredAwaitingAcknowledgement = false;
                     place.IsOpenMode = true;
                     place.StartTime = DateTime.Now;
                     place.AccruedAmountBeforeCurrentSegment = gameAmount;
@@ -1248,6 +1316,7 @@ namespace ClubTimerXbox
                     }
 
                     place.IsCalculating = false;
+                    place.IsTimeExpiredAwaitingAcknowledgement = false;
                     place.IsOpenMode = true;
                     place.StartTime = DateTime.Now;
                     place.AccruedAmountBeforeCurrentSegment = gameAmount;
@@ -1261,6 +1330,7 @@ namespace ClubTimerXbox
                 if (checkoutWindow.PaymentRecord == null)
                 {
                     place.IsCalculating = false;
+                    place.IsTimeExpiredAwaitingAcknowledgement = false;
                     place.IsOpenMode = true;
                     place.StartTime = DateTime.Now;
                     place.AccruedAmountBeforeCurrentSegment = gameAmount;
@@ -1332,6 +1402,7 @@ namespace ClubTimerXbox
             }
 
             place.IsCalculating = true;
+            place.IsTimeExpiredAwaitingAcknowledgement = false;
             place.IsOpenMode = false;
             place.StartTime = null;
             place.RemainingSeconds = 0;
@@ -1613,6 +1684,7 @@ namespace ClubTimerXbox
             place.IsBusy = false;
             place.IsOpenMode = false;
             place.IsCalculating = false;
+            place.IsTimeExpiredAwaitingAcknowledgement = false;
             place.PaidAmount = 0;
             place.PrepaidCashAmount = 0;
             place.PrepaidMBankAmount = 0;
@@ -1632,6 +1704,7 @@ namespace ClubTimerXbox
             DateTime now = DateTime.Now;
 
             _settingsUpdateBlinkState = !_settingsUpdateBlinkState;
+            _expiredCardBlinkState = !_expiredCardBlinkState;
             UpdateSettingsButtonUpdateState();
 
             foreach (var place in _places)
@@ -1641,6 +1714,12 @@ namespace ClubTimerXbox
 
                 if (place.IsCalculating)
                     continue;
+
+                if (place.IsTimeExpiredAwaitingAcknowledgement)
+                {
+                    needRedraw = true;
+                    continue;
+                }
 
                 if (place.IsOpenMode)
                 {
@@ -1662,69 +1741,7 @@ namespace ClubTimerXbox
 
                 if (place.RemainingSeconds <= 0)
                 {
-                    CloseAlarmWindowForPlace(place.Name);
-                    _oneMinuteWarningShownPlaceNames.Remove(place.Name);
-
-                    string incomeEmployeeName =
-                        place.IncomeEmployeeName ??
-                        place.StartedByEmployeeName ??
-                        GetCurrentEmployeeName();
-
-                    var activeSession = ActionLogService.GetActiveGameSessionByPlace(place.Name);
-                    Guid? sessionId = activeSession?.Id;
-                    int productsAmount = GetActiveSessionProductsAndServicesTotal(place.Name);
-                    string productsDescription = BuildActiveSessionSalesDescription(place.Name);
-
-                    ActionLogService.CloseActiveGameSession(
-                        placeName: place.Name,
-                        closedByEmployeeName: "Автоматически",
-                        actualPlayedAmount: place.PaidAmount,
-                        refundAmount: 0,
-                        needToPayAmount: 0,
-                        cashIncomeAmount: place.PaidAmount,
-                        incomeEmployeeName: incomeEmployeeName
-                    );
-
-                    CashService.AddGameSessionIncome(
-                        employeeName: "Автоматически",
-                        incomeEmployeeName: incomeEmployeeName,
-                        placeName: place.Name,
-                        title: "Игровой сеанс",
-                        description:
-                            $"{place.Name}. Время закончилось автоматически. " +
-                            $"Оплачено: {place.PaidAmount} сом.",
-                        amount: place.PaidAmount,
-                        gameSessionId: sessionId
-                    );
-
-                    if (productsAmount > 0)
-                    {
-                        CashService.AddProductOrServiceIncome(
-                            employeeName: "Автоматически",
-                            title: "Товары/услуги по сеансу",
-                            description:
-                                $"{place.Name}. Оплачено при автоматическом закрытии.\n" +
-                                productsDescription,
-                            amount: productsAmount,
-                            placeName: place.Name,
-                            gameSessionId: sessionId
-                        );
-                    }
-
-                    string message =
-                        $"{place.Name}\n" +
-                        $"Время закончилось.\n" +
-                        $"Оплачено за игру: {place.PaidAmount} сом\n";
-
-                    if (productsAmount > 0)
-                        message += $"Товары/услуги: {productsAmount} сом\n";
-
-                    message += $"\nВыручка за игру относится к сотруднику: {incomeEmployeeName}";
-
-                    AlarmSoundService.PlayOnce("Hand");
-                    MessageBox.Show(message, "Время закончилось");
-
-                    ClearPlace(place);
+                    FinalizeExpiredPrepaidPlace(place);
                     UpdateMainCashText();
                     needRedraw = true;
                     needSave = true;
@@ -1739,6 +1756,90 @@ namespace ClubTimerXbox
 
             if (needSave)
                 SaveActivePlacesToStorage();
+        }
+
+        private void FinalizeExpiredPrepaidPlace(ClubPlace place)
+        {
+            if (!place.IsBusy || place.IsOpenMode || place.IsCalculating)
+                return;
+
+            if (place.IsTimeExpiredAwaitingAcknowledgement)
+                return;
+
+            _oneMinuteWarningShownPlaceNames.Remove(place.Name);
+
+            string incomeEmployeeName =
+                place.IncomeEmployeeName ??
+                place.StartedByEmployeeName ??
+                GetCurrentEmployeeName();
+
+            var activeSession = ActionLogService.GetActiveGameSessionByPlace(place.Name);
+            Guid? sessionId = activeSession?.Id;
+            int productsAmount = GetActiveSessionProductsAndServicesTotal(place.Name);
+            string productsDescription = BuildActiveSessionSalesDescription(place.Name);
+
+            if (activeSession != null)
+            {
+                ActionLogService.CloseActiveGameSession(
+                    placeName: place.Name,
+                    closedByEmployeeName: "Автоматически",
+                    actualPlayedAmount: place.PaidAmount,
+                    refundAmount: 0,
+                    needToPayAmount: 0,
+                    cashIncomeAmount: place.PaidAmount,
+                    incomeEmployeeName: incomeEmployeeName
+                );
+
+                CashService.AddGameSessionIncome(
+                    employeeName: "Автоматически",
+                    incomeEmployeeName: incomeEmployeeName,
+                    placeName: place.Name,
+                    title: "Игровой сеанс",
+                    description:
+                        $"{place.Name}. Время закончилось автоматически. " +
+                        $"Оплачено: {place.PaidAmount} сом.",
+                    amount: place.PaidAmount,
+                    gameSessionId: sessionId
+                );
+
+                if (productsAmount > 0)
+                {
+                    CashService.AddProductOrServiceIncome(
+                        employeeName: "Автоматически",
+                        title: "Товары/услуги по сеансу",
+                        description:
+                            $"{place.Name}. Оплачено при автоматическом закрытии.\n" +
+                            productsDescription,
+                        amount: productsAmount,
+                        placeName: place.Name,
+                        gameSessionId: sessionId
+                    );
+                }
+            }
+
+            place.RemainingSeconds = 0;
+            place.StartTime = null;
+            place.IsOpenMode = false;
+            place.IsCalculating = false;
+            place.IsTimeExpiredAwaitingAcknowledgement = true;
+
+            ShowExpiredAlarmWindowIfAllowed(place);
+        }
+
+        private void AcknowledgeExpiredPlace(string placeName)
+        {
+            var place = _places.FirstOrDefault(item =>
+                item.Name.Equals(placeName, StringComparison.OrdinalIgnoreCase));
+
+            if (place == null)
+                return;
+
+            if (!place.IsTimeExpiredAwaitingAcknowledgement)
+                return;
+
+            ClearPlace(place);
+            DrawPlaces();
+            SaveActivePlacesToStorage();
         }
 
         private void CheckOneMinuteWarning(ClubPlace place)
@@ -1809,6 +1910,46 @@ namespace ClubTimerXbox
                 Owner = this
             };
 
+            window.Acknowledged += (_, _) => AcknowledgeExpiredPlace(place.Name);
+            _activeAlarmWindows[place.Name] = window;
+
+            window.Closed += (_, _) =>
+            {
+                if (_activeAlarmWindows.TryGetValue(place.Name, out var activeWindow) &&
+                    ReferenceEquals(activeWindow, window))
+                {
+                    _activeAlarmWindows.Remove(place.Name);
+                }
+            };
+
+            window.Show();
+        }
+
+        private void ShowExpiredAlarmWindowIfAllowed(ClubPlace place)
+        {
+            var settings = AlarmSettingsService.Current;
+
+            if (!settings.IsEnabled)
+                return;
+
+            if (_activeAlarmWindows.TryGetValue(place.Name, out var activeWindow))
+            {
+                activeWindow.MarkExpired();
+                activeWindow.Activate();
+                return;
+            }
+
+            var window = new WarningAlarmWindow(
+                placeName: place.Name,
+                remainingSeconds: 0,
+                soundName: settings.SoundName,
+                durationSeconds: settings.SoundDurationSeconds)
+            {
+                Owner = this
+            };
+
+            window.MarkExpired();
+            window.Acknowledged += (_, _) => AcknowledgeExpiredPlace(place.Name);
             _activeAlarmWindows[place.Name] = window;
 
             window.Closed += (_, _) =>
@@ -3053,7 +3194,10 @@ namespace ClubTimerXbox
         private ClubPlace? SelectActivePlaceForSale()
         {
             var activePlaces = _places
-                .Where(place => place.IsBusy && !place.IsCalculating)
+                .Where(place =>
+                    place.IsBusy &&
+                    !place.IsCalculating &&
+                    !place.IsTimeExpiredAwaitingAcknowledgement)
                 .ToList();
 
             if (activePlaces.Count == 0)
@@ -3367,6 +3511,9 @@ namespace ClubTimerXbox
             if (!place.IsBusy)
                 return "Свободно";
 
+            if (place.IsTimeExpiredAwaitingAcknowledgement)
+                return "Время вышло";
+
             if (place.IsCalculating)
                 return "Расчёт";
 
@@ -3380,6 +3527,9 @@ namespace ClubTimerXbox
         {
             if (!place.IsBusy)
                 return "00:00";
+
+            if (place.IsTimeExpiredAwaitingAcknowledgement)
+                return "ВЫШЛО";
 
             if (place.IsCalculating)
                 return "СТОП";
@@ -3396,6 +3546,9 @@ namespace ClubTimerXbox
                 return "ПКМ — выбрать тариф";
 
             int productsAmount = GetActiveSessionProductsAndServicesTotal(place.Name);
+
+            if (place.IsTimeExpiredAwaitingAcknowledgement)
+                return $"Тариф закрыт: {place.PaidAmount} сом. Нажмите карточку, чтобы освободить место.";
 
             if (place.IsCalculating)
             {
@@ -3586,6 +3739,11 @@ namespace ClubTimerXbox
             if (!place.IsBusy)
                 return new SolidColorBrush(Color.FromRgb(74, 222, 128));
 
+            if (place.IsTimeExpiredAwaitingAcknowledgement)
+                return _expiredCardBlinkState
+                    ? new SolidColorBrush(Color.FromRgb(254, 202, 202))
+                    : new SolidColorBrush(Color.FromRgb(248, 113, 113));
+
             if (place.IsCalculating)
                 return new SolidColorBrush(Color.FromRgb(251, 191, 36));
 
@@ -3603,6 +3761,13 @@ namespace ClubTimerXbox
                     return new SolidColorBrush(Color.FromRgb(30, 41, 59));
 
                 return new SolidColorBrush(Color.FromRgb(24, 32, 43));
+            }
+
+            if (place.IsTimeExpiredAwaitingAcknowledgement)
+            {
+                return _expiredCardBlinkState
+                    ? new SolidColorBrush(Color.FromRgb(127, 29, 29))
+                    : new SolidColorBrush(Color.FromRgb(45, 15, 18));
             }
 
             if (place.IsCalculating)

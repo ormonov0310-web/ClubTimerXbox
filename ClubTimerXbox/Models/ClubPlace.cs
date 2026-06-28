@@ -19,6 +19,10 @@ namespace ClubTimerXbox.Models
         // После нажатия OK место станет свободным.
         public bool IsCalculating { get; set; }
 
+        // Предоплаченный тариф закончился, деньги уже записаны,
+        // но админ ещё не подтвердил освобождение места.
+        public bool IsTimeExpiredAwaitingAcknowledgement { get; set; }
+
         public int PaidAmount { get; set; }
         public int PrepaidCashAmount { get; set; }
         public int PrepaidMBankAmount { get; set; }
