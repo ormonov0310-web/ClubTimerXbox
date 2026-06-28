@@ -9,10 +9,13 @@ namespace ClubTimerXbox
 {
     public class EmployeeSalaryTakenWindow : Window
     {
+        private const int CashReserveAmount = 1000;
+
         private readonly string _employeeName;
         private readonly DateTime _monthStart;
         private readonly Action? _onChanged;
         private readonly TextBlock _remainingText = new TextBlock();
+        private readonly TextBlock _cashLimitText = new TextBlock();
         private readonly TextBox _amountBox = new TextBox();
 
         public EmployeeSalaryTakenWindow(
@@ -26,7 +29,7 @@ namespace ClubTimerXbox
 
             Title = "Взять аванс";
             Width = 430;
-            Height = 300;
+            Height = 365;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ResizeMode = ResizeMode.NoResize;
             Background = new SolidColorBrush(Color.FromRgb(16, 20, 28));
@@ -56,6 +59,12 @@ namespace ClubTimerXbox
             _remainingText.FontWeight = FontWeights.Bold;
             _remainingText.Margin = new Thickness(0, 0, 0, 10);
             panel.Children.Add(_remainingText);
+
+            _cashLimitText.Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225));
+            _cashLimitText.FontSize = 15;
+            _cashLimitText.TextWrapping = TextWrapping.Wrap;
+            _cashLimitText.Margin = new Thickness(0, 0, 0, 14);
+            panel.Children.Add(_cashLimitText);
 
             panel.Children.Add(new TextBlock
             {
@@ -108,6 +117,28 @@ namespace ClubTimerXbox
         {
             int remaining = GetRemainingAmount();
             _remainingText.Text = $"Осталось: {remaining} сом";
+
+            int? currentCash = GetCurrentActualCashBalance();
+
+            if (!currentCash.HasValue)
+            {
+                _cashLimitText.Text =
+                    "Наличка в кассе ещё не принята. Сначала завершите приёмку налички.";
+                _cashLimitText.Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113));
+                return;
+            }
+
+            int availableCash = GetAvailableCashForAdvance(currentCash.Value);
+            int maxAdvance = Math.Min(remaining, availableCash);
+
+            _cashLimitText.Text =
+                $"В кассе наличными: {currentCash.Value} сом\n" +
+                $"Оставляем на сдачу: {CashReserveAmount} сом\n" +
+                $"Можно взять сейчас: {maxAdvance} сом";
+
+            _cashLimitText.Foreground = maxAdvance > 0
+                ? new SolidColorBrush(Color.FromRgb(203, 213, 225))
+                : new SolidColorBrush(Color.FromRgb(248, 113, 113));
         }
 
         private int GetRemainingAmount()
@@ -118,6 +149,19 @@ namespace ClubTimerXbox
                 .FirstOrDefault(employee => employee.EmployeeName == _employeeName);
 
             return employeeSalary?.RemainingAmount ?? 0;
+        }
+
+        private int? GetCurrentActualCashBalance()
+        {
+            DateTime nextMonthStart = _monthStart.AddMonths(1);
+            return CashBalanceSummaryService.CalculateActualCashBalanceByPeriod(
+                _monthStart,
+                nextMonthStart);
+        }
+
+        private static int GetAvailableCashForAdvance(int currentCash)
+        {
+            return Math.Max(0, currentCash - CashReserveAmount);
         }
 
         private void TakeAdvance()
@@ -144,6 +188,34 @@ namespace ClubTimerXbox
                 return;
             }
 
+            int? currentCash = GetCurrentActualCashBalance();
+
+            if (!currentCash.HasValue)
+            {
+                MessageBox.Show(
+                    "Сначала завершите приёмку налички.\n\n" +
+                    "Система должна знать фактическую сумму в кассе, иначе аванс наличными брать нельзя.",
+                    "Взять аванс",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+
+            int availableCash = GetAvailableCashForAdvance(currentCash.Value);
+
+            if (availableCash <= 0)
+            {
+                MessageBox.Show(
+                    $"В кассе мало налички для аванса.\n\n" +
+                    $"Сейчас в кассе: {currentCash.Value} сом\n" +
+                    $"Нужно оставить на сдачу: {CashReserveAmount} сом\n\n" +
+                    $"Доступно для аванса: 0 сом.",
+                    "Взять аванс",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+
             if (!int.TryParse(_amountBox.Text.Trim(), out int amount) || amount <= 0)
             {
                 MessageBox.Show("Введите сумму больше 0.", "Взять аванс");
@@ -155,6 +227,19 @@ namespace ClubTimerXbox
                 MessageBox.Show(
                     $"Нельзя взять больше остатка: {remaining} сом.",
                     "Взять аванс");
+                return;
+            }
+
+            if (amount > availableCash)
+            {
+                MessageBox.Show(
+                    $"В кассе недостаточно свободной налички.\n\n" +
+                    $"Сейчас в кассе: {currentCash.Value} сом\n" +
+                    $"Нужно оставить на сдачу: {CashReserveAmount} сом\n" +
+                    $"Можно взять не больше: {availableCash} сом.",
+                    "Взять аванс",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
                 return;
             }
 
