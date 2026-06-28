@@ -81,6 +81,19 @@ namespace ClubTimerXbox
                 return;
             }
 
+            if (IsStockAcceptanceBlockingEmployeeStats())
+            {
+                MessageBox.Show(
+                    "Сначала завершите приёмку.\n\n" +
+                    "После приёмки можно открыть статистику сотрудника и взять аванс.",
+                    "Приёмка смены",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning
+                );
+
+                return;
+            }
+
             string employeeName = EmployeeService.CurrentEmployee.Name;
 
             var confirmWindow = new EmployeePinConfirmWindow(employeeName)
@@ -104,12 +117,30 @@ namespace ClubTimerXbox
                 return;
             }
 
+            if (IsStockAcceptanceBlockingEmployeeStats())
+            {
+                MessageBox.Show(
+                    "Сначала завершите приёмку.",
+                    "Приёмка смены",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning
+                );
+
+                return;
+            }
+
             var statsWindow = new EmployeeStatsWindow(EmployeeService.CurrentEmployee.Name)
             {
                 Owner = this
             };
 
             statsWindow.ShowDialog();
+        }
+
+        private bool IsStockAcceptanceBlockingEmployeeStats()
+        {
+            ActionLogService.EnsureAcceptanceForCurrentShift();
+            return ShiftAcceptanceService.IsAcceptanceRequired();
         }
     }
 }
