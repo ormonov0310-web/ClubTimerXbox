@@ -15,7 +15,6 @@
 
   <ItemGroup>
     <Resource Include="Assets\AppIcon\clubtimer.ico" />
-    <None Include="Assets\AppIcon\clubtimer.svg" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Assets\AppIcon\clubtimer-icon-1024.png" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Assets\ProductLogos\*.png" Exclude="Assets\ProductLogos\_preview.png" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Assets\ProductLogos\*.jpg" CopyToOutputDirectory="PreserveNewest" />
