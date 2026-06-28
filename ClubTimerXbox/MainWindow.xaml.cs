@@ -115,7 +115,8 @@ namespace ClubTimerXbox
 
                 if (place.IsBusy && !place.IsOpenMode && !place.IsCalculating)
                 {
-                    int passedSeconds = (int)(DateTime.Now - saved.LastSavedAt).TotalSeconds;
+                    DateTime now = DateTime.Now;
+                    int passedSeconds = (int)(now - saved.LastSavedAt).TotalSeconds;
 
                     if (passedSeconds < 0)
                         passedSeconds = 0;
@@ -128,6 +129,10 @@ namespace ClubTimerXbox
                         place.IsCalculating = true;
                         place.StartTime = null;
                     }
+                    else
+                    {
+                        place.StartTime = now;
+                    }
                 }
             }
         }
@@ -135,11 +140,14 @@ namespace ClubTimerXbox
         private void SaveActivePlacesToStorage()
         {
             var activePlaces = new List<SavedActivePlace>();
+            DateTime now = DateTime.Now;
 
             foreach (var place in _places)
             {
                 if (!place.IsBusy)
                     continue;
+
+                SyncPrepaidRemainingFromClock(place, now);
 
                 activePlaces.Add(new SavedActivePlace
                 {
@@ -159,7 +167,7 @@ namespace ClubTimerXbox
                     TotalMinutes = place.TotalMinutes,
                     RemainingSeconds = place.RemainingSeconds,
 
-                    LastSavedAt = DateTime.Now,
+                    LastSavedAt = now,
 
                     PricePerMinute = place.PricePerMinute,
                     ActivePricePerMinute = place.ActivePricePerMinute,
@@ -178,6 +186,65 @@ namespace ClubTimerXbox
             }
 
             ActiveSessionStorageService.Save(activePlaces);
+        }
+
+        private int GetCurrentPrepaidRemainingSeconds(ClubPlace place, DateTime now)
+        {
+            if (place.IsOpenMode)
+                return 0;
+
+            if (place.StartTime == null)
+                return Math.Max(0, place.RemainingSeconds);
+
+            int elapsedSeconds = (int)Math.Floor((now - place.StartTime.Value).TotalSeconds);
+
+            if (elapsedSeconds < 0)
+                elapsedSeconds = 0;
+
+            return Math.Max(0, place.RemainingSeconds - elapsedSeconds);
+        }
+
+        private bool SyncPrepaidRemainingFromClock(ClubPlace place, DateTime now)
+        {
+            if (!place.IsBusy)
+                return false;
+
+            if (place.IsOpenMode)
+                return false;
+
+            if (place.IsCalculating)
+                return false;
+
+            DateTime? startTime = place.StartTime;
+            int currentRemainingSeconds = GetCurrentPrepaidRemainingSeconds(place, now);
+            bool changed =
+                currentRemainingSeconds != place.RemainingSeconds ||
+                startTime == null;
+
+            if (!changed)
+                return false;
+
+            place.RemainingSeconds = currentRemainingSeconds;
+
+            if (currentRemainingSeconds <= 0)
+            {
+                place.StartTime = null;
+            }
+            else if (startTime == null)
+            {
+                place.StartTime = now;
+            }
+            else
+            {
+                int elapsedSeconds = (int)Math.Floor((now - startTime.Value).TotalSeconds);
+
+                if (elapsedSeconds < 0)
+                    elapsedSeconds = 0;
+
+                place.StartTime = startTime.Value.AddSeconds(elapsedSeconds);
+            }
+
+            return true;
         }
 
         private void ReloadPlacesFromSettings()
@@ -711,9 +778,13 @@ namespace ClubTimerXbox
             int mBankAmount)
         {
             string employeeName = GetCurrentEmployeeName();
+            DateTime now = DateTime.Now;
+
+            SyncPrepaidRemainingFromClock(place, now);
 
             place.TotalMinutes += minutes;
             place.RemainingSeconds += minutes * 60;
+            place.StartTime = now;
             place.PaidAmount += price;
             place.PrepaidCashAmount += cashAmount;
             place.PrepaidMBankAmount += mBankAmount;
@@ -793,10 +864,16 @@ namespace ClubTimerXbox
                 return;
             }
 
+            DateTime now = DateTime.Now;
+
+            SyncPrepaidRemainingFromClock(place, now);
+
             place.RemainingSeconds -= penaltySeconds;
 
             if (place.RemainingSeconds < 0)
                 place.RemainingSeconds = 0;
+
+            place.StartTime = place.RemainingSeconds > 0 ? now : null;
 
             int penaltyPriceForMessage = CalculatePriceForMinutes(place.ActivePricePerMinute, minutes);
 
@@ -1552,6 +1629,7 @@ namespace ClubTimerXbox
         {
             bool needRedraw = false;
             bool needSave = false;
+            DateTime now = DateTime.Now;
 
             _settingsUpdateBlinkState = !_settingsUpdateBlinkState;
             UpdateSettingsButtonUpdateState();
@@ -1570,12 +1648,15 @@ namespace ClubTimerXbox
                     continue;
                 }
 
-                if (place.RemainingSeconds > 0)
+                if (SyncPrepaidRemainingFromClock(place, now))
                 {
-                    place.RemainingSeconds--;
                     needRedraw = true;
                     needSave = true;
+                }
 
+                if (place.RemainingSeconds > 0)
+                {
+                    needRedraw = true;
                     CheckOneMinuteWarning(place);
                 }
 
@@ -3195,7 +3276,8 @@ namespace ClubTimerXbox
                     place.StartTime);
             }
 
-            int remainingValue = CalculatePriceBySeconds(place.ActivePricePerMinute, place.RemainingSeconds);
+            int remainingSeconds = GetCurrentPrepaidRemainingSeconds(place, DateTime.Now);
+            int remainingValue = CalculatePriceBySeconds(place.ActivePricePerMinute, remainingSeconds);
             int actualPrice = place.PaidAmount - remainingValue;
 
             if (actualPrice < 0)
@@ -3305,7 +3387,7 @@ namespace ClubTimerXbox
             if (place.IsOpenMode)
                 return $"{GetCurrentSegmentPlayedMinutes(place)} мин.";
 
-            return TariffService.FormatTime(place.RemainingSeconds);
+            return TariffService.FormatTime(GetCurrentPrepaidRemainingSeconds(place, DateTime.Now));
         }
 
         private string GetMoneyText(ClubPlace place)
