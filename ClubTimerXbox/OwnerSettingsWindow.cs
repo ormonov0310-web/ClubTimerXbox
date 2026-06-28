@@ -24,6 +24,7 @@ namespace ClubTimerXbox
         private TextBlock? _updateTitleText;
         private TextBlock? _updateSubtitleText;
         private Button? _updateButton;
+        private bool _isInstallingUpdate;
 
         public OwnerSettingsWindow(
             Action openTariffSettings,
@@ -190,6 +191,9 @@ namespace ClubTimerXbox
                 return;
             }
 
+            if (_isInstallingUpdate)
+                return;
+
             try
             {
                 var info = await AppUpdateService.GetLatestUpdateInfoAsync(_getPlaces(), forceRefresh);
@@ -241,6 +245,12 @@ namespace ClubTimerXbox
             if (_updateButton == null || _updateSubtitleText == null)
                 return;
 
+            if (_isInstallingUpdate)
+                return;
+
+            _isInstallingUpdate = true;
+            _refreshTimer.Stop();
+
             _updateButton.IsEnabled = false;
             _updateButton.Content = "Скачиваем и запускаем обновление...";
             _updateSubtitleText.Text =
@@ -253,12 +263,19 @@ namespace ClubTimerXbox
                 _updateSubtitleText.Text = result.Message;
 
                 if (result.ShouldShutdown)
+                {
                     Application.Current.Shutdown();
-                else
-                    await RefreshUpdateCardAsync(forceRefresh: true);
+                    return;
+                }
+
+                _isInstallingUpdate = false;
+                _refreshTimer.Start();
+                await RefreshUpdateCardAsync(forceRefresh: true);
             }
             catch (Exception ex)
             {
+                _isInstallingUpdate = false;
+                _refreshTimer.Start();
                 _updateSubtitleText.Text = ex.Message;
                 _updateButton.Content = "Попробовать снова";
                 _updateButton.IsEnabled = true;

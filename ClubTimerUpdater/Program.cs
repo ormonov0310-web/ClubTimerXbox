@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -28,6 +30,18 @@ namespace ClubTimerUpdater
                 return 2;
             }
 
+            using var singleInstance = CreateSingleInstanceMutex(options, out bool ownsMutex);
+            if (!ownsMutex)
+            {
+                UpdateLog.Write("Another updater instance is already running.");
+                MessageBox.Show(
+                    "Обновление уже запущено. Дождитесь завершения первого окна.",
+                    "ClubTimerXbox update",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return 0;
+            }
+
             var app = new Application
             {
                 ShutdownMode = ShutdownMode.OnMainWindowClose
@@ -36,6 +50,20 @@ namespace ClubTimerUpdater
             var window = new UpdateProgressWindow(options);
             app.Run(window);
             return window.ExitCode;
+        }
+
+        private static Mutex CreateSingleInstanceMutex(UpdateOptions options, out bool ownsMutex)
+        {
+            string targetDir = Path.GetFullPath(options.TargetDir).TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            byte[] hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(targetDir.ToLowerInvariant()));
+            string hash = Convert.ToHexString(hashBytes).Substring(0, 16);
+
+            return new Mutex(
+                initiallyOwned: true,
+                name: $"ClubTimerXboxUpdater_{hash}",
+                createdNew: out ownsMutex);
         }
     }
 
@@ -158,7 +186,10 @@ namespace ClubTimerUpdater
 
             SetProgress(10, "10% - Закрываем программу");
             UpdateLog.Write("Waiting for process exit");
-            WaitForProcessExit(_options.ProcessName, TimeSpan.FromSeconds(_options.WaitSeconds));
+            WaitForProcessExit(
+                _options.ProcessName,
+                _options.TargetDir,
+                TimeSpan.FromSeconds(_options.WaitSeconds));
 
             SetProgress(25, "25% - Создаем резервную копию");
             string backupPath = CreateBackup(_options.TargetDir, _options.BackupRoot);
@@ -201,17 +232,24 @@ namespace ClubTimerUpdater
             StartApp(Path.Combine(_options.TargetDir, _options.MainExe));
         }
 
-        private static void WaitForProcessExit(string processName, TimeSpan timeout)
+        private static void WaitForProcessExit(string processName, string targetDir, TimeSpan timeout)
         {
             if (string.IsNullOrWhiteSpace(processName))
                 return;
 
             string cleanName = Path.GetFileNameWithoutExtension(processName);
+            string targetRoot = Path.GetFullPath(targetDir).TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
             DateTime deadline = DateTime.Now.Add(timeout);
 
             while (DateTime.Now < deadline)
             {
-                var processes = Process.GetProcessesByName(cleanName);
+                var processes = Process
+                    .GetProcessesByName(cleanName)
+                    .Where(process => IsProcessFromTargetDir(process, targetRoot))
+                    .ToArray();
+
                 if (processes.Length == 0)
                     return;
 
@@ -223,6 +261,23 @@ namespace ClubTimerUpdater
 
             throw new InvalidOperationException(
                 $"Process {cleanName} did not exit within {timeout.TotalSeconds:0} seconds.");
+        }
+
+        private static bool IsProcessFromTargetDir(Process process, string targetRoot)
+        {
+            try
+            {
+                string? processPath = process.MainModule?.FileName;
+                if (string.IsNullOrWhiteSpace(processPath))
+                    return true;
+
+                string fullPath = Path.GetFullPath(processPath);
+                return fullPath.StartsWith(targetRoot, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return true;
+            }
         }
 
         private static string CreateBackup(string targetDir, string backupRoot)
@@ -345,9 +400,30 @@ namespace ClubTimerUpdater
         {
             lock (Sync)
             {
-                File.AppendAllText(
-                    LogPath,
-                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}");
+                string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
+
+                for (int attempt = 0; attempt < 5; attempt++)
+                {
+                    try
+                    {
+                        using var stream = new FileStream(
+                            LogPath,
+                            FileMode.Append,
+                            FileAccess.Write,
+                            FileShare.ReadWrite);
+                        using var writer = new StreamWriter(stream, Encoding.UTF8);
+                        writer.Write(line);
+                        return;
+                    }
+                    catch (IOException) when (attempt < 4)
+                    {
+                        Thread.Sleep(100);
+                    }
+                    catch (UnauthorizedAccessException) when (attempt < 4)
+                    {
+                        Thread.Sleep(100);
+                    }
+                }
             }
         }
     }

@@ -18,6 +18,8 @@ namespace ClubTimerXbox.Services
         private static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(1);
         private static DateTime _lastCheck = DateTime.MinValue;
         private static AppUpdateInfo? _lastInfo;
+        private static readonly object InstallSync = new object();
+        private static bool _installInProgress;
 
         private static string BaseUrl => FirebaseSettings.DatabaseUrl.TrimEnd('/');
 
@@ -93,39 +95,73 @@ namespace ClubTimerXbox.Services
 
         public static async Task<InstallUpdateResult> InstallLatestUpdateAsync(IReadOnlyList<ClubPlace> places)
         {
-            var manifest = await ReadManifestAsync();
+            if (!TryBeginInstall())
+                return InstallUpdateResult.Blocked("Обновление уже запускается. Дождитесь окна обновления.");
 
-            if (manifest == null || string.IsNullOrWhiteSpace(manifest.DownloadUrl))
+            bool updaterStarted = false;
+
+            try
             {
-                await ReportStatusAsync(manifest, places, "no_update", "Release update is not configured.");
-                return InstallUpdateResult.Blocked("Release update is not configured.");
-            }
+                var manifest = await ReadManifestAsync();
 
-            if (!IsNewerVersion(manifest.LatestVersion, AppVersionService.Version))
+                if (manifest == null || string.IsNullOrWhiteSpace(manifest.DownloadUrl))
+                {
+                    await ReportStatusAsync(manifest, places, "no_update", "Release update is not configured.");
+                    return InstallUpdateResult.Blocked("Release update is not configured.");
+                }
+
+                if (!IsNewerVersion(manifest.LatestVersion, AppVersionService.Version))
+                {
+                    await ReportStatusAsync(manifest, places, "current", "Current version is already installed.");
+                    return InstallUpdateResult.Blocked("Current version is already installed.");
+                }
+
+                int activePlaces = places.Count(place => place.IsBusy);
+                if (activePlaces > 0)
+                {
+                    string message = $"Club is busy. Active places: {activePlaces}.";
+                    await ReportStatusAsync(manifest, places, "waiting_free_club", message);
+                    return InstallUpdateResult.Blocked(message);
+                }
+
+                string packagePath = await DownloadPackageAsync(manifest);
+                StartUpdater(packagePath);
+                updaterStarted = true;
+
+                await ReportStatusAsync(
+                    manifest,
+                    places,
+                    "installing",
+                    $"Installing update {manifest.LatestVersion}.");
+
+                return InstallUpdateResult.ReadyToShutdown(
+                    $"Installing update {manifest.LatestVersion}. The app will restart.");
+            }
+            finally
             {
-                await ReportStatusAsync(manifest, places, "current", "Current version is already installed.");
-                return InstallUpdateResult.Blocked("Current version is already installed.");
+                if (!updaterStarted)
+                    EndInstall();
             }
+        }
 
-            int activePlaces = places.Count(place => place.IsBusy);
-            if (activePlaces > 0)
+        private static bool TryBeginInstall()
+        {
+            lock (InstallSync)
             {
-                string message = $"Club is busy. Active places: {activePlaces}.";
-                await ReportStatusAsync(manifest, places, "waiting_free_club", message);
-                return InstallUpdateResult.Blocked(message);
+                if (_installInProgress)
+                    return false;
+
+                _installInProgress = true;
+                return true;
             }
+        }
 
-            string packagePath = await DownloadPackageAsync(manifest);
-            StartUpdater(packagePath);
-
-            await ReportStatusAsync(
-                manifest,
-                places,
-                "installing",
-                $"Installing update {manifest.LatestVersion}.");
-
-            return InstallUpdateResult.ReadyToShutdown(
-                $"Installing update {manifest.LatestVersion}. The app will restart.");
+        private static void EndInstall()
+        {
+            lock (InstallSync)
+            {
+                _installInProgress = false;
+            }
         }
 
         private static async Task<UpdateManifest?> ReadManifestAsync()
