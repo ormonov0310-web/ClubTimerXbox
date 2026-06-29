@@ -2008,6 +2008,19 @@ namespace ClubTimerXbox.Services
                     return;
                 }
 
+                if (command.Type == "AddManualEmployeeMoneyLoss")
+                {
+                    ApplyAddManualEmployeeMoneyLoss(command);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Фиксированный штраф добавлен: {command.EmployeeName}, {command.Amount} сом."
+                    );
+
+                    return;
+                }
+
                 if (command.Type == "VerifyCashlessActual")
                 {
                     string message = ApplyVerifyCashlessActual(command);
@@ -2658,6 +2671,56 @@ namespace ClubTimerXbox.Services
             return item;
         }
 
+        private static void ApplyAddManualEmployeeMoneyLoss(FirebaseCommand command)
+        {
+            string employeeName = command.EmployeeName.Trim();
+
+            if (string.IsNullOrWhiteSpace(employeeName))
+                throw new Exception("Не указан сотрудник.");
+
+            if (command.Amount <= 0)
+                throw new Exception("Сумма штрафа должна быть больше 0.");
+
+            var employee = EmployeeService
+                .GetAllEmployees()
+                .FirstOrDefault(item =>
+                    item.Name.Equals(employeeName, StringComparison.OrdinalIgnoreCase));
+
+            if (employee == null)
+                throw new Exception($"Сотрудник не найден: {employeeName}.");
+
+            string title = string.IsNullOrWhiteSpace(command.Title)
+                ? "Ручной денежный штраф"
+                : command.Title.Trim();
+            string description = string.IsNullOrWhiteSpace(command.Description)
+                ? "Закреплено владельцем из сырых денежных потерь."
+                : command.Description.Trim();
+            string fullDescription =
+                $"{description}\n" +
+                "Тип: фиксированная денежная потеря.\n" +
+                "Эта запись не уменьшается автоматической балансировкой кассы.";
+
+            CashService.AddShortage(
+                checkedByEmployeeName: "Владелец",
+                responsibleEmployeeName: employee.Name,
+                title: title,
+                description: fullDescription,
+                amount: command.Amount
+            );
+
+            EmployeeLossService.AddLoss(
+                responsibleEmployeeName: employee.Name,
+                checkedByEmployeeName: "Владелец",
+                lossType: title,
+                title: title,
+                description: fullDescription,
+                amount: command.Amount,
+                note: "Ручное фиксированное удержание владельцем",
+                lossKind: "money",
+                isFixed: true
+            );
+        }
+
         private static string ApplyVerifyCashlessActual(FirebaseCommand command)
         {
             if (command.Amount < 0)
@@ -2798,6 +2861,19 @@ namespace ClubTimerXbox.Services
                 monthStart,
                 nextMonthStart
             );
+            int expectedCash = CalculateExpectedCashBalanceByPeriod(
+                monthStart,
+                nextMonthStart
+            );
+            int expectedCashless = CalculateExpectedCashlessBalanceByPeriod(
+                monthStart,
+                nextMonthStart
+            );
+            int cashDifference = actualCash.HasValue
+                ? actualCash.Value - expectedCash
+                : 0;
+            int normalizedExpectedCashless = expectedCashless - cashDifference;
+            int normalizedDifference = actualCashless - normalizedExpectedCashless;
             string note = string.IsNullOrWhiteSpace(command.Description)
                 ? "Баланс безнала владельцем"
                 : command.Description;
@@ -2806,6 +2882,37 @@ namespace ClubTimerXbox.Services
                 amount: actualCashless,
                 note: note
             );
+
+            int closed = CashReconciliationService.CloseOpenItemsForBalance(
+                monthStart,
+                nextMonthStart,
+                "Владелец",
+                $"Баланс зафиксирован: безнал {actualCashless} сом. Старые открытые разницы перенесены в итоговую сырую корректировку."
+            );
+
+            if (normalizedDifference != 0)
+            {
+                string cashFactText = actualCash.HasValue
+                    ? $"{actualCash.Value} сом"
+                    : "нет приёмки";
+                string rawNote =
+                    "Итоговая сырая корректировка после баланса.\n" +
+                    $"Наличные по программе: {expectedCash} сом\n" +
+                    $"Наличные факт: {cashFactText}\n" +
+                    $"Коррекция программы по наличке: {cashDifference:+#;-#;0} сом\n" +
+                    $"Безнал по программе до коррекции: {expectedCashless} сом\n" +
+                    $"Безнал по программе после коррекции: {normalizedExpectedCashless} сом\n" +
+                    $"Безнал факт: {actualCashless} сом\n" +
+                    $"Итог: {(normalizedDifference < 0 ? "сырые потери" : "излишек")} {Math.Abs(normalizedDifference)} сом";
+
+                CashReconciliationService.AddBalanceRawDifference(
+                    expectedAmount: normalizedExpectedCashless,
+                    actualAmount: actualCashless,
+                    amount: Math.Abs(normalizedDifference),
+                    isShortage: normalizedDifference < 0,
+                    note: rawNote
+                );
+            }
 
             CashlessBalanceCheckpointService.AddCurrentMonthCheckpoint(
                 actualCashless,
@@ -2820,18 +2927,16 @@ namespace ClubTimerXbox.Services
                 );
             }
 
-            int closed = CashReconciliationService.CloseOpenItemsForBalance(
-                monthStart,
-                nextMonthStart,
-                "Владелец",
-                $"Баланс безнала зафиксирован: {actualCashless} сом. Старые разницы закрыты и больше не участвуют в автозачетах."
-            );
-
             string cashPart = actualCash.HasValue
                 ? $" Наличные зафиксированы: {actualCash.Value} сом."
                 : " Наличные не зафиксированы: в этом месяце нет приёмки.";
+            string rawPart = normalizedDifference == 0
+                ? " Сырых потерь и излишков после коррекции нет."
+                : normalizedDifference < 0
+                    ? $" В сырые потери перенесено {Math.Abs(normalizedDifference)} сом."
+                    : $" В излишек перенесено {normalizedDifference} сом.";
 
-            return $"Баланс безнала зафиксирован: {actualCashless} сом.{cashPart} Закрыто старых сверочных записей: {closed}. Старые штрафы не менялись.";
+            return $"Баланс безнала зафиксирован: {actualCashless} сом.{cashPart}{rawPart} Закрыто старых открытых сверок: {closed}.";
         }
 
         private static int ForgiveExistingCashShortagesWithCashlessExtra(
@@ -2840,7 +2945,7 @@ namespace ClubTimerXbox.Services
             DateTime toExclusive)
         {
             if (cashlessExtraAmount <= 0 ||
-                cashlessExtraAmount >= CashReconciliationService.AutoResolveLimit)
+                cashlessExtraAmount > CashReconciliationService.AutoResolveLimit)
             {
                 return 0;
             }

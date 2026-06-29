@@ -17,7 +17,9 @@ namespace ClubTimerXbox
         private readonly Action _openTuyaSettings;
         private readonly Action _openAlarmSettings;
         private readonly Func<IReadOnlyList<ClubPlace>> _getPlaces;
-        private readonly Func<Task<AppUpdateService.InstallUpdateResult>> _installUpdate;
+        private readonly Func<
+            IProgress<AppUpdateService.AppUpdateProgress>,
+            Task<AppUpdateService.InstallUpdateResult>> _installUpdate;
         private readonly DispatcherTimer _refreshTimer = new DispatcherTimer();
 
         private Border? _updateCard;
@@ -32,7 +34,9 @@ namespace ClubTimerXbox
             Action openTuyaSettings,
             Action openAlarmSettings,
             Func<IReadOnlyList<ClubPlace>> getPlaces,
-            Func<Task<AppUpdateService.InstallUpdateResult>> installUpdate)
+            Func<
+                IProgress<AppUpdateService.AppUpdateProgress>,
+                Task<AppUpdateService.InstallUpdateResult>> installUpdate)
         {
             _openTariffSettings = openTariffSettings;
             _openStockSettings = openStockSettings;
@@ -78,8 +82,11 @@ namespace ClubTimerXbox
             root.Children.Add(new TextBlock
             {
                 Text =
-                    "Здесь настройки, которые не должны быть доступны обычным сотрудникам. " +
-                    "Тарифы, склад, закупы и розетки находятся здесь.",
+                    $"Club Timer Xbox\n" +
+                    $"Версия {AppUpdateService.FormatDisplayVersion(AppVersionService.Version)}\n" +
+                    $"Разработчик: ormonov0310-web\n" +
+                    $"GitHub: github.com/ormonov0310-web\n" +
+                    $"Email: ormonov0310@gmail.com",
                 Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
                 FontSize = 15,
                 TextWrapping = TextWrapping.Wrap,
@@ -252,14 +259,21 @@ namespace ClubTimerXbox
             _refreshTimer.Stop();
 
             _updateButton.IsEnabled = false;
-            _updateButton.Content = "Скачиваем и запускаем обновление...";
+            _updateButton.Content = "Обновление уже запускается...";
             _updateSubtitleText.Text =
-                "Скачиваем пакет. После скачивания откроется окно установки. " +
-                "Не выключайте компьютер.";
+                "Открываем экран скачивания. Не нажимайте кнопку повторно.";
+
+            UpdateInstallProgressWindow? progressWindow = null;
 
             try
             {
-                var result = await _installUpdate();
+                progressWindow = new UpdateInstallProgressWindow
+                {
+                    Owner = this
+                };
+
+                progressWindow.Show();
+                var result = await progressWindow.RunAsync(_installUpdate);
                 _updateSubtitleText.Text = result.Message;
 
                 if (result.ShouldShutdown)
@@ -269,11 +283,13 @@ namespace ClubTimerXbox
                 }
 
                 _isInstallingUpdate = false;
+                progressWindow.Close();
                 _refreshTimer.Start();
                 await RefreshUpdateCardAsync(forceRefresh: true);
             }
             catch (Exception ex)
             {
+                progressWindow?.Close();
                 _isInstallingUpdate = false;
                 _refreshTimer.Start();
                 _updateSubtitleText.Text = ex.Message;

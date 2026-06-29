@@ -9,7 +9,7 @@ namespace ClubTimerXbox.Services
 {
     public static class CashReconciliationService
     {
-        public const int AutoResolveLimit = 1000;
+        public const int AutoResolveLimit = 500;
 
         private static readonly string FolderPath =
             Path.Combine(
@@ -107,35 +107,72 @@ namespace ClubTimerXbox.Services
             return item;
         }
 
+        public static CashReconciliationItem AddBalanceRawDifference(
+            int expectedAmount,
+            int actualAmount,
+            int amount,
+            bool isShortage,
+            string note)
+        {
+            var item = new CashReconciliationItem
+            {
+                Id = Guid.NewGuid(),
+                CreatedAt = DateTime.Now,
+                Kind = isShortage
+                    ? CashReconciliationKind.CashlessShortage
+                    : CashReconciliationKind.CashlessExtra,
+                Status = CashReconciliationStatus.Open,
+                Amount = Math.Max(0, amount),
+                ExpectedAmount = expectedAmount,
+                ActualAmount = actualAmount,
+                CheckedByEmployeeName = "Владелец",
+                ResponsibleEmployeeName = "",
+                Title = isShortage
+                    ? "Сырые потери"
+                    : "Излишек после корректировки",
+                Note = note.Trim()
+            };
+
+            _items.Add(item);
+            Save();
+
+            return item;
+        }
+
         public static void AutoResolveSmallPaymentMistakes()
         {
-            AutoResolveOppositeSmallItems(
+            bool changed = false;
+
+            changed |= AutoResolveOppositeSmallItems(
                 extraKind: CashReconciliationKind.CashExtra,
                 shortageKind: CashReconciliationKind.CashlessShortage,
                 extraResolvedNote: "Автоматически закрыто: безнал указали в программе, а деньги оказались наличными.",
                 shortageResolvedNote: "Автоматически закрыто излишком налички: ошибка типа оплаты."
             );
 
-            AutoResolveOppositeSmallItems(
+            changed |= AutoResolveOppositeSmallItems(
                 extraKind: CashReconciliationKind.CashlessExtra,
                 shortageKind: CashReconciliationKind.CashShortage,
                 extraResolvedNote: "Автоматически закрыто: наличку указали в программе, а деньги оказались безналом.",
                 shortageResolvedNote: "Автоматически закрыто излишком безнала: ошибка типа оплаты."
             );
+
+            if (changed)
+                Save();
         }
 
-        private static void AutoResolveOppositeSmallItems(
+        private static bool AutoResolveOppositeSmallItems(
             CashReconciliationKind extraKind,
             CashReconciliationKind shortageKind,
             string extraResolvedNote,
             string shortageResolvedNote)
         {
+            bool changed = false;
             var extras = _items
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
                     item.Kind == extraKind &&
-                    item.Amount > 0 &&
-                    item.Amount < AutoResolveLimit)
+                    IsAutoResolvablePaymentMistakeAmount(item.Amount))
                 .OrderBy(item => item.CreatedAt)
                 .ToList();
 
@@ -143,8 +180,7 @@ namespace ClubTimerXbox.Services
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
                     item.Kind == shortageKind &&
-                    item.Amount > 0 &&
-                    item.Amount < AutoResolveLimit)
+                    IsAutoResolvablePaymentMistakeAmount(item.Amount))
                 .OrderBy(item => item.CreatedAt)
                 .ToList();
 
@@ -162,6 +198,7 @@ namespace ClubTimerXbox.Services
 
                     shortage.Amount -= amount;
                     extra.Amount -= amount;
+                    changed = true;
 
                     if (extra.Amount == 0)
                     {
@@ -180,6 +217,13 @@ namespace ClubTimerXbox.Services
                     }
                 }
             }
+
+            return changed;
+        }
+
+        private static bool IsAutoResolvablePaymentMistakeAmount(int amount)
+        {
+            return amount > 0 && amount <= AutoResolveLimit;
         }
 
         public static int ConsumeOpenCashExtra(int amount)
@@ -278,14 +322,15 @@ namespace ClubTimerXbox.Services
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
                     item.Kind == CashReconciliationKind.CashlessShortage &&
-                    item.Amount > 0 &&
-                    item.Amount < AutoResolveLimit)
+                    IsAutoResolvablePaymentMistakeAmount(item.Amount))
                 .OrderBy(item => item.CreatedAt)
                 .ToList();
         }
 
         public static List<CashReconciliationItem> GetRecentItems(int count = 100)
         {
+            AutoResolveSmallPaymentMistakes();
+
             return _items
                 .OrderByDescending(item => item.CreatedAt)
                 .Take(count)

@@ -93,7 +93,9 @@ namespace ClubTimerXbox.Services
             return $"Update {manifest.LatestVersion} downloaded. Installation can be started when the club is free.";
         }
 
-        public static async Task<InstallUpdateResult> InstallLatestUpdateAsync(IReadOnlyList<ClubPlace> places)
+        public static async Task<InstallUpdateResult> InstallLatestUpdateAsync(
+            IReadOnlyList<ClubPlace> places,
+            IProgress<AppUpdateProgress>? progress = null)
         {
             if (!TryBeginInstall())
                 return InstallUpdateResult.Blocked("Обновление уже запускается. Дождитесь окна обновления.");
@@ -124,7 +126,20 @@ namespace ClubTimerXbox.Services
                     return InstallUpdateResult.Blocked(message);
                 }
 
-                string packagePath = await DownloadPackageAsync(manifest);
+                progress?.Report(AppUpdateProgress.Downloading(0, "Начинаем скачивание пакета обновления..."));
+                string packagePath = await DownloadPackageAsync(manifest, progress);
+
+                for (int step = 0; step <= 100; step += 4)
+                {
+                    progress?.Report(AppUpdateProgress.Preparing(
+                        step,
+                        step < 100
+                            ? "Проверяем готовность и готовим окно установки..."
+                            : "Готово. Открываем updater..."
+                    ));
+                    await Task.Delay(100);
+                }
+
                 StartUpdater(packagePath);
                 updaterStarted = true;
 
@@ -248,7 +263,9 @@ namespace ClubTimerXbox.Services
             };
         }
 
-        private static async Task<string> DownloadPackageAsync(UpdateManifest manifest)
+        private static async Task<string> DownloadPackageAsync(
+            UpdateManifest manifest,
+            IProgress<AppUpdateProgress>? progress = null)
         {
             string version = SafePathPart(manifest.LatestVersion);
             string updateDir = Path.Combine(
@@ -260,13 +277,66 @@ namespace ClubTimerXbox.Services
             Directory.CreateDirectory(updateDir);
 
             string packagePath = Path.Combine(updateDir, $"ClubTimerXbox-{version}.zip");
-            byte[] bytes = await _httpClient.GetByteArrayAsync(manifest.DownloadUrl);
+            using var response = await _httpClient.GetAsync(
+                manifest.DownloadUrl,
+                HttpCompletionOption.ResponseHeadersRead
+            );
+            response.EnsureSuccessStatusCode();
+
+            long? totalBytes = response.Content.Headers.ContentLength;
+            await using var source = await response.Content.ReadAsStreamAsync();
+            await using var destination = new MemoryStream();
+            byte[] buffer = new byte[128 * 1024];
+            long receivedBytes = 0;
+
+            while (true)
+            {
+                int read = await source.ReadAsync(buffer);
+                if (read == 0)
+                    break;
+
+                await destination.WriteAsync(buffer.AsMemory(0, read));
+                receivedBytes += read;
+
+                int percent = totalBytes.HasValue && totalBytes.Value > 0
+                    ? Math.Min(100, (int)Math.Round(receivedBytes * 100.0 / totalBytes.Value))
+                    : 0;
+
+                string sizeText = totalBytes.HasValue && totalBytes.Value > 0
+                    ? $"{FormatBytes(receivedBytes)} / {FormatBytes(totalBytes.Value)}"
+                    : FormatBytes(receivedBytes);
+
+                progress?.Report(AppUpdateProgress.Downloading(
+                    percent,
+                    $"Скачиваем пакет обновления: {sizeText}"
+                ));
+            }
+
+            byte[] bytes = destination.ToArray();
+            progress?.Report(AppUpdateProgress.Downloading(100, "Скачивание завершено."));
 
             if (!string.IsNullOrWhiteSpace(manifest.Sha256))
                 VerifySha256(bytes, manifest.Sha256);
 
             await File.WriteAllBytesAsync(packagePath, bytes);
             return packagePath;
+        }
+
+        private static string FormatBytes(long value)
+        {
+            string[] units = { "Б", "КБ", "МБ", "ГБ" };
+            double size = value;
+            int unitIndex = 0;
+
+            while (size >= 1024 && unitIndex < units.Length - 1)
+            {
+                size /= 1024;
+                unitIndex++;
+            }
+
+            return unitIndex == 0
+                ? $"{value} {units[unitIndex]}"
+                : $"{size:0.0} {units[unitIndex]}";
         }
 
         private static void StartUpdater(string packagePath)
@@ -412,6 +482,33 @@ namespace ClubTimerXbox.Services
                 return new InstallUpdateResult
                 {
                     ShouldShutdown = true,
+                    Message = message
+                };
+            }
+        }
+
+        public sealed class AppUpdateProgress
+        {
+            public int DownloadPercent { get; private set; }
+            public int ReadyPercent { get; private set; }
+            public string Message { get; private set; } = "";
+
+            public static AppUpdateProgress Downloading(int downloadPercent, string message)
+            {
+                return new AppUpdateProgress
+                {
+                    DownloadPercent = Math.Clamp(downloadPercent, 0, 100),
+                    ReadyPercent = 0,
+                    Message = message
+                };
+            }
+
+            public static AppUpdateProgress Preparing(int readyPercent, string message)
+            {
+                return new AppUpdateProgress
+                {
+                    DownloadPercent = 100,
+                    ReadyPercent = Math.Clamp(readyPercent, 0, 100),
                     Message = message
                 };
             }

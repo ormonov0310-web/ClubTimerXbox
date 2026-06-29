@@ -17,7 +17,10 @@ namespace ClubTimerXbox
                 openTuyaSettings: OpenTuyaSettings,
                 openAlarmSettings: OpenAlarmSettingsWindow,
                 getPlaces: () => _places.ToList(),
-                installUpdate: () => AppUpdateService.InstallLatestUpdateAsync(_places.ToList())
+                installUpdate: progress => AppUpdateService.InstallLatestUpdateAsync(
+                    _places.ToList(),
+                    progress
+                )
             )
             {
                 Owner = this
