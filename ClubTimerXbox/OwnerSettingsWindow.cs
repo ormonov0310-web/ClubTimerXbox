@@ -94,6 +94,8 @@ namespace ClubTimerXbox
                 Margin = new Thickness(0, 0, 0, 22)
             });
 
+            root.Children.Add(CreateFirebaseStatusCard());
+
             _updateCard = CreateUpdateCard();
             root.Children.Add(_updateCard);
 
@@ -137,6 +139,61 @@ namespace ClubTimerXbox
             {
                 Content = root,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+            };
+        }
+
+        private Border CreateFirebaseStatusCard()
+        {
+            bool configured = FirebaseAuthService.IsConfigured;
+            bool signedIn = configured && !string.IsNullOrWhiteSpace(FirebaseAuthService.CurrentEmail);
+
+            string title = configured
+                ? "Firebase защита готова"
+                : "Firebase: открытый режим";
+
+            string subtitle = configured
+                ? (signedIn
+                    ? $"Вход выполнен: {FirebaseAuthService.CurrentEmail}. После закрытия правил база продолжит работать."
+                    : "Firebase Auth включен в коде, но вход ещё не выполнен.")
+                : "Сейчас приложение работает по старой открытой схеме. Закрывать правила Firebase пока нельзя.";
+
+            var panel = new StackPanel();
+
+            panel.Children.Add(new TextBlock
+            {
+                Text = title,
+                Foreground = Brushes.White,
+                FontSize = 20,
+                FontWeight = FontWeights.Bold
+            });
+
+            panel.Children.Add(new TextBlock
+            {
+                Text = subtitle,
+                Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+                FontSize = 14,
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = 21,
+                Margin = new Thickness(0, 6, 0, 0)
+            });
+
+            return new Border
+            {
+                Background = new SolidColorBrush(
+                    configured
+                        ? Color.FromRgb(20, 83, 45)
+                        : Color.FromRgb(36, 28, 18)
+                ),
+                BorderBrush = new SolidColorBrush(
+                    configured
+                        ? Color.FromRgb(34, 197, 94)
+                        : Color.FromRgb(245, 158, 11)
+                ),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(16),
+                Margin = new Thickness(0, 0, 0, 16),
+                Child = panel
             };
         }
 

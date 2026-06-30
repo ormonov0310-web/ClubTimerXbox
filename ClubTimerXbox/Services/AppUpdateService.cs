@@ -21,8 +21,6 @@ namespace ClubTimerXbox.Services
         private static readonly object InstallSync = new object();
         private static bool _installInProgress;
 
-        private static string BaseUrl => FirebaseSettings.DatabaseUrl.TrimEnd('/');
-
         private static string UpdateManifestPath =>
             $"updates/channels/{AppVersionService.UpdateChannel}";
 
@@ -181,7 +179,8 @@ namespace ClubTimerXbox.Services
 
         private static async Task<UpdateManifest?> ReadManifestAsync()
         {
-            string json = await _httpClient.GetStringAsync($"{BaseUrl}/{UpdateManifestPath}.json");
+            string url = await FirebaseAuthService.BuildDatabaseUrlAsync(UpdateManifestPath);
+            string json = await _httpClient.GetStringAsync(url);
 
             if (string.IsNullOrWhiteSpace(json) || json == "null")
                 return null;
@@ -452,6 +451,7 @@ namespace ClubTimerXbox.Services
 
         private static async Task PutAsync(string path, object data)
         {
+            string url = await FirebaseAuthService.BuildDatabaseUrlAsync(path);
             string json = JsonSerializer.Serialize(
                 data,
                 new JsonSerializerOptions
@@ -460,7 +460,7 @@ namespace ClubTimerXbox.Services
                 });
 
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            await _httpClient.PutAsync($"{BaseUrl}/{path}.json", content);
+            await _httpClient.PutAsync(url, content);
         }
 
         public sealed class InstallUpdateResult

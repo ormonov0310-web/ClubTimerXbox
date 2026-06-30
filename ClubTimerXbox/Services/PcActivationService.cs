@@ -13,9 +13,6 @@ namespace ClubTimerXbox.Services
     {
         private static readonly HttpClient _httpClient = new HttpClient();
 
-        private static string BaseUrl =>
-            FirebaseSettings.DatabaseUrl.TrimEnd('/');
-
         public static async Task<PcActivationResult> ActivateAsync(string code)
         {
             code = code.Trim();
@@ -165,7 +162,7 @@ namespace ClubTimerXbox.Services
 
         private static async Task<JsonElement?> GetJsonAsync(string path)
         {
-            string url = $"{BaseUrl}/{path}.json";
+            string url = await FirebaseAuthService.BuildDatabaseUrlAsync(path);
             string json = await _httpClient.GetStringAsync(url);
 
             if (string.IsNullOrWhiteSpace(json) || json == "null")
@@ -177,7 +174,7 @@ namespace ClubTimerXbox.Services
 
         private static async Task PatchAsync(string path, object data)
         {
-            string url = $"{BaseUrl}/{path}.json";
+            string url = await FirebaseAuthService.BuildDatabaseUrlAsync(path);
             string json = JsonSerializer.Serialize(data);
 
             using var request = new HttpRequestMessage(new HttpMethod("PATCH"), url)

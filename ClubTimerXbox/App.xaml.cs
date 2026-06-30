@@ -5,7 +5,7 @@ namespace ClubTimerXbox
 {
     public partial class App : Application
     {
-        protected override void OnStartup(StartupEventArgs e)
+        protected override async void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
 
@@ -14,6 +14,22 @@ namespace ClubTimerXbox
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             WindowSizeStorageService.EnableForAllWindows();
             UiSoundService.EnableGlobalUiSounds();
+
+            if (FirebaseAuthService.IsConfigured)
+            {
+                bool hasFirebaseSession = await FirebaseAuthService.TryRestoreAsync();
+                if (!hasFirebaseSession)
+                {
+                    var firebaseLoginWindow = new FirebaseLoginWindow();
+                    bool? firebaseLoginResult = firebaseLoginWindow.ShowDialog();
+
+                    if (firebaseLoginResult != true)
+                    {
+                        Shutdown();
+                        return;
+                    }
+                }
+            }
 
             if (!PcIdentityService.Current.IsActivated)
             {

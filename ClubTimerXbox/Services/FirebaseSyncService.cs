@@ -16,9 +16,6 @@ namespace ClubTimerXbox.Services
         private static readonly HttpClient _httpClient = new HttpClient();
         private static DateTime _lastOwnerEmployeesPush = DateTime.MinValue;
 
-        private static string BaseUrl =>
-            FirebaseSettings.DatabaseUrl.TrimEnd('/');
-
         private static string LegacyCurrentPath => "club/current";
 
         private static string LegacyCommandsPath => "club/commands";
@@ -3304,7 +3301,7 @@ namespace ClubTimerXbox.Services
 
         private static async Task<T?> GetAsync<T>(string path)
         {
-            string url = $"{BaseUrl}/{path}.json";
+            string url = await FirebaseAuthService.BuildDatabaseUrlAsync(path);
 
             string json = await _httpClient.GetStringAsync(url);
 
@@ -3322,7 +3319,7 @@ namespace ClubTimerXbox.Services
 
         private static async Task PutAsync(string path, object data)
         {
-            string url = $"{BaseUrl}/{path}.json";
+            string url = await FirebaseAuthService.BuildDatabaseUrlAsync(path);
 
             string json = JsonSerializer.Serialize(
                 data,
