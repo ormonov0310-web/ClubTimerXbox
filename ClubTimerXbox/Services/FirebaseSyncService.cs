@@ -212,7 +212,10 @@ namespace ClubTimerXbox.Services
                     openingCashBalanceMonth,
                     cashMovementMonth
                 );
-                int expectedCashlessBalanceMonth = cashBalanceSummary.ExpectedCashlessBalance;
+                int expectedCashlessBalanceMonth = CalculateExpectedBalanceWithOpening(
+                    openingCashlessBalanceMonth,
+                    cashlessMovementMonth
+                );
                 int moneyProgramBalanceMonth = expectedCashBalanceMonth + expectedCashlessBalanceMonth;
                 int? moneyActualBalanceMonth = CalculateActualMoneyBalance(
                     actualCashBalanceMonth,
@@ -227,6 +230,20 @@ namespace ClubTimerXbox.Services
                 int moneyExtraMonth = moneyDifferenceMonth.HasValue && moneyDifferenceMonth.Value > 0
                     ? moneyDifferenceMonth.Value
                     : 0;
+                int ownerAvailableCashBalanceMonth = CalculateOwnerAvailableBalance(
+                    actualCashBalanceMonth,
+                    expectedCashBalanceMonth,
+                    ownerWithdrawRecordsMonth,
+                    "Наличные",
+                    nextMonthStart
+                );
+                int ownerAvailableCashlessBalanceMonth = CalculateOwnerAvailableBalance(
+                    actualCashlessBalanceMonth,
+                    expectedCashlessBalanceMonth,
+                    ownerWithdrawRecordsMonth,
+                    "Безнал",
+                    nextMonthStart
+                );
 
                 var expenseCategories = CashService.GetDefaultExpenseCategories()
                     .Where(IsOwnerReportExpenseCategory)
@@ -407,7 +424,7 @@ namespace ClubTimerXbox.Services
                         actualCashBalanceMonth,
                         programCashBalanceMonth = expectedCashBalanceMonth,
                         actualCashlessBalanceMonth,
-                        programCashlessBalanceMonth,
+                        programCashlessBalanceMonth = expectedCashlessBalanceMonth,
                         expectedCashBalanceMonth,
                         expectedCashlessBalanceMonth,
                         openingCashBalanceMonth,
@@ -422,6 +439,9 @@ namespace ClubTimerXbox.Services
                         moneyDifferenceMonth,
                         moneyShortageMonth,
                         moneyExtraMonth,
+                        ownerAvailableCashBalanceMonth,
+                        ownerAvailableCashlessBalanceMonth,
+                        ownerAvailableMoneyBalanceMonth = ownerAvailableCashBalanceMonth + ownerAvailableCashlessBalanceMonth,
                         cashlessVerifiedMonth,
                         expensesMonth,
                         cashExpenseMonth,
@@ -1420,21 +1440,27 @@ namespace ClubTimerXbox.Services
         {
             return CashService
                 .GetExpenseRecordsByPaymentMethod(monthStart, nextMonthStart, paymentMethod)
-                .Where(record => !IsPriorOwnerWithdrawal(record, monthStart))
+                .Where(record => !IsPriorMonthExpense(record, monthStart))
                 .Sum(record => record.Amount);
         }
 
-        private static bool IsPriorOwnerWithdrawal(CashRecord record, DateTime monthStart)
+        private static bool IsPriorMonthExpense(CashRecord record, DateTime monthStart)
         {
-            if (record.Category != "Расходы" ||
-                record.ExpenseCategory != "Владелец" ||
-                string.IsNullOrWhiteSpace(record.AccountingMonthKey))
+            if (record.Category != "Расходы")
+                return false;
+
+            string monthKey = record.ExpenseCategory switch
+            {
+                "Владелец" => record.AccountingMonthKey,
+                "Зарплата" => record.SalaryMonthKey,
+                _ => ""
+            };
+
+            if (string.IsNullOrWhiteSpace(monthKey) ||
+                !DateTime.TryParse($"{monthKey}-01", out DateTime accountingMonth))
             {
                 return false;
             }
-
-            if (!DateTime.TryParse($"{record.AccountingMonthKey}-01", out DateTime accountingMonth))
-                return false;
 
             var accountingMonthStart = new DateTime(accountingMonth.Year, accountingMonth.Month, 1);
             return accountingMonthStart < monthStart.Date;
@@ -1471,6 +1497,64 @@ namespace ClubTimerXbox.Services
             );
         }
 
+        private static int CalculateExpectedCashlessBalanceForReconciliation(
+            DateTime monthStart,
+            DateTime nextMonthStart,
+            int? actualCashlessBalance)
+        {
+            int expectedCashlessBalance = CalculateExpectedCashlessBalanceByPeriod(
+                monthStart,
+                nextMonthStart
+            );
+            var incomePayment = GetCombinedPaymentSummary(
+                CashReportPeriodMode.Month,
+                monthStart
+            );
+            int cashlessExpenseMovement = GetMonthMovementExpenseTotal(
+                monthStart,
+                nextMonthStart,
+                "Безнал"
+            );
+            int cashlessMovement = incomePayment.MBankAmount - cashlessExpenseMovement;
+            int openingCashlessBalance = CalculateOpeningBalance(
+                actualCashlessBalance,
+                expectedCashlessBalance,
+                cashlessMovement
+            );
+
+            return CalculateExpectedBalanceWithOpening(
+                openingCashlessBalance,
+                cashlessMovement
+            );
+        }
+
+        private static int? CalculateMoneyShortageCapForReconciliation(
+            DateTime monthStart,
+            DateTime nextMonthStart)
+        {
+            int? actualCash = CalculateActualCashBalanceByPeriod(monthStart, nextMonthStart);
+            int? actualCashless = CalculateActualCashlessBalanceByPeriod(monthStart, nextMonthStart);
+
+            if (!actualCash.HasValue || !actualCashless.HasValue)
+                return null;
+
+            int expectedCash = CalculateExpectedCashBalanceForReconciliation(
+                monthStart,
+                nextMonthStart,
+                actualCash
+            );
+            int expectedCashless = CalculateExpectedCashlessBalanceForReconciliation(
+                monthStart,
+                nextMonthStart,
+                actualCashless
+            );
+            int difference = actualCash.Value + actualCashless.Value - expectedCash - expectedCashless;
+
+            return difference < 0
+                ? Math.Abs(difference)
+                : 0;
+        }
+
         private static int CalculateOpeningBalance(
             int? actualBalance,
             int expectedBalance,
@@ -1485,6 +1569,72 @@ namespace ClubTimerXbox.Services
             int movementAmount)
         {
             return Math.Max(0, openingBalance + movementAmount);
+        }
+
+        private static int CalculateOwnerAvailableBalance(
+            int? actualBalance,
+            int expectedBalance,
+            IEnumerable<CashRecord> ownerWithdrawRecords,
+            string paymentMethod,
+            DateTime nextMonthStart)
+        {
+            int baseBalance = actualBalance ?? expectedBalance;
+            int postMonthWithdrawals = ownerWithdrawRecords
+                .Where(record =>
+                    record.PaymentMethod == paymentMethod &&
+                    record.CreatedAt >= nextMonthStart)
+                .Sum(record => record.Amount);
+
+            return Math.Max(0, baseBalance - postMonthWithdrawals);
+        }
+
+        private static int CalculateOwnerAvailableBalanceForPayment(
+            DateTime monthStart,
+            DateTime nextMonthStart,
+            string paymentMethod)
+        {
+            var ownerWithdrawRecords = CashService.GetOwnerWithdrawRecordsByPeriod(
+                monthStart,
+                nextMonthStart
+            );
+
+            if (paymentMethod.Equals("Наличные", StringComparison.OrdinalIgnoreCase))
+            {
+                int? actualCashBalance = CalculateActualCashBalanceByPeriod(monthStart, nextMonthStart);
+                int expectedCashBalance = CalculateExpectedCashBalanceForReconciliation(
+                    monthStart,
+                    nextMonthStart,
+                    actualCashBalance
+                );
+
+                return CalculateOwnerAvailableBalance(
+                    actualCashBalance,
+                    expectedCashBalance,
+                    ownerWithdrawRecords,
+                    "Наличные",
+                    nextMonthStart
+                );
+            }
+
+            if (paymentMethod.Equals("Безнал", StringComparison.OrdinalIgnoreCase))
+            {
+                int? actualCashlessBalance = CalculateActualCashlessBalanceByPeriod(monthStart, nextMonthStart);
+                int expectedCashlessBalance = CalculateExpectedCashlessBalanceForReconciliation(
+                    monthStart,
+                    nextMonthStart,
+                    actualCashlessBalance
+                );
+
+                return CalculateOwnerAvailableBalance(
+                    actualCashlessBalance,
+                    expectedCashlessBalance,
+                    ownerWithdrawRecords,
+                    "Безнал",
+                    nextMonthStart
+                );
+            }
+
+            throw new Exception("Для забора владельца выберите Наличные или Безнал.");
         }
 
         private static int CalculatePossibleProfit(
@@ -1660,7 +1810,10 @@ namespace ClubTimerXbox.Services
                 openingCashBalance,
                 cashMovement
             );
-            int expectedCashlessBalance = cashBalanceSummary.ExpectedCashlessBalance;
+            int expectedCashlessBalance = CalculateExpectedBalanceWithOpening(
+                openingCashlessBalance,
+                cashlessMovement
+            );
             int moneyProgramBalance = expectedCashBalance + expectedCashlessBalance;
             int? moneyActualBalance = CalculateActualMoneyBalance(
                 actualCashBalance,
@@ -1675,6 +1828,20 @@ namespace ClubTimerXbox.Services
             int moneyExtra = moneyDifference.HasValue && moneyDifference.Value > 0
                 ? moneyDifference.Value
                 : 0;
+            int ownerAvailableCashBalance = CalculateOwnerAvailableBalance(
+                actualCashBalance,
+                expectedCashBalance,
+                ownerWithdrawRecords,
+                "Наличные",
+                nextMonthStart
+            );
+            int ownerAvailableCashlessBalance = CalculateOwnerAvailableBalance(
+                actualCashlessBalance,
+                expectedCashlessBalance,
+                ownerWithdrawRecords,
+                "Безнал",
+                nextMonthStart
+            );
 
             var expenseRecords = BuildCashRecordItems(monthStart, nextMonthStart, "Расходы");
             var expensesByCategory = CashService
@@ -1726,7 +1893,7 @@ namespace ClubTimerXbox.Services
                     actualCashBalanceMonth = actualCashBalance,
                     programCashBalanceMonth = expectedCashBalance,
                     actualCashlessBalanceMonth = actualCashlessBalance,
-                    programCashlessBalanceMonth = programCashlessBalance,
+                    programCashlessBalanceMonth = expectedCashlessBalance,
                     expectedCashBalanceMonth = expectedCashBalance,
                     expectedCashlessBalanceMonth = expectedCashlessBalance,
                     openingCashBalanceMonth = openingCashBalance,
@@ -1741,6 +1908,9 @@ namespace ClubTimerXbox.Services
                     moneyDifferenceMonth = moneyDifference,
                     moneyShortageMonth = moneyShortage,
                     moneyExtraMonth = moneyExtra,
+                    ownerAvailableCashBalanceMonth = ownerAvailableCashBalance,
+                    ownerAvailableCashlessBalanceMonth = ownerAvailableCashlessBalance,
+                    ownerAvailableMoneyBalanceMonth = ownerAvailableCashBalance + ownerAvailableCashlessBalance,
                     cashExpenseMonth = cashExpense,
                     cashlessExpenseMonth = cashlessExpense
                 },
@@ -2778,11 +2948,25 @@ namespace ClubTimerXbox.Services
                 ? expenseCategory
                 : command.Title.Trim();
             string accountingMonthKey = "";
+            string paymentMethod = NormalizePaymentMethod(command.PaymentMethod);
 
             if (expenseCategory.Equals("Владелец", StringComparison.OrdinalIgnoreCase))
             {
-                var (monthStart, _) = ParseCommandMonth(command.MonthKey);
+                var (monthStart, nextMonthStart) = ParseCommandMonth(command.MonthKey);
                 accountingMonthKey = monthStart.ToString("yyyy-MM");
+                int available = CalculateOwnerAvailableBalanceForPayment(
+                    monthStart,
+                    nextMonthStart,
+                    paymentMethod
+                );
+
+                if (command.Amount > available)
+                {
+                    throw new Exception(
+                        $"Недостаточно остатка за {accountingMonthKey}. " +
+                        $"Доступно: {available} сом, запрошено: {command.Amount} сом."
+                    );
+                }
             }
 
             CashService.AddExpense(
@@ -2790,7 +2974,7 @@ namespace ClubTimerXbox.Services
                 title: title,
                 description: command.Description,
                 amount: command.Amount,
-                paymentMethod: NormalizePaymentMethod(command.PaymentMethod),
+                paymentMethod: paymentMethod,
                 expenseCategory: expenseCategory,
                 accountingMonthKey: accountingMonthKey
             );
@@ -3065,7 +3249,7 @@ namespace ClubTimerXbox.Services
                 return string.Join(" ", notes);
             }
 
-            int? moneyShortageCap = CashBalanceSummaryService.GetMoneyShortageCap(
+            int? moneyShortageCap = CalculateMoneyShortageCapForReconciliation(
                 monthStart,
                 nextMonthStart
             );
@@ -3125,9 +3309,10 @@ namespace ClubTimerXbox.Services
                 nextMonthStart,
                 actualCash
             );
-            int expectedCashless = CalculateExpectedCashlessBalanceByPeriod(
+            int expectedCashless = CalculateExpectedCashlessBalanceForReconciliation(
                 monthStart,
-                nextMonthStart
+                nextMonthStart,
+                actualCashless
             );
             int cashDifference = actualCash.HasValue
                 ? actualCash.Value - expectedCash
