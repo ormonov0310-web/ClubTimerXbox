@@ -383,7 +383,7 @@ namespace ClubTimerXbox.Services
                 Arguments = string.Join(" ", args.Select(QuoteArg)),
                 WorkingDirectory = runnerDir,
                 UseShellExecute = false,
-                CreateNoWindow = false
+                CreateNoWindow = true
             });
         }
 

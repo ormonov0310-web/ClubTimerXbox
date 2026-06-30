@@ -174,10 +174,9 @@ namespace ClubTimerXbox.Services
                     .Where(record => record.PaymentMethod == "Безнал")
                     .Sum(record => record.Amount);
 
-                var ownerWithdrawRecordsMonth = CashService.GetExpenseRecordsByExpenseCategory(
+                var ownerWithdrawRecordsMonth = CashService.GetOwnerWithdrawRecordsByPeriod(
                     monthStart,
-                    nextMonthStart,
-                    "Владелец"
+                    nextMonthStart
                 );
                 int ownerWithdrawMonth = ownerWithdrawRecordsMonth.Sum(record => record.Amount);
                 int ownerWithdrawCashMonth = ownerWithdrawRecordsMonth
@@ -186,6 +185,48 @@ namespace ClubTimerXbox.Services
                 int ownerWithdrawCashlessMonth = ownerWithdrawRecordsMonth
                     .Where(record => record.PaymentMethod == "Безнал")
                     .Sum(record => record.Amount);
+
+                int cashExpenseMovementMonth = GetMonthMovementExpenseTotal(
+                    monthStart,
+                    nextMonthStart,
+                    "Наличные"
+                );
+                int cashlessExpenseMovementMonth = GetMonthMovementExpenseTotal(
+                    monthStart,
+                    nextMonthStart,
+                    "Безнал"
+                );
+                int cashMovementMonth = incomePaymentMonth.CashAmount - cashExpenseMovementMonth;
+                int cashlessMovementMonth = incomePaymentMonth.MBankAmount - cashlessExpenseMovementMonth;
+                int openingCashBalanceMonth = CalculateOpeningBalance(
+                    actualCashBalanceMonth,
+                    cashBalanceSummary.ExpectedCashBalance,
+                    cashMovementMonth
+                );
+                int openingCashlessBalanceMonth = CalculateOpeningBalance(
+                    actualCashlessBalanceMonth,
+                    cashBalanceSummary.ExpectedCashlessBalance,
+                    cashlessMovementMonth
+                );
+                int expectedCashBalanceMonth = CalculateExpectedBalanceWithOpening(
+                    openingCashBalanceMonth,
+                    cashMovementMonth
+                );
+                int expectedCashlessBalanceMonth = cashBalanceSummary.ExpectedCashlessBalance;
+                int moneyProgramBalanceMonth = expectedCashBalanceMonth + expectedCashlessBalanceMonth;
+                int? moneyActualBalanceMonth = CalculateActualMoneyBalance(
+                    actualCashBalanceMonth,
+                    actualCashlessBalanceMonth
+                );
+                int? moneyDifferenceMonth = moneyActualBalanceMonth.HasValue
+                    ? moneyActualBalanceMonth.Value - moneyProgramBalanceMonth
+                    : null;
+                int moneyShortageMonth = moneyDifferenceMonth.HasValue && moneyDifferenceMonth.Value < 0
+                    ? Math.Abs(moneyDifferenceMonth.Value)
+                    : 0;
+                int moneyExtraMonth = moneyDifferenceMonth.HasValue && moneyDifferenceMonth.Value > 0
+                    ? moneyDifferenceMonth.Value
+                    : 0;
 
                 var expenseCategories = CashService.GetDefaultExpenseCategories()
                     .Where(IsOwnerReportExpenseCategory)
@@ -279,6 +320,17 @@ namespace ClubTimerXbox.Services
 
                 var reportsByMonth = BuildReportsByMonth();
                 var autoSalaryReport = AutoSalaryService.BuildReport(monthStart);
+                int salaryGrossMonth = autoSalaryReport.Employees.Sum(employee => employee.GrossAmount);
+                int salaryLossesMonth = autoSalaryReport.Employees.Sum(employee => employee.LossesAmount);
+                int salaryAccruedMonth = autoSalaryReport.Employees.Sum(employee =>
+                    Math.Max(0, employee.GrossAmount - employee.LossesAmount));
+                int possibleProfitMonth = CalculatePossibleProfit(
+                    cashMonth,
+                    expensesMonth,
+                    stockPurchaseMonth,
+                    salaryAccruedMonth,
+                    shortagesMonth
+                );
                 var cashReconciliation = CashReconciliationService
                     .GetRecentItems()
                     .Select(item => new
@@ -353,16 +405,23 @@ namespace ClubTimerXbox.Services
                         incomeMBankMonth = incomePaymentMonth.MBankAmount,
                         cashlessMonth,
                         actualCashBalanceMonth,
-                        programCashBalanceMonth,
+                        programCashBalanceMonth = expectedCashBalanceMonth,
                         actualCashlessBalanceMonth,
                         programCashlessBalanceMonth,
-                        expectedCashBalanceMonth = cashBalanceSummary.ExpectedCashBalance,
-                        expectedCashlessBalanceMonth = cashBalanceSummary.ExpectedCashlessBalance,
-                        moneyProgramBalanceMonth = cashBalanceSummary.ProgramTotal,
-                        moneyActualBalanceMonth = cashBalanceSummary.ActualTotal,
-                        moneyDifferenceMonth = cashBalanceSummary.Difference,
-                        moneyShortageMonth = cashBalanceSummary.MoneyShortage,
-                        moneyExtraMonth = cashBalanceSummary.MoneyExtra,
+                        expectedCashBalanceMonth,
+                        expectedCashlessBalanceMonth,
+                        openingCashBalanceMonth,
+                        openingCashlessBalanceMonth,
+                        openingMoneyBalanceMonth = openingCashBalanceMonth + openingCashlessBalanceMonth,
+                        cashMovementMonth,
+                        cashlessMovementMonth,
+                        cashExpenseMovementMonth,
+                        cashlessExpenseMovementMonth,
+                        moneyProgramBalanceMonth,
+                        moneyActualBalanceMonth,
+                        moneyDifferenceMonth,
+                        moneyShortageMonth,
+                        moneyExtraMonth,
                         cashlessVerifiedMonth,
                         expensesMonth,
                         cashExpenseMonth,
@@ -370,6 +429,9 @@ namespace ClubTimerXbox.Services
 
                         salaryToday,
                         salaryMonth,
+                        salaryAccruedMonth,
+                        salaryGrossMonth,
+                        salaryLossesMonth,
                         salaryCashMonth,
                         salaryCashlessMonth,
 
@@ -380,7 +442,8 @@ namespace ClubTimerXbox.Services
 
                         ownerWithdrawMonth,
                         ownerWithdrawCashMonth,
-                        ownerWithdrawCashlessMonth
+                        ownerWithdrawCashlessMonth,
+                        possibleProfitMonth
                     },
 
                     cashRecords = new
@@ -390,6 +453,7 @@ namespace ClubTimerXbox.Services
                             games = BuildCashRecordItems(todayStart, tomorrowStart, "Игры"),
                             productsAndServices = BuildCashRecordItems(todayStart, tomorrowStart, "Товары и услуги"),
                             expenses = BuildCashRecordItems(todayStart, tomorrowStart, "Расходы"),
+                            ownerWithdraw = BuildOwnerWithdrawRecordItems(todayStart, tomorrowStart),
                             losses = BuildCashRecordItems(todayStart, tomorrowStart, "Недостачи")
                         },
                         month = new
@@ -397,6 +461,7 @@ namespace ClubTimerXbox.Services
                             games = BuildCashRecordItems(monthStart, nextMonthStart, "Игры"),
                             productsAndServices = BuildCashRecordItems(monthStart, nextMonthStart, "Товары и услуги"),
                             expenses = BuildCashRecordItems(monthStart, nextMonthStart, "Расходы"),
+                            ownerWithdraw = BuildOwnerWithdrawRecordItems(monthStart, nextMonthStart),
                             losses = BuildCashRecordItems(monthStart, nextMonthStart, "Недостачи")
                         }
                     },
@@ -1028,7 +1093,15 @@ namespace ClubTimerXbox.Services
             AddMonth(DateTime.Today);
 
             foreach (var record in CashService.Records)
+            {
                 AddMonth(record.CreatedAt);
+
+                if (DateTime.TryParse($"{record.SalaryMonthKey}-01", out DateTime salaryMonth))
+                    AddMonth(salaryMonth);
+
+                if (DateTime.TryParse($"{record.AccountingMonthKey}-01", out DateTime accountingMonth))
+                    AddMonth(accountingMonth);
+            }
 
             foreach (var record in PaymentService.Records)
                 AddMonth(record.CreatedAt);
@@ -1340,6 +1413,100 @@ namespace ClubTimerXbox.Services
             return (int)Math.Round(amount * (percent / 100.0));
         }
 
+        private static int GetMonthMovementExpenseTotal(
+            DateTime monthStart,
+            DateTime nextMonthStart,
+            string paymentMethod)
+        {
+            return CashService
+                .GetExpenseRecordsByPaymentMethod(monthStart, nextMonthStart, paymentMethod)
+                .Where(record => !IsPriorOwnerWithdrawal(record, monthStart))
+                .Sum(record => record.Amount);
+        }
+
+        private static bool IsPriorOwnerWithdrawal(CashRecord record, DateTime monthStart)
+        {
+            if (record.Category != "Расходы" ||
+                record.ExpenseCategory != "Владелец" ||
+                string.IsNullOrWhiteSpace(record.AccountingMonthKey))
+            {
+                return false;
+            }
+
+            if (!DateTime.TryParse($"{record.AccountingMonthKey}-01", out DateTime accountingMonth))
+                return false;
+
+            var accountingMonthStart = new DateTime(accountingMonth.Year, accountingMonth.Month, 1);
+            return accountingMonthStart < monthStart.Date;
+        }
+
+        private static int CalculateExpectedCashBalanceForReconciliation(
+            DateTime monthStart,
+            DateTime nextMonthStart,
+            int? actualCashBalance)
+        {
+            int expectedCashBalance = CalculateExpectedCashBalanceByPeriod(
+                monthStart,
+                nextMonthStart
+            );
+            var incomePayment = GetCombinedPaymentSummary(
+                CashReportPeriodMode.Month,
+                monthStart
+            );
+            int cashExpenseMovement = GetMonthMovementExpenseTotal(
+                monthStart,
+                nextMonthStart,
+                "Наличные"
+            );
+            int cashMovement = incomePayment.CashAmount - cashExpenseMovement;
+            int openingCashBalance = CalculateOpeningBalance(
+                actualCashBalance,
+                expectedCashBalance,
+                cashMovement
+            );
+
+            return CalculateExpectedBalanceWithOpening(
+                openingCashBalance,
+                cashMovement
+            );
+        }
+
+        private static int CalculateOpeningBalance(
+            int? actualBalance,
+            int expectedBalance,
+            int movementAmount)
+        {
+            int endBalance = actualBalance ?? expectedBalance;
+            return Math.Max(0, endBalance - movementAmount);
+        }
+
+        private static int CalculateExpectedBalanceWithOpening(
+            int openingBalance,
+            int movementAmount)
+        {
+            return Math.Max(0, openingBalance + movementAmount);
+        }
+
+        private static int CalculatePossibleProfit(
+            int turnover,
+            int clubExpenses,
+            int stockPurchases,
+            int salaryAccrued,
+            int losses)
+        {
+            return turnover - clubExpenses - stockPurchases - salaryAccrued - losses;
+        }
+
+        private static int? CalculateActualMoneyBalance(
+            int? actualCashBalance,
+            int? actualCashlessBalance)
+        {
+            if (!actualCashBalance.HasValue || !actualCashlessBalance.HasValue)
+                return null;
+
+            return actualCashBalance.Value + actualCashlessBalance.Value;
+        }
+
         private class ProductServiceMonthSummary
         {
             public int ProductRevenue { get; set; }
@@ -1422,10 +1589,9 @@ namespace ClubTimerXbox.Services
             int stockPurchaseCashless = stockPurchaseExpenseRecords
                 .Where(record => record.PaymentMethod == "Безнал")
                 .Sum(record => record.Amount);
-            var ownerWithdrawRecords = CashService.GetExpenseRecordsByExpenseCategory(
+            var ownerWithdrawRecords = CashService.GetOwnerWithdrawRecordsByPeriod(
                 monthStart,
-                nextMonthStart,
-                "Владелец"
+                nextMonthStart
             );
             int ownerWithdraw = ownerWithdrawRecords.Sum(record => record.Amount);
             int ownerWithdrawCash = ownerWithdrawRecords
@@ -1453,6 +1619,13 @@ namespace ClubTimerXbox.Services
             int salaryAccrued = salaryReport.Employees.Sum(employee =>
                 Math.Max(0, employee.GrossAmount - employee.LossesAmount));
             int losses = CashService.GetShortageTotalByPeriod(monthStart, nextMonthStart);
+            int possibleProfit = CalculatePossibleProfit(
+                income,
+                expenses,
+                stockPurchase,
+                salaryAccrued,
+                losses
+            );
             var incomePayment = GetCombinedPaymentSummary(CashReportPeriodMode.Month, monthStart);
             int cashExpense = CashService.GetClubCashExpenseTotalByPeriod(monthStart, nextMonthStart);
             int cashlessExpense = CashService.GetClubCashlessExpenseTotalByPeriod(monthStart, nextMonthStart);
@@ -1461,6 +1634,47 @@ namespace ClubTimerXbox.Services
             int? programCashBalance = cashBalanceSummary.ProgramCashBalance;
             int? actualCashlessBalance = cashBalanceSummary.ActualCashlessBalance;
             int? programCashlessBalance = cashBalanceSummary.ProgramCashlessBalance;
+            int cashExpenseMovement = GetMonthMovementExpenseTotal(
+                monthStart,
+                nextMonthStart,
+                "Наличные"
+            );
+            int cashlessExpenseMovement = GetMonthMovementExpenseTotal(
+                monthStart,
+                nextMonthStart,
+                "Безнал"
+            );
+            int cashMovement = incomePayment.CashAmount - cashExpenseMovement;
+            int cashlessMovement = incomePayment.MBankAmount - cashlessExpenseMovement;
+            int openingCashBalance = CalculateOpeningBalance(
+                actualCashBalance,
+                cashBalanceSummary.ExpectedCashBalance,
+                cashMovement
+            );
+            int openingCashlessBalance = CalculateOpeningBalance(
+                actualCashlessBalance,
+                cashBalanceSummary.ExpectedCashlessBalance,
+                cashlessMovement
+            );
+            int expectedCashBalance = CalculateExpectedBalanceWithOpening(
+                openingCashBalance,
+                cashMovement
+            );
+            int expectedCashlessBalance = cashBalanceSummary.ExpectedCashlessBalance;
+            int moneyProgramBalance = expectedCashBalance + expectedCashlessBalance;
+            int? moneyActualBalance = CalculateActualMoneyBalance(
+                actualCashBalance,
+                actualCashlessBalance
+            );
+            int? moneyDifference = moneyActualBalance.HasValue
+                ? moneyActualBalance.Value - moneyProgramBalance
+                : null;
+            int moneyShortage = moneyDifference.HasValue && moneyDifference.Value < 0
+                ? Math.Abs(moneyDifference.Value)
+                : 0;
+            int moneyExtra = moneyDifference.HasValue && moneyDifference.Value > 0
+                ? moneyDifference.Value
+                : 0;
 
             var expenseRecords = BuildCashRecordItems(monthStart, nextMonthStart, "Расходы");
             var expensesByCategory = CashService
@@ -1506,25 +1720,34 @@ namespace ClubTimerXbox.Services
                     salaryCashMonth = salaryCash,
                     salaryCashlessMonth = salaryCashless,
                     shortagesMonth = losses,
+                    possibleProfitMonth = possibleProfit,
                     incomeCashMonth = incomePayment.CashAmount,
                     incomeMBankMonth = incomePayment.MBankAmount,
                     actualCashBalanceMonth = actualCashBalance,
-                    programCashBalanceMonth = programCashBalance,
+                    programCashBalanceMonth = expectedCashBalance,
                     actualCashlessBalanceMonth = actualCashlessBalance,
                     programCashlessBalanceMonth = programCashlessBalance,
-                    expectedCashBalanceMonth = cashBalanceSummary.ExpectedCashBalance,
-                    expectedCashlessBalanceMonth = cashBalanceSummary.ExpectedCashlessBalance,
-                    moneyProgramBalanceMonth = cashBalanceSummary.ProgramTotal,
-                    moneyActualBalanceMonth = cashBalanceSummary.ActualTotal,
-                    moneyDifferenceMonth = cashBalanceSummary.Difference,
-                    moneyShortageMonth = cashBalanceSummary.MoneyShortage,
-                    moneyExtraMonth = cashBalanceSummary.MoneyExtra,
+                    expectedCashBalanceMonth = expectedCashBalance,
+                    expectedCashlessBalanceMonth = expectedCashlessBalance,
+                    openingCashBalanceMonth = openingCashBalance,
+                    openingCashlessBalanceMonth = openingCashlessBalance,
+                    openingMoneyBalanceMonth = openingCashBalance + openingCashlessBalance,
+                    cashMovementMonth = cashMovement,
+                    cashlessMovementMonth = cashlessMovement,
+                    cashExpenseMovementMonth = cashExpenseMovement,
+                    cashlessExpenseMovementMonth = cashlessExpenseMovement,
+                    moneyProgramBalanceMonth = moneyProgramBalance,
+                    moneyActualBalanceMonth = moneyActualBalance,
+                    moneyDifferenceMonth = moneyDifference,
+                    moneyShortageMonth = moneyShortage,
+                    moneyExtraMonth = moneyExtra,
                     cashExpenseMonth = cashExpense,
                     cashlessExpenseMonth = cashlessExpense
                 },
                 cashRecords = new
                 {
                     expenses = expenseRecords,
+                    ownerWithdraw = BuildOwnerWithdrawRecordItems(monthStart, nextMonthStart),
                     games = BuildCashRecordItems(monthStart, nextMonthStart, "Игры"),
                     productsAndServices = BuildCashRecordItems(monthStart, nextMonthStart, "Товары и услуги"),
                     losses = BuildCashRecordItems(monthStart, nextMonthStart, "Недостачи")
@@ -1743,6 +1966,36 @@ namespace ClubTimerXbox.Services
                     employeeName = record.EmployeeName,
                     incomeEmployeeName = record.IncomeEmployeeName,
                     relatedEmployeeName = record.RelatedEmployeeName,
+                    accountingMonthKey = record.AccountingMonthKey,
+                    salaryMonthKey = record.SalaryMonthKey,
+                    placeName = record.PlaceName
+                })
+                .Cast<object>()
+                .ToArray();
+        }
+
+        private static object[] BuildOwnerWithdrawRecordItems(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            return CashService
+                .GetOwnerWithdrawRecordsByPeriod(fromInclusive, toExclusive)
+                .Take(120)
+                .Select(record => new
+                {
+                    id = record.Id.ToString(),
+                    createdAt = record.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                    title = record.Title,
+                    description = record.Description,
+                    amount = record.Amount,
+                    category = record.Category,
+                    expenseCategory = record.ExpenseCategory,
+                    paymentMethod = record.PaymentMethod,
+                    employeeName = record.EmployeeName,
+                    incomeEmployeeName = record.IncomeEmployeeName,
+                    relatedEmployeeName = record.RelatedEmployeeName,
+                    accountingMonthKey = record.AccountingMonthKey,
+                    salaryMonthKey = record.SalaryMonthKey,
                     placeName = record.PlaceName
                 })
                 .Cast<object>()
@@ -2047,11 +2300,12 @@ namespace ClubTimerXbox.Services
                 if (command.Type == "AddSalaryPayment")
                 {
                     ApplyAddSalaryPayment(command);
+                    var (salaryMonthStart, _) = ParseCommandMonth(command.MonthKey);
 
                     await MarkCommandApplied(
                         commandId,
                         command,
-                        $"Зарплата выдана: {command.EmployeeName}, {command.Amount} сом, тип: {NormalizePaymentMethod(command.PaymentMethod)}."
+                        $"Зарплата выдана: {command.EmployeeName}, {command.Amount} сом, тип: {NormalizePaymentMethod(command.PaymentMethod)}, месяц: {salaryMonthStart:yyyy-MM}."
                     );
 
                     return;
@@ -2523,6 +2777,13 @@ namespace ClubTimerXbox.Services
             string title = string.IsNullOrWhiteSpace(command.Title)
                 ? expenseCategory
                 : command.Title.Trim();
+            string accountingMonthKey = "";
+
+            if (expenseCategory.Equals("Владелец", StringComparison.OrdinalIgnoreCase))
+            {
+                var (monthStart, _) = ParseCommandMonth(command.MonthKey);
+                accountingMonthKey = monthStart.ToString("yyyy-MM");
+            }
 
             CashService.AddExpense(
                 employeeName: "Владелец",
@@ -2530,7 +2791,8 @@ namespace ClubTimerXbox.Services
                 description: command.Description,
                 amount: command.Amount,
                 paymentMethod: NormalizePaymentMethod(command.PaymentMethod),
-                expenseCategory: expenseCategory
+                expenseCategory: expenseCategory,
+                accountingMonthKey: accountingMonthKey
             );
         }
 
@@ -2858,9 +3120,10 @@ namespace ClubTimerXbox.Services
                 monthStart,
                 nextMonthStart
             );
-            int expectedCash = CalculateExpectedCashBalanceByPeriod(
+            int expectedCash = CalculateExpectedCashBalanceForReconciliation(
                 monthStart,
-                nextMonthStart
+                nextMonthStart,
+                actualCash
             );
             int expectedCashless = CalculateExpectedCashlessBalanceByPeriod(
                 monthStart,
@@ -3077,7 +3340,7 @@ namespace ClubTimerXbox.Services
             if (employee == null)
                 throw new Exception($"Работник не найден: {employeeName}");
 
-            var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            var (monthStart, _) = ParseCommandMonth(command.MonthKey);
             var salary = AutoSalaryService
                 .BuildReport(monthStart)
                 .Employees
@@ -3096,7 +3359,10 @@ namespace ClubTimerXbox.Services
                 employeeName: employee.Name,
                 amount: command.Amount,
                 paymentMethod: NormalizePaymentMethod(command.PaymentMethod),
-                description: command.Description
+                description: string.IsNullOrWhiteSpace(command.Description)
+                    ? $"Выплата зарплаты за {monthStart:yyyy-MM}"
+                    : $"{command.Description}\nМесяц зарплаты: {monthStart:yyyy-MM}",
+                salaryMonthKey: monthStart.ToString("yyyy-MM")
             );
         }
 

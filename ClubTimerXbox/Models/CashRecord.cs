@@ -28,6 +28,14 @@ namespace ClubTimerXbox.Models
         // Позже это же поле можно использовать для вывода владельца.
         public string RelatedEmployeeName { get; set; } = "";
 
+        // Для операций владельца: месяц, из прибыли которого забрали деньги.
+        // CreatedAt остается фактической датой движения денег.
+        public string AccountingMonthKey { get; set; } = "";
+
+        // Для зарплаты: месяц, за который сделана выплата, в формате yyyy-MM.
+        // CreatedAt при этом остается фактической датой движения денег.
+        public string SalaryMonthKey { get; set; } = "";
+
         public CashRecordType Type { get; set; }
 
         public string Title { get; set; } = "";

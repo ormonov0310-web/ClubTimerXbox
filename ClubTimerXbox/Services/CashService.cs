@@ -169,13 +169,15 @@ namespace ClubTimerXbox.Services
             int amount,
             string paymentMethod = "Не указано",
             string expenseCategory = "Другое",
-            string relatedEmployeeName = "")
+            string relatedEmployeeName = "",
+            string accountingMonthKey = "")
         {
             if (amount <= 0)
                 return;
 
             paymentMethod = NormalizePaymentMethod(paymentMethod);
             expenseCategory = NormalizeExpenseCategory(expenseCategory);
+            accountingMonthKey = NormalizeMonthKey(accountingMonthKey);
 
             AddRecord(new CashRecord
             {
@@ -183,6 +185,7 @@ namespace ClubTimerXbox.Services
                 EmployeeName = employeeName,
                 IncomeEmployeeName = employeeName,
                 RelatedEmployeeName = relatedEmployeeName.Trim(),
+                AccountingMonthKey = accountingMonthKey,
                 Type = CashRecordType.Expense,
                 Title = title,
                 Description = description,
@@ -199,9 +202,11 @@ namespace ClubTimerXbox.Services
             string employeeName,
             int amount,
             string paymentMethod,
-            string description = "")
+            string description = "",
+            string salaryMonthKey = "")
         {
             employeeName = employeeName.Trim();
+            salaryMonthKey = NormalizeSalaryMonthKey(salaryMonthKey);
 
             if (amount <= 0)
                 return;
@@ -209,15 +214,24 @@ namespace ClubTimerXbox.Services
             if (string.IsNullOrWhiteSpace(employeeName))
                 return;
 
-            AddExpense(
-                employeeName: ownerName,
-                title: $"Зарплата: {employeeName}",
-                description: description,
-                amount: amount,
-                paymentMethod: paymentMethod,
-                expenseCategory: "Зарплата",
-                relatedEmployeeName: employeeName
-            );
+            paymentMethod = NormalizePaymentMethod(paymentMethod);
+
+            AddRecord(new CashRecord
+            {
+                CreatedAt = DateTime.Now,
+                EmployeeName = ownerName,
+                IncomeEmployeeName = ownerName,
+                RelatedEmployeeName = employeeName,
+                SalaryMonthKey = salaryMonthKey,
+                Type = CashRecordType.Expense,
+                Title = $"Зарплата: {employeeName}",
+                Description = description,
+                Amount = amount,
+                Category = "Расходы",
+                ExpenseCategory = "Зарплата",
+                PaymentMethod = paymentMethod,
+                PlaceName = ""
+            });
         }
 
         public static void AddCorrection(
@@ -333,11 +347,8 @@ namespace ClubTimerXbox.Services
 
         public static int GetSalaryTotalByPeriod(DateTime fromInclusive, DateTime toExclusive)
         {
-            return GetExpenseTotalByPeriodAndExpenseCategory(
-                fromInclusive,
-                toExclusive,
-                "Зарплата"
-            );
+            return GetSalaryRecordsByPeriod(fromInclusive, toExclusive)
+                .Sum(record => record.Amount);
         }
 
         public static int GetSalaryTotalByPeriodForEmployee(
@@ -347,13 +358,10 @@ namespace ClubTimerXbox.Services
         {
             employeeName = employeeName.Trim();
 
-            return _records
-                .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
-                    record.Category == "Расходы" &&
-                    record.ExpenseCategory == "Зарплата" &&
-                    record.RelatedEmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase))
+            return GetSalaryRecordsByPeriod(fromInclusive, toExclusive)
+                .Where(record => record.RelatedEmployeeName.Equals(
+                    employeeName,
+                    StringComparison.OrdinalIgnoreCase))
                 .Sum(record => record.Amount);
         }
 
@@ -438,11 +446,24 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            return GetExpenseRecordsByExpenseCategory(
-                fromInclusive,
-                toExclusive,
-                "Зарплата"
-            );
+            return _records
+                .Where(record => IsSalaryRecord(record) &&
+                                 IsSalaryRecordInPeriod(record, fromInclusive, toExclusive))
+                .OrderByDescending(record => record.CreatedAt)
+                .ToList();
+        }
+
+        public static List<CashRecord> GetOwnerWithdrawRecordsByPeriod(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            return _records
+                .Where(record =>
+                    record.Category == "Расходы" &&
+                    record.ExpenseCategory == "Владелец" &&
+                    IsAccountingRecordInPeriod(record, fromInclusive, toExclusive))
+                .OrderByDescending(record => record.CreatedAt)
+                .ToList();
         }
 
         public static int GetShortageTotalByPeriod(DateTime fromInclusive, DateTime toExclusive)
@@ -529,6 +550,93 @@ namespace ClubTimerXbox.Services
         {
             return record.Category == "Расходы" &&
                    !NonClubExpenseCategories.Contains(record.ExpenseCategory ?? "");
+        }
+
+        private static bool IsSalaryRecord(CashRecord record)
+        {
+            return record.Category == "Расходы" &&
+                   record.ExpenseCategory == "Зарплата";
+        }
+
+        private static bool IsSalaryRecordInPeriod(
+            CashRecord record,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            if (IsWholeMonthPeriod(fromInclusive, toExclusive) &&
+                !string.IsNullOrWhiteSpace(record.SalaryMonthKey) &&
+                TryParseSalaryMonthKey(record.SalaryMonthKey, out var salaryMonthStart))
+            {
+                return salaryMonthStart >= fromInclusive.Date &&
+                       salaryMonthStart < toExclusive.Date;
+            }
+
+            return record.CreatedAt >= fromInclusive &&
+                   record.CreatedAt < toExclusive;
+        }
+
+        private static bool IsAccountingRecordInPeriod(
+            CashRecord record,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            if (IsWholeMonthPeriod(fromInclusive, toExclusive) &&
+                !string.IsNullOrWhiteSpace(record.AccountingMonthKey) &&
+                TryParseMonthKey(record.AccountingMonthKey, out var accountingMonthStart))
+            {
+                return accountingMonthStart >= fromInclusive.Date &&
+                       accountingMonthStart < toExclusive.Date;
+            }
+
+            return record.CreatedAt >= fromInclusive &&
+                   record.CreatedAt < toExclusive;
+        }
+
+        private static bool IsWholeMonthPeriod(DateTime fromInclusive, DateTime toExclusive)
+        {
+            return fromInclusive.Day == 1 &&
+                   fromInclusive.TimeOfDay == TimeSpan.Zero &&
+                   toExclusive == fromInclusive.AddMonths(1);
+        }
+
+        private static string NormalizeSalaryMonthKey(string salaryMonthKey)
+        {
+            return NormalizeMonthKey(salaryMonthKey);
+        }
+
+        private static bool TryParseSalaryMonthKey(string salaryMonthKey, out DateTime monthStart)
+        {
+            return TryParseMonthKey(salaryMonthKey, out monthStart);
+        }
+
+        private static string NormalizeMonthKey(string monthKey)
+        {
+            monthKey = (monthKey ?? "").Trim();
+
+            return TryParseMonthKey(monthKey, out var monthStart)
+                ? monthStart.ToString("yyyy-MM")
+                : "";
+        }
+
+        private static bool TryParseMonthKey(string monthKey, out DateTime monthStart)
+        {
+            monthStart = default;
+            monthKey = (monthKey ?? "").Trim();
+
+            if (monthKey.Length != 7 || monthKey[4] != '-')
+                return false;
+
+            if (!int.TryParse(monthKey.Substring(0, 4), out int year))
+                return false;
+
+            if (!int.TryParse(monthKey.Substring(5, 2), out int month))
+                return false;
+
+            if (year < 2000 || month < 1 || month > 12)
+                return false;
+
+            monthStart = new DateTime(year, month, 1);
+            return true;
         }
 
         public static string NormalizePaymentMethod(string paymentMethod)
