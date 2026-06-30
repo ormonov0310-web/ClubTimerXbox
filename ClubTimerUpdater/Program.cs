@@ -5,6 +5,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -103,7 +104,7 @@ namespace ClubTimerUpdater
 
             root.Children.Add(new TextBlock
             {
-                Text = "Идет обновление программы",
+                Text = "Идёт обновление программы",
                 FontSize = 28,
                 FontWeight = FontWeights.Bold,
                 Foreground = Brushes.White,
@@ -132,7 +133,7 @@ namespace ClubTimerUpdater
 
             _statusText = new TextBlock
             {
-                Text = "0% - Подготовка обновления",
+                Text = "0% - подготовка обновления",
                 FontSize = 17,
                 FontWeight = FontWeights.Bold,
                 Foreground = Brush("#93A8FF"),
@@ -158,7 +159,8 @@ namespace ClubTimerUpdater
             try
             {
                 await Task.Run(RunUpdate);
-                SetProgress(100, "100% - Готово", "Новая версия запускается.");
+                SetProgress(100, "100% - готово", "Новая версия запускается.");
+                WriteStatus("done", $"Обновление {_options.Version} установлено.");
                 await Task.Delay(1500);
                 CloseFromUi();
             }
@@ -166,6 +168,7 @@ namespace ClubTimerUpdater
             {
                 ExitCode = 1;
                 UpdateLog.Write(ex.ToString());
+                WriteStatus("failed", ex.Message);
                 SetProgress(
                     Math.Max((int)_progressBar.Value, 1),
                     "Обновление не удалось. Позовите владельца.",
@@ -182,24 +185,31 @@ namespace ClubTimerUpdater
             UpdateLog.Write($"Package path: {_options.PackagePath}");
             UpdateLog.Write($"Target dir: {_options.TargetDir}");
 
-            SetProgress(0, "0% - Подготовка обновления");
+            SetProgress(0, "0% - подготовка обновления");
+            WriteStatus("starting", $"Начата установка обновления {_options.Version}.");
 
-            SetProgress(10, "10% - Закрываем программу");
+            SetProgress(10, "10% - закрываем программу");
+            WriteStatus("waiting_app", "Ждём закрытия программы.");
             UpdateLog.Write("Waiting for process exit");
             WaitForProcessExit(
                 _options.ProcessName,
                 _options.TargetDir,
                 TimeSpan.FromSeconds(_options.WaitSeconds));
 
-            SetProgress(25, "25% - Создаем резервную копию");
+            SetProgress(25, "25% - создаём резервную копию");
+            WriteStatus("backup", "Создаём резервную копию текущей версии.");
             string backupPath = CreateBackup(_options.TargetDir, _options.BackupRoot);
             UpdateLog.Write($"Backup created: {backupPath}");
 
-            SetProgress(50, "50% - Устанавливаем новую версию");
+            SetProgress(50, "50% - устанавливаем новую версию");
+            WriteStatus("copying", "Копируем файлы новой версии.");
             InstallPackage(_options.PackagePath, _options.TargetDir);
             UpdateLog.Write("Package installed");
 
-            SetProgress(80, "80% - Запускаем программу");
+            CleanupOldLocalFiles(backupPath);
+
+            SetProgress(80, "80% - запускаем программу");
+            WriteStatus("starting_app", "Запускаем программу после обновления.");
             TryStartApp();
             UpdateLog.Write("App restart requested");
         }
@@ -230,6 +240,36 @@ namespace ClubTimerUpdater
                 return;
 
             StartApp(Path.Combine(_options.TargetDir, _options.MainExe));
+        }
+
+        private void WriteStatus(string state, string message)
+        {
+            if (string.IsNullOrWhiteSpace(_options.StatusFile))
+                return;
+
+            try
+            {
+                string? directory = Path.GetDirectoryName(_options.StatusFile);
+                if (!string.IsNullOrWhiteSpace(directory))
+                    Directory.CreateDirectory(directory);
+
+                var payload = new
+                {
+                    state,
+                    message,
+                    version = _options.Version,
+                    updatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                };
+
+                File.WriteAllText(
+                    _options.StatusFile,
+                    JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }),
+                    Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                UpdateLog.Write($"Status write failed: {ex.Message}");
+            }
         }
 
         private static void WaitForProcessExit(string processName, string targetDir, TimeSpan timeout)
@@ -357,6 +397,60 @@ namespace ClubTimerUpdater
             }
         }
 
+        private void CleanupOldLocalFiles(string currentBackupPath)
+        {
+            CleanupOldDirectories(_options.BackupRoot, keepCount: 2, alsoKeep: currentBackupPath);
+
+            string? versionDir = Path.GetDirectoryName(_options.PackagePath);
+            string? updatesRoot = versionDir == null ? null : Path.GetDirectoryName(versionDir);
+            if (!string.IsNullOrWhiteSpace(updatesRoot))
+                CleanupOldDirectories(updatesRoot, keepCount: 2, alsoKeep: versionDir);
+        }
+
+        private static void CleanupOldDirectories(
+            string root,
+            int keepCount,
+            string? alsoKeep = null)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+                    return;
+
+                string? keepFullPath = string.IsNullOrWhiteSpace(alsoKeep)
+                    ? null
+                    : Path.GetFullPath(alsoKeep);
+
+                var directories = Directory
+                    .GetDirectories(root)
+                    .Select(path => new DirectoryInfo(path))
+                    .OrderByDescending(info => info.LastWriteTimeUtc)
+                    .ToList();
+
+                foreach (var directory in directories.Skip(Math.Max(0, keepCount)))
+                {
+                    if (keepFullPath != null &&
+                        directory.FullName.Equals(keepFullPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        directory.Delete(recursive: true);
+                    }
+                    catch
+                    {
+                        // Cleanup must not block installation.
+                    }
+                }
+            }
+            catch
+            {
+                // Cleanup must not block installation.
+            }
+        }
+
         private static void StartApp(string exePath)
         {
             if (!File.Exists(exePath))
@@ -433,6 +527,8 @@ namespace ClubTimerUpdater
         public string PackagePath { get; private set; } = "";
         public string TargetDir { get; private set; } = "";
         public string BackupRoot { get; private set; } = "";
+        public string StatusFile { get; private set; } = "";
+        public string Version { get; private set; } = "";
         public string MainExe { get; private set; } = "ClubTimerXbox.exe";
         public string ProcessName { get; private set; } = "ClubTimerXbox";
         public int WaitSeconds { get; private set; } = 60;
@@ -458,6 +554,14 @@ namespace ClubTimerUpdater
                         break;
                     case "--backup-root":
                         options.BackupRoot = value;
+                        i++;
+                        break;
+                    case "--status-file":
+                        options.StatusFile = value;
+                        i++;
+                        break;
+                    case "--version":
+                        options.Version = value;
                         i++;
                         break;
                     case "--main-exe":
@@ -500,6 +604,9 @@ namespace ClubTimerUpdater
                     "ClubTimerXbox",
                     "backups");
             }
+
+            if (string.IsNullOrWhiteSpace(Version))
+                Version = Path.GetFileNameWithoutExtension(PackagePath).Replace("ClubTimerXbox-", "");
 
             error = "";
             return true;

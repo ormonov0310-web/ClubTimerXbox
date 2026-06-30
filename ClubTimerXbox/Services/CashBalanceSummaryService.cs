@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using ClubTimerXbox.Models;
 
 namespace ClubTimerXbox.Services
 {

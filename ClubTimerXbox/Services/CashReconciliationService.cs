@@ -107,6 +107,42 @@ namespace ClubTimerXbox.Services
             return item;
         }
 
+        public static int ResolveStaleCashlessZeroBaselineArtifacts(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            int expectedAmount,
+            int actualAmount)
+        {
+            if (expectedAmount != actualAmount)
+                return 0;
+
+            int resolved = 0;
+
+            foreach (var item in _items
+                .Where(item =>
+                    item.Status == CashReconciliationStatus.Open &&
+                    item.Kind == CashReconciliationKind.CashlessExtra &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    item.ExpectedAmount == 0 &&
+                    item.ActualAmount == actualAmount &&
+                    item.Amount == actualAmount)
+                .ToList())
+            {
+                item.Status = CashReconciliationStatus.Resolved;
+                item.ResolvedAt = DateTime.Now;
+                item.ResolvedBy = "Система";
+                item.ResolutionNote =
+                    "Закрыто автоматически: повторная сверка показала, что фактический безнал равен программе.";
+                resolved++;
+            }
+
+            if (resolved > 0)
+                Save();
+
+            return resolved;
+        }
+
         public static CashReconciliationItem AddBalanceRawDifference(
             int expectedAmount,
             int actualAmount,

@@ -34,6 +34,9 @@ namespace ClubTimerXbox.Services
             string responsibleEmployeeName,
             string acceptanceKey = "")
         {
+            if (IsAcceptanceRequired())
+                return;
+
             if (!string.IsNullOrWhiteSpace(acceptanceKey) &&
                 Current.AcceptanceKey.Equals(acceptanceKey, StringComparison.OrdinalIgnoreCase))
             {

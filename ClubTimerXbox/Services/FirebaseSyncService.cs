@@ -348,6 +348,17 @@ namespace ClubTimerXbox.Services
                     salaryAccruedMonth,
                     shortagesMonth
                 );
+
+                if (actualCashlessBalanceMonth.HasValue)
+                {
+                    CashReconciliationService.ResolveStaleCashlessZeroBaselineArtifacts(
+                        monthStart,
+                        nextMonthStart,
+                        expectedCashlessBalanceMonth,
+                        actualCashlessBalanceMonth.Value
+                    );
+                }
+
                 var cashReconciliation = CashReconciliationService
                     .GetRecentItems()
                     .Select(item => new
@@ -3178,12 +3189,15 @@ namespace ClubTimerXbox.Services
                     record.CreatedAt >= monthStart &&
                     record.CreatedAt < nextMonthStart)
                 .Sum(record => record.MBankAmount);
-            int expectedCashlessBalance = CalculateExpectedCashlessBalanceByPeriod(
+            int calculatedExpectedCashlessBalance = CalculateExpectedCashlessBalanceByPeriod(
                 monthStart,
                 nextMonthStart
             );
 
             int actualCashless = command.Amount;
+            int expectedCashlessBalance = command.ExpectedAmount >= 0
+                ? command.ExpectedAmount
+                : calculatedExpectedCashlessBalance;
             int difference = actualCashless - expectedCashlessBalance;
 
             CashlessService.SetAmountForToday(
@@ -3193,22 +3207,27 @@ namespace ClubTimerXbox.Services
                     : command.Description
             );
 
-            if (difference >= 0)
+            if (difference == 0)
+            {
+                CashReconciliationService.ResolveStaleCashlessZeroBaselineArtifacts(
+                    monthStart,
+                    nextMonthStart,
+                    expectedCashlessBalance,
+                    actualCashless
+                );
+
+                return "Остаток безнала сошелся.";
+            }
+
+            if (difference > 0)
             {
                 var cashlessExtra = CashReconciliationService.AddCashlessVerification(
                     expectedAmount: expectedCashlessBalance,
                     actualAmount: actualCashless,
                     amount: difference,
-                    status: difference == 0
-                        ? CashReconciliationStatus.Resolved
-                        : CashReconciliationStatus.Open,
-                    note: difference == 0
-                        ? "Остаток безнала сошелся."
-                        : $"Фактический остаток безнала больше программы на {difference} сом. Оставлено как резерв для ошибок типа оплаты."
+                    status: CashReconciliationStatus.Open,
+                    note: $"Фактический остаток безнала больше программы на {difference} сом. Оставлено как резерв для ошибок типа оплаты."
                 );
-
-                if (difference == 0)
-                    return "Остаток безнала сошелся.";
 
                 if (cashlessExtra.Status == CashReconciliationStatus.Resolved)
                     return $"Остаток безнала больше программы на {difference} сом. Излишек автоматически зачтен против недостачи налички.";
@@ -3309,11 +3328,14 @@ namespace ClubTimerXbox.Services
                 nextMonthStart,
                 actualCash
             );
-            int expectedCashless = CalculateExpectedCashlessBalanceForReconciliation(
+            int calculatedExpectedCashless = CalculateExpectedCashlessBalanceForReconciliation(
                 monthStart,
                 nextMonthStart,
                 actualCashless
             );
+            int expectedCashless = command.ExpectedAmount >= 0
+                ? command.ExpectedAmount
+                : calculatedExpectedCashless;
             int cashDifference = actualCash.HasValue
                 ? actualCash.Value - expectedCash
                 : 0;
@@ -3817,6 +3839,7 @@ namespace ClubTimerXbox.Services
             public string Title { get; set; } = "";
             public string Description { get; set; } = "";
             public int Amount { get; set; }
+            public int ExpectedAmount { get; set; } = -1;
 
             public string PaymentMethod { get; set; } = "Наличные";
 

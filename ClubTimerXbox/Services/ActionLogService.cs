@@ -84,13 +84,23 @@ namespace ClubTimerXbox.Services
 
         public static ShiftLogItem StartShift(string employeeName)
         {
-            var previousClosedShift = GetLastClosedShift();
+            string cleanEmployeeName = employeeName.Trim();
+            var currentShift = CurrentShift;
+
+            if (currentShift != null &&
+                currentShift.EmployeeName.Trim().Equals(cleanEmployeeName, StringComparison.OrdinalIgnoreCase))
+            {
+                EnsureAcceptanceForCurrentShift();
+                return currentShift;
+            }
+
+            var previousShift = currentShift ?? GetLastClosedShift();
 
             CloseCurrentShift();
 
             var shift = new ShiftLogItem
             {
-                EmployeeName = employeeName,
+                EmployeeName = cleanEmployeeName,
                 StartedAt = DateTime.Now,
                 ClosedAt = null,
                 IsClosed = false
@@ -99,15 +109,15 @@ namespace ClubTimerXbox.Services
             Shifts.Add(shift);
 
             Add(
-                employeeName: employeeName,
+                employeeName: cleanEmployeeName,
                 actionType: "Смена открыта",
                 placeName: "",
-                description: $"Смена сотрудника {employeeName} открыта."
+                description: $"Смена сотрудника {cleanEmployeeName} открыта."
             );
 
             StartAcceptanceIfNeeded(
-                newEmployeeName: employeeName,
-                responsibleShift: previousClosedShift,
+                newEmployeeName: cleanEmployeeName,
+                responsibleShift: previousShift,
                 newShift: shift
             );
 
@@ -149,7 +159,16 @@ namespace ClubTimerXbox.Services
 
         public static ShiftLogItem SwitchShift(string newEmployeeName)
         {
+            newEmployeeName = newEmployeeName.Trim();
             var oldShift = CurrentShift;
+
+            if (oldShift != null &&
+                oldShift.EmployeeName.Trim().Equals(newEmployeeName, StringComparison.OrdinalIgnoreCase))
+            {
+                EnsureAcceptanceForCurrentShift();
+                return oldShift;
+            }
+
             var responsibleShift = oldShift ?? GetLastClosedShift();
             string oldEmployeeName = responsibleShift?.EmployeeName ?? "Неизвестно";
 
@@ -204,6 +223,9 @@ namespace ClubTimerXbox.Services
             ShiftLogItem? responsibleShift,
             ShiftLogItem newShift)
         {
+            if (ShiftAcceptanceService.IsAcceptanceRequired())
+                return;
+
             if (responsibleShift == null)
                 return;
 
@@ -229,6 +251,9 @@ namespace ClubTimerXbox.Services
 
         public static void EnsureAcceptanceForCurrentShift()
         {
+            if (ShiftAcceptanceService.IsAcceptanceRequired())
+                return;
+
             var currentShift = CurrentShift;
 
             if (currentShift == null)

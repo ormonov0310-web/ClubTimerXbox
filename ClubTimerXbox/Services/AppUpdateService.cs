@@ -20,6 +20,7 @@ namespace ClubTimerXbox.Services
         private static AppUpdateInfo? _lastInfo;
         private static readonly object InstallSync = new object();
         private static bool _installInProgress;
+        private const int KeepLocalUpdateCopies = 2;
 
         private static string UpdateManifestPath =>
             $"updates/channels/{AppVersionService.UpdateChannel}";
@@ -30,8 +31,30 @@ namespace ClubTimerXbox.Services
         private static string OwnerClubUpdateStatusPath =>
             $"owner/clubs/{PcIdentityService.Current.ClubId}/updateStatus";
 
+        private static string LocalAppDataRoot =>
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "ClubTimerXbox");
+
+        private static string UpdatesRoot => Path.Combine(LocalAppDataRoot, "updates");
+
+        private static string BackupsRoot => Path.Combine(LocalAppDataRoot, "backups");
+
+        private static string UpdaterRunnerRoot => Path.Combine(LocalAppDataRoot, "updater-runner");
+
+        private static string UpdaterStatusFilePath => Path.Combine(LocalAppDataRoot, "updater-status.json");
+
         public static async Task CheckAndReportAsync(IReadOnlyList<ClubPlace> places)
         {
+            try
+            {
+                await ReportLocalUpdaterStatusIfAnyAsync(places);
+            }
+            catch
+            {
+                // Local updater status must never interrupt the club workflow.
+            }
+
             if (DateTime.Now - _lastCheck < CheckInterval)
                 return;
 
@@ -133,12 +156,12 @@ namespace ClubTimerXbox.Services
                         step,
                         step < 100
                             ? "Проверяем готовность и готовим окно установки..."
-                            : "Готово. Открываем updater..."
+                            : "Готово. Открываем установщик..."
                     ));
                     await Task.Delay(100);
                 }
 
-                StartUpdater(packagePath);
+                StartUpdater(packagePath, manifest.LatestVersion);
                 updaterStarted = true;
 
                 await ReportStatusAsync(
@@ -267,12 +290,7 @@ namespace ClubTimerXbox.Services
             IProgress<AppUpdateProgress>? progress = null)
         {
             string version = SafePathPart(manifest.LatestVersion);
-            string updateDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "ClubTimerXbox",
-                "updates",
-                version);
-
+            string updateDir = Path.Combine(UpdatesRoot, version);
             Directory.CreateDirectory(updateDir);
 
             string packagePath = Path.Combine(updateDir, $"ClubTimerXbox-{version}.zip");
@@ -318,6 +336,7 @@ namespace ClubTimerXbox.Services
                 VerifySha256(bytes, manifest.Sha256);
 
             await File.WriteAllBytesAsync(packagePath, bytes);
+            CleanupOldDirectories(UpdatesRoot, KeepLocalUpdateCopies, updateDir);
             return packagePath;
         }
 
@@ -338,15 +357,11 @@ namespace ClubTimerXbox.Services
                 : $"{size:0.0} {units[unitIndex]}";
         }
 
-        private static void StartUpdater(string packagePath)
+        private static void StartUpdater(string packagePath, string version)
         {
             string appDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
-            string runnerDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "ClubTimerXbox",
-                "updater-runner",
-                Guid.NewGuid().ToString("N"));
-
+            CleanupOldDirectories(UpdaterRunnerRoot, KeepLocalUpdateCopies);
+            string runnerDir = Path.Combine(UpdaterRunnerRoot, Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(runnerDir);
 
             foreach (string file in Directory.GetFiles(appDir, "*", SearchOption.TopDirectoryOnly))
@@ -359,11 +374,6 @@ namespace ClubTimerXbox.Services
             if (!File.Exists(updaterExe))
                 throw new FileNotFoundException("ClubTimerUpdater.exe not found in application folder.", updaterExe);
 
-            string backupRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "ClubTimerXbox",
-                "backups");
-
             string mainExe = Path.GetFileName(Process.GetCurrentProcess().MainModule?.FileName)
                 ?? "ClubTimerXbox.exe";
 
@@ -371,7 +381,9 @@ namespace ClubTimerXbox.Services
             {
                 "--package", packagePath,
                 "--target", appDir,
-                "--backup-root", backupRoot,
+                "--backup-root", BackupsRoot,
+                "--status-file", UpdaterStatusFilePath,
+                "--version", version,
                 "--main-exe", mainExe,
                 "--process", Path.GetFileNameWithoutExtension(mainExe),
                 "--wait-seconds", "90"
@@ -461,6 +473,96 @@ namespace ClubTimerXbox.Services
 
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
             await _httpClient.PutAsync(url, content);
+        }
+
+        private static async Task ReportLocalUpdaterStatusIfAnyAsync(IReadOnlyList<ClubPlace> places)
+        {
+            if (!File.Exists(UpdaterStatusFilePath))
+                return;
+
+            LocalUpdaterStatus? status = null;
+
+            try
+            {
+                string json = await File.ReadAllTextAsync(UpdaterStatusFilePath);
+                status = JsonSerializer.Deserialize<LocalUpdaterStatus>(
+                    json,
+                    new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+            }
+            catch
+            {
+                return;
+            }
+
+            if (status == null || string.IsNullOrWhiteSpace(status.State))
+                return;
+
+            var manifest = await ReadManifestAsync();
+            var info = BuildUpdateInfo(manifest, places);
+            string message = string.IsNullOrWhiteSpace(status.Message)
+                ? $"Updater state: {status.State}"
+                : status.Message;
+
+            await ReportStatusAsync(info, status.State, message);
+
+            if (status.State.Equals("done", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    File.Delete(UpdaterStatusFilePath);
+                }
+                catch
+                {
+                    // A stale status file is not critical.
+                }
+            }
+        }
+
+        private static void CleanupOldDirectories(
+            string root,
+            int keepCount,
+            string? alsoKeep = null)
+        {
+            try
+            {
+                if (!Directory.Exists(root))
+                    return;
+
+                string? keepFullPath = string.IsNullOrWhiteSpace(alsoKeep)
+                    ? null
+                    : Path.GetFullPath(alsoKeep);
+
+                var directories = Directory
+                    .GetDirectories(root)
+                    .Select(path => new DirectoryInfo(path))
+                    .OrderByDescending(info => info.LastWriteTimeUtc)
+                    .ToList();
+
+                foreach (var directory in directories.Skip(Math.Max(0, keepCount)))
+                {
+                    if (keepFullPath != null &&
+                        directory.FullName.Equals(keepFullPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        directory.Delete(recursive: true);
+                    }
+                    catch
+                    {
+                        // Cleanup must not block updates.
+                    }
+                }
+            }
+            catch
+            {
+                // Cleanup must not block updates.
+            }
         }
 
         public sealed class InstallUpdateResult
@@ -554,6 +656,14 @@ namespace ClubTimerXbox.Services
             public string Sha256 { get; set; } = "";
             public string Notes { get; set; } = "";
             public string Channel { get; set; } = "";
+        }
+
+        private sealed class LocalUpdaterStatus
+        {
+            public string State { get; set; } = "";
+            public string Message { get; set; } = "";
+            public string Version { get; set; } = "";
+            public string UpdatedAt { get; set; } = "";
         }
     }
 }
