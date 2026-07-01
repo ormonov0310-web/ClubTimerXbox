@@ -3166,7 +3166,7 @@ namespace ClubTimerXbox.Services
                 item.Amount > 0 &&
                 item.Kind == CashReconciliationKind.CashlessShortage)
             {
-                var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+                var monthStart = ResolveReconciliationMonth(command, item);
                 var nextMonthStart = monthStart.AddMonths(1);
 
                 DistributeCashlessShortage(
@@ -3179,6 +3179,16 @@ namespace ClubTimerXbox.Services
             }
 
             return item;
+        }
+
+        private static DateTime ResolveReconciliationMonth(
+            FirebaseCommand command,
+            CashReconciliationItem item)
+        {
+            if (DateTime.TryParse($"{command.MonthKey}-01", out DateTime commandMonth))
+                return new DateTime(commandMonth.Year, commandMonth.Month, 1);
+
+            return new DateTime(item.CreatedAt.Year, item.CreatedAt.Month, 1);
         }
 
         private static void ApplyAddManualEmployeeMoneyLoss(FirebaseCommand command)

@@ -159,7 +159,7 @@ namespace ClubTimerXbox
 
             int purchases = StockPurchaseService.GetTotalByPeriod(_periodFrom, _periodTo);
 
-            int cashless = CashlessService.GetAmountByPeriod(_periodFrom, _periodTo);
+            int cashless = CashlessService.GetLatestAmountByPeriod(_periodFrom, _periodTo) ?? 0;
             int expectedCash = income - cashless;
 
             if (expectedCash < 0)
@@ -231,7 +231,7 @@ namespace ClubTimerXbox
             panel.Children.Add(new TextBlock
             {
                 Text =
-                    $"Безнал: {cashless} сом\n" +
+                    $"Безнал по последней сверке: {cashless} сом\n" +
                     $"Ожидаемая наличка: {expectedCash} сом",
                 Foreground = new SolidColorBrush(Color.FromRgb(251, 191, 36)),
                 FontSize = 17,
