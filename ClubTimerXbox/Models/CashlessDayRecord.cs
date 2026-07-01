@@ -8,6 +8,8 @@ namespace ClubTimerXbox.Models
 
         public int Amount { get; set; }
 
+        public int? ExpectedAmount { get; set; }
+
         public DateTime UpdatedAt { get; set; } = DateTime.Now;
 
         public string Note { get; set; } = "";

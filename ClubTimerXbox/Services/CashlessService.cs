@@ -29,10 +29,17 @@ namespace ClubTimerXbox.Services
             return GetAmountForDate(DateTime.Today);
         }
 
-        public static void SetAmountForDate(DateTime date, int amount, string note = "")
+        public static void SetAmountForDate(
+            DateTime date,
+            int amount,
+            string note = "",
+            int? expectedAmount = null)
         {
             if (amount < 0)
                 amount = 0;
+
+            if (expectedAmount.HasValue && expectedAmount.Value < 0)
+                expectedAmount = 0;
 
             DateTime targetDate = date.Date;
 
@@ -49,15 +56,19 @@ namespace ClubTimerXbox.Services
             }
 
             record.Amount = amount;
+            record.ExpectedAmount = expectedAmount;
             record.Note = note;
             record.UpdatedAt = DateTime.Now;
 
             Save();
         }
 
-        public static void SetAmountForToday(int amount, string note = "")
+        public static void SetAmountForToday(
+            int amount,
+            string note = "",
+            int? expectedAmount = null)
         {
-            SetAmountForDate(DateTime.Today, amount, note);
+            SetAmountForDate(DateTime.Today, amount, note, expectedAmount);
         }
 
         public static int GetExpectedCashForToday()

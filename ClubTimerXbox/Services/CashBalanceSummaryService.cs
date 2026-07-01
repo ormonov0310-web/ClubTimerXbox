@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using ClubTimerXbox.Models;
 
 namespace ClubTimerXbox.Services
 {
@@ -99,19 +100,35 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
+            DateTime? sourceTime = null;
+            int sourceAmount = 0;
+
+            void UseSource(int amount, DateTime time)
+            {
+                if (!sourceTime.HasValue || time > sourceTime.Value)
+                {
+                    sourceTime = time;
+                    sourceAmount = amount;
+                }
+            }
+
             var checkpoint = CashBalanceCheckpointService.GetLatestByPeriod(
                 fromInclusive,
                 toExclusive
             );
 
             if (checkpoint != null)
-            {
-                return CalculateCashBalanceAfterCheckpoint(
-                    checkpoint.CashAmount,
-                    checkpoint.CreatedAt,
-                    toExclusive
-                );
-            }
+                UseSource(checkpoint.CashAmount, checkpoint.CreatedAt);
+
+            var latestAcceptance = CashAcceptanceService
+                .GetByPeriod(fromInclusive, toExclusive)
+                .FirstOrDefault();
+
+            if (latestAcceptance != null)
+                UseSource(latestAcceptance.ExpectedCashAmount, latestAcceptance.CreatedAt);
+
+            if (sourceTime.HasValue)
+                return CalculateCashBalanceAfterCheckpoint(sourceAmount, sourceTime.Value, toExclusive);
 
             return CalculateCashBalanceFromMonthStart(fromInclusive, toExclusive);
         }
@@ -175,19 +192,52 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
+            DateTime? sourceTime = null;
+            int sourceAmount = 0;
+
+            void UseSource(int amount, DateTime time)
+            {
+                if (!sourceTime.HasValue || time > sourceTime.Value)
+                {
+                    sourceTime = time;
+                    sourceAmount = amount;
+                }
+            }
+
             var checkpoint = CashlessBalanceCheckpointService.GetLatestByPeriod(
                 fromInclusive,
                 toExclusive
             );
 
             if (checkpoint != null)
-            {
-                return CalculateCashlessBalanceAfterCheckpoint(
-                    checkpoint.CashlessAmount,
-                    checkpoint.CreatedAt,
-                    toExclusive
-                );
-            }
+                UseSource(checkpoint.CashlessAmount, checkpoint.CreatedAt);
+
+            var latestVerification = CashlessService.Records
+                .Where(record =>
+                    record.Date >= fromInclusive.Date &&
+                    record.Date < toExclusive.Date &&
+                    record.ExpectedAmount.HasValue)
+                .OrderByDescending(record => record.UpdatedAt)
+                .FirstOrDefault();
+
+            if (latestVerification?.ExpectedAmount != null)
+                UseSource(latestVerification.ExpectedAmount.Value, latestVerification.UpdatedAt);
+
+            var latestCashlessReconciliation = CashReconciliationService.Items
+                .Where(item =>
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    (item.Kind == CashReconciliationKind.CashlessExtra ||
+                     item.Kind == CashReconciliationKind.CashlessShortage) &&
+                    item.ExpectedAmount >= 0)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstOrDefault();
+
+            if (latestCashlessReconciliation != null)
+                UseSource(latestCashlessReconciliation.ExpectedAmount, latestCashlessReconciliation.CreatedAt);
+
+            if (sourceTime.HasValue)
+                return CalculateCashlessBalanceAfterCheckpoint(sourceAmount, sourceTime.Value, fromInclusive, toExclusive);
 
             return CalculateCashlessBalanceFromMonthStart(fromInclusive, toExclusive);
         }
@@ -207,6 +257,7 @@ namespace ClubTimerXbox.Services
             return CalculateCashlessBalanceAfterCheckpoint(
                 checkpoint.CashlessAmount,
                 checkpoint.CreatedAt,
+                fromInclusive,
                 toExclusive
             );
         }
@@ -257,6 +308,7 @@ namespace ClubTimerXbox.Services
         private static int CalculateCashlessBalanceAfterCheckpoint(
             int checkpointAmount,
             DateTime checkpointTime,
+            DateTime fromInclusive,
             DateTime toExclusive)
         {
             int incomeAfterCheckpoint = PaymentService.Records

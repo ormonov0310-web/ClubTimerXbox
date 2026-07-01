@@ -466,6 +466,28 @@ namespace ClubTimerXbox.Services
                 .ToList();
         }
 
+        public static bool IsPriorMonthExpense(CashRecord record, DateTime monthStart)
+        {
+            if (record.Category != "Расходы")
+                return false;
+
+            string monthKey = record.ExpenseCategory switch
+            {
+                "Владелец" => record.AccountingMonthKey,
+                "Зарплата" => record.SalaryMonthKey,
+                _ => ""
+            };
+
+            if (string.IsNullOrWhiteSpace(monthKey) ||
+                !TryParseMonthKey(monthKey, out DateTime accountingMonth))
+            {
+                return false;
+            }
+
+            var accountingMonthStart = new DateTime(accountingMonth.Year, accountingMonth.Month, 1);
+            return accountingMonthStart < monthStart.Date;
+        }
+
         public static int GetShortageTotalByPeriod(DateTime fromInclusive, DateTime toExclusive)
         {
             return GetTotalByPeriodAndCategory(fromInclusive, toExclusive, "Недостачи");
