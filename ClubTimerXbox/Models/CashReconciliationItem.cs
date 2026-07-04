@@ -33,6 +33,12 @@ namespace ClubTimerXbox.Models
 
         public int Amount { get; set; }
 
+        public int OriginalAmount { get; set; }
+
+        public int ResolvedAmount { get; set; }
+
+        public int FormalizedAmount { get; set; }
+
         public int ExpectedAmount { get; set; }
 
         public int ActualAmount { get; set; }

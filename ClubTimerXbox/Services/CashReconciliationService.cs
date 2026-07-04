@@ -50,6 +50,7 @@ namespace ClubTimerXbox.Services
                     : CashReconciliationKind.CashShortage,
                 Status = CashReconciliationStatus.Open,
                 Amount = Math.Abs(difference),
+                OriginalAmount = Math.Abs(difference),
                 ExpectedAmount = expectedAmount,
                 ActualAmount = actualAmount,
                 CheckedByEmployeeName = checkedByEmployeeName.Trim(),
@@ -61,7 +62,6 @@ namespace ClubTimerXbox.Services
             };
 
             _items.Add(item);
-            AutoResolveSmallPaymentMistakes();
             Save();
 
             return item;
@@ -83,6 +83,7 @@ namespace ClubTimerXbox.Services
                     : CashReconciliationKind.CashlessShortage,
                 Status = status,
                 Amount = Math.Max(0, amount),
+                OriginalAmount = Math.Max(0, amount),
                 ExpectedAmount = expectedAmount,
                 ActualAmount = actualAmount,
                 CheckedByEmployeeName = "Владелец",
@@ -95,16 +96,87 @@ namespace ClubTimerXbox.Services
 
             if (status == CashReconciliationStatus.Resolved)
             {
+                item.ResolvedAmount = item.Amount;
+                item.Amount = 0;
                 item.ResolvedAt = DateTime.Now;
                 item.ResolvedBy = "Система";
                 item.ResolutionNote = note.Trim();
             }
 
             _items.Add(item);
-            AutoResolveSmallPaymentMistakes();
             Save();
 
             return item;
+        }
+
+        public static int NetOpenMoneyCorrections(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string resolvedBy,
+            string note)
+        {
+            var extras = _items
+                .Where(item =>
+                    item.Status == CashReconciliationStatus.Open &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    IsExtraKind(item.Kind) &&
+                    item.Amount > 0)
+                .OrderBy(item => item.CreatedAt)
+                .ToList();
+
+            var shortages = _items
+                .Where(item =>
+                    item.Status == CashReconciliationStatus.Open &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    IsShortageKind(item.Kind) &&
+                    item.Amount > 0)
+                .OrderBy(item => item.CreatedAt)
+                .ToList();
+
+            int consumed = 0;
+            string finalResolvedBy = string.IsNullOrWhiteSpace(resolvedBy)
+                ? "Система"
+                : resolvedBy.Trim();
+            string finalNote = string.IsNullOrWhiteSpace(note)
+                ? "Закрыто общим зачётом излишков и недостач после сверки кассы."
+                : note.Trim();
+
+            foreach (var shortage in shortages)
+            {
+                NormalizeItem(shortage);
+
+                foreach (var extra in extras)
+                {
+                    NormalizeItem(extra);
+
+                    if (shortage.Amount <= 0)
+                        break;
+
+                    if (extra.Amount <= 0)
+                        continue;
+
+                    int amount = Math.Min(shortage.Amount, extra.Amount);
+
+                    ApplyAutomaticSettlement(shortage, amount);
+                    ApplyAutomaticSettlement(extra, amount);
+                    consumed += amount;
+
+                    string pairNote = $"{finalNote} Зачтено встречной суммой: {amount} сом.";
+
+                    AppendNote(shortage, pairNote);
+                    AppendNote(extra, pairNote);
+
+                    ResolveIfEmpty(shortage, finalResolvedBy, pairNote);
+                    ResolveIfEmpty(extra, finalResolvedBy, pairNote);
+                }
+            }
+
+            if (consumed > 0)
+                Save();
+
+            return consumed;
         }
 
         public static int ResolveStaleCashlessZeroBaselineArtifacts(
@@ -159,6 +231,7 @@ namespace ClubTimerXbox.Services
                     : CashReconciliationKind.CashlessExtra,
                 Status = CashReconciliationStatus.Open,
                 Amount = Math.Max(0, amount),
+                OriginalAmount = Math.Max(0, amount),
                 ExpectedAmount = expectedAmount,
                 ActualAmount = actualAmount,
                 CheckedByEmployeeName = "Владелец",
@@ -232,8 +305,8 @@ namespace ClubTimerXbox.Services
 
                     int amount = Math.Min(shortage.Amount, extra.Amount);
 
-                    shortage.Amount -= amount;
-                    extra.Amount -= amount;
+                    ApplyAutomaticSettlement(shortage, amount);
+                    ApplyAutomaticSettlement(extra, amount);
                     changed = true;
 
                     if (extra.Amount == 0)
@@ -285,9 +358,9 @@ namespace ClubTimerXbox.Services
 
                 int useAmount = Math.Min(item.Amount, remaining);
 
-                item.Amount -= useAmount;
-                consumed += useAmount;
-                remaining -= useAmount;
+                    ApplyAutomaticSettlement(item, useAmount);
+                    consumed += useAmount;
+                    remaining -= useAmount;
 
                 if (item.Amount == 0)
                 {
@@ -326,9 +399,9 @@ namespace ClubTimerXbox.Services
 
                 int useAmount = Math.Min(item.Amount, remaining);
 
-                item.Amount -= useAmount;
-                consumed += useAmount;
-                remaining -= useAmount;
+                    ApplyAutomaticSettlement(item, useAmount);
+                    consumed += useAmount;
+                    remaining -= useAmount;
 
                 if (item.Amount == 0)
                 {
@@ -365,8 +438,6 @@ namespace ClubTimerXbox.Services
 
         public static List<CashReconciliationItem> GetRecentItems(int count = 100)
         {
-            AutoResolveSmallPaymentMistakes();
-
             return _items
                 .OrderByDescending(item => item.CreatedAt)
                 .Take(count)
@@ -386,7 +457,13 @@ namespace ClubTimerXbox.Services
             if (item.Status == CashReconciliationStatus.Resolved)
                 return item;
 
-            item.Amount = Math.Max(0, amount);
+            NormalizeItem(item);
+
+            int nextAmount = Math.Max(0, amount);
+            if (nextAmount < item.Amount)
+                item.ResolvedAmount += item.Amount - nextAmount;
+
+            item.Amount = nextAmount;
 
             if (!string.IsNullOrWhiteSpace(note))
             {
@@ -424,6 +501,13 @@ namespace ClubTimerXbox.Services
                 .OrderBy(item => item.CreatedAt)
                 .ToList())
             {
+                NormalizeItem(item);
+                if (item.Amount > 0)
+                {
+                    item.ResolvedAmount += item.Amount;
+                    item.Amount = 0;
+                }
+
                 item.Status = CashReconciliationStatus.Resolved;
                 item.ResolvedAt = DateTime.Now;
                 item.ResolvedBy = string.IsNullOrWhiteSpace(resolvedBy)
@@ -452,6 +536,18 @@ namespace ClubTimerXbox.Services
 
             if (item.Status == CashReconciliationStatus.Resolved)
                 return item;
+
+            NormalizeItem(item);
+
+            if (item.Amount > 0)
+            {
+                if (resolutionType == "RealShortage")
+                    item.FormalizedAmount += item.Amount;
+                else
+                    item.ResolvedAmount += item.Amount;
+
+                item.Amount = 0;
+            }
 
             item.Status = CashReconciliationStatus.Resolved;
             item.ResolvedAt = DateTime.Now;
@@ -496,6 +592,105 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        private static bool IsExtraKind(CashReconciliationKind kind)
+        {
+            return kind == CashReconciliationKind.CashExtra ||
+                   kind == CashReconciliationKind.CashlessExtra;
+        }
+
+        private static bool IsShortageKind(CashReconciliationKind kind)
+        {
+            return kind == CashReconciliationKind.CashShortage ||
+                   kind == CashReconciliationKind.CashlessShortage;
+        }
+
+        private static void ResolveIfEmpty(
+            CashReconciliationItem item,
+            string resolvedBy,
+            string note)
+        {
+            NormalizeItem(item);
+
+            if (item.Amount > 0 ||
+                item.Status == CashReconciliationStatus.Resolved)
+            {
+                return;
+            }
+
+            item.Status = CashReconciliationStatus.Resolved;
+            item.ResolvedAt = DateTime.Now;
+            item.ResolvedBy = resolvedBy;
+            item.ResolutionNote = note;
+        }
+
+        private static void AppendNote(CashReconciliationItem item, string note)
+        {
+            if (string.IsNullOrWhiteSpace(note))
+                return;
+
+            item.Note = string.IsNullOrWhiteSpace(item.Note)
+                ? note.Trim()
+                : $"{item.Note.Trim()}\n{note.Trim()}";
+        }
+
+        private static void ApplyAutomaticSettlement(CashReconciliationItem item, int amount)
+        {
+            NormalizeItem(item);
+
+            amount = Math.Max(0, Math.Min(item.Amount, amount));
+            if (amount <= 0)
+                return;
+
+            item.Amount -= amount;
+            item.ResolvedAmount += amount;
+        }
+
+        private static void NormalizeItem(CashReconciliationItem item)
+        {
+            if (item == null)
+                return;
+
+            if (item.Amount < 0)
+                item.Amount = 0;
+
+            if (item.ResolvedAmount < 0)
+                item.ResolvedAmount = 0;
+
+            if (item.FormalizedAmount < 0)
+                item.FormalizedAmount = 0;
+
+            if (item.OriginalAmount <= 0)
+            {
+                int differenceAmount = Math.Abs(item.ActualAmount - item.ExpectedAmount);
+                item.OriginalAmount = Math.Max(item.Amount, differenceAmount);
+            }
+
+            if (item.Status == CashReconciliationStatus.Resolved && item.Amount > 0)
+            {
+                if (LooksLikeFormalizedShortage(item))
+                    item.FormalizedAmount += item.Amount;
+                else
+                    item.ResolvedAmount += item.Amount;
+
+                item.Amount = 0;
+            }
+
+            int knownTotal = item.Amount + item.ResolvedAmount + item.FormalizedAmount;
+            if (item.OriginalAmount < knownTotal)
+                item.OriginalAmount = knownTotal;
+        }
+
+        private static bool LooksLikeFormalizedShortage(CashReconciliationItem item)
+        {
+            if (!IsShortageKind(item.Kind))
+                return false;
+
+            string text = $"{item.ResolutionNote} {item.Note}";
+            return text.Contains("Реальная недостача", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("Оформлено", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("штраф", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static List<CashReconciliationItem> Load()
         {
             try
@@ -506,7 +701,12 @@ namespace ClubTimerXbox.Services
                 string json = File.ReadAllText(FilePath);
                 var items = JsonSerializer.Deserialize<List<CashReconciliationItem>>(json);
 
-                return items ?? new List<CashReconciliationItem>();
+                items ??= new List<CashReconciliationItem>();
+
+                foreach (var item in items)
+                    NormalizeItem(item);
+
+                return items;
             }
             catch
             {

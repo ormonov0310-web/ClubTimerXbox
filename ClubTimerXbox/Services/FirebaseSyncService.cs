@@ -368,6 +368,10 @@ namespace ClubTimerXbox.Services
                         kind = item.Kind.ToString(),
                         status = item.Status.ToString(),
                         amount = item.Amount,
+                        originalAmount = item.OriginalAmount,
+                        resolvedAmount = item.ResolvedAmount,
+                        formalizedAmount = item.FormalizedAmount,
+                        remainingAmount = item.Amount,
                         expectedAmount = item.ExpectedAmount,
                         actualAmount = item.ActualAmount,
                         checkedByEmployeeName = item.CheckedByEmployeeName,
@@ -908,10 +912,18 @@ namespace ClubTimerXbox.Services
                 .FirstOrDefault();
 
             if (latestAcceptance != null)
-                UseSource(latestAcceptance.ExpectedCashAmount, latestAcceptance.CreatedAt);
+                UseSource(latestAcceptance.ActualCashAmount, latestAcceptance.CreatedAt);
 
             if (sourceTime.HasValue)
                 return CalculateCashBalanceAfterCheckpoint(sourceAmount, sourceTime.Value, toExclusive);
+
+            var rolloverSource = GetLatestCashRolloverSource(fromInclusive);
+            if (rolloverSource.HasValue)
+                return CalculateCashBalanceAfterCheckpoint(
+                    rolloverSource.Value.Amount,
+                    rolloverSource.Value.Time,
+                    toExclusive
+                );
 
             return CalculateCashBalanceFromMonthStart(
                 fromInclusive,
@@ -981,6 +993,44 @@ namespace ClubTimerXbox.Services
                 .Sum(record => record.Amount);
 
             return Math.Max(0, income - expenses);
+        }
+
+        private static (int Amount, DateTime Time)? GetLatestCashRolloverSource(DateTime fromInclusive)
+        {
+            DateTime? sourceTime = null;
+            int sourceAmount = 0;
+
+            void UseSource(int amount, DateTime time)
+            {
+                if (time >= fromInclusive)
+                    return;
+
+                if (!sourceTime.HasValue || time > sourceTime.Value)
+                {
+                    sourceTime = time;
+                    sourceAmount = amount;
+                }
+            }
+
+            var checkpoint = CashBalanceCheckpointService.Items
+                .Where(item => item.CreatedAt < fromInclusive)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstOrDefault();
+
+            if (checkpoint != null)
+                UseSource(checkpoint.CashAmount, checkpoint.CreatedAt);
+
+            var latestAcceptance = CashAcceptanceService.Items
+                .Where(item => item.CreatedAt < fromInclusive)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstOrDefault();
+
+            if (latestAcceptance != null)
+                UseSource(latestAcceptance.ActualCashAmount, latestAcceptance.CreatedAt);
+
+            return sourceTime.HasValue
+                ? (sourceAmount, sourceTime.Value)
+                : null;
         }
 
         private static int? CalculateActualCashlessBalanceByPeriod(
@@ -1057,21 +1107,17 @@ namespace ClubTimerXbox.Services
             if (latestVerification?.ExpectedAmount != null)
                 UseSource(latestVerification.ExpectedAmount.Value, latestVerification.UpdatedAt);
 
-            var latestCashlessReconciliation = CashReconciliationService.Items
-                .Where(item =>
-                    item.CreatedAt >= fromInclusive &&
-                    item.CreatedAt < toExclusive &&
-                    (item.Kind == CashReconciliationKind.CashlessExtra ||
-                     item.Kind == CashReconciliationKind.CashlessShortage) &&
-                    item.ExpectedAmount >= 0)
-                .OrderByDescending(item => item.CreatedAt)
-                .FirstOrDefault();
-
-            if (latestCashlessReconciliation != null)
-                UseSource(latestCashlessReconciliation.ExpectedAmount, latestCashlessReconciliation.CreatedAt);
-
             if (sourceTime.HasValue)
                 return CalculateCashlessBalanceAfterCheckpoint(sourceAmount, sourceTime.Value, fromInclusive, toExclusive);
+
+            var rolloverSource = GetLatestCashlessRolloverSource(fromInclusive);
+            if (rolloverSource.HasValue)
+                return CalculateCashlessBalanceAfterCheckpoint(
+                    rolloverSource.Value.Amount,
+                    rolloverSource.Value.Time,
+                    fromInclusive,
+                    toExclusive
+                );
 
             return CalculateCashlessBalanceFromMonthStart(
                 fromInclusive,
@@ -1143,6 +1189,46 @@ namespace ClubTimerXbox.Services
                 .Sum(record => record.Amount);
 
             return Math.Max(0, income - expenses);
+        }
+
+        private static (int Amount, DateTime Time)? GetLatestCashlessRolloverSource(DateTime fromInclusive)
+        {
+            DateTime? sourceTime = null;
+            int sourceAmount = 0;
+
+            void UseSource(int amount, DateTime time)
+            {
+                if (time >= fromInclusive)
+                    return;
+
+                if (!sourceTime.HasValue || time > sourceTime.Value)
+                {
+                    sourceTime = time;
+                    sourceAmount = amount;
+                }
+            }
+
+            var checkpoint = CashlessBalanceCheckpointService.Items
+                .Where(item => item.CreatedAt < fromInclusive)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstOrDefault();
+
+            if (checkpoint != null)
+                UseSource(checkpoint.CashlessAmount, checkpoint.CreatedAt);
+
+            var latestVerification = CashlessService.Records
+                .Where(item =>
+                    item.UpdatedAt < fromInclusive &&
+                    item.ExpectedAmount.HasValue)
+                .OrderByDescending(item => item.UpdatedAt)
+                .FirstOrDefault();
+
+            if (latestVerification?.ExpectedAmount != null)
+                UseSource(latestVerification.ExpectedAmount.Value, latestVerification.UpdatedAt);
+
+            return sourceTime.HasValue
+                ? (sourceAmount, sourceTime.Value)
+                : null;
         }
 
         private static CashReportSummary GetPaymentSummary(
@@ -3128,6 +3214,10 @@ namespace ClubTimerXbox.Services
             if (!Guid.TryParse(command.ReconciliationId, out Guid reconciliationId))
                 throw new Exception("Не указан корректный reconciliationId.");
 
+            var sourceItem = CashReconciliationService.Items
+                .FirstOrDefault(entry => entry.Id == reconciliationId);
+            int actionAmount = sourceItem?.Amount ?? 0;
+
             var item = CashReconciliationService.Resolve(
                 reconciliationId,
                 "Владелец",
@@ -3136,41 +3226,41 @@ namespace ClubTimerXbox.Services
             );
 
             if (command.ResolutionType == "RealShortage" &&
-                item.Amount > 0 &&
+                actionAmount > 0 &&
                 item.Kind == CashReconciliationKind.CashShortage)
             {
                 string description =
                     $"Сверка налички закрыта владельцем как реальная недостача.\n" +
                     $"Должно быть: {item.ExpectedAmount} сом\n" +
                     $"Фактически: {item.ActualAmount} сом\n" +
-                    $"Недостача: {item.Amount} сом";
+                    $"Недостача: {actionAmount} сом";
 
                 CashService.AddShortage(
                     checkedByEmployeeName: item.CheckedByEmployeeName,
                     responsibleEmployeeName: item.ResponsibleEmployeeName,
                     title: "Недостача наличных",
                     description: description,
-                    amount: item.Amount
+                    amount: actionAmount
                 );
 
                 EmployeeLossService.AddCashShortage(
                     responsibleEmployeeName: item.ResponsibleEmployeeName,
                     checkedByEmployeeName: item.CheckedByEmployeeName,
                     description: description,
-                    amount: item.Amount,
+                    amount: actionAmount,
                     isFixed: true
                 );
             }
 
             if (command.ResolutionType == "RealShortage" &&
-                item.Amount > 0 &&
+                actionAmount > 0 &&
                 item.Kind == CashReconciliationKind.CashlessShortage)
             {
                 var monthStart = ResolveReconciliationMonth(command, item);
                 var nextMonthStart = monthStart.AddMonths(1);
 
                 DistributeCashlessShortage(
-                    item.Amount,
+                    actionAmount,
                     monthStart,
                     nextMonthStart,
                     item.ExpectedAmount,
@@ -3295,18 +3385,18 @@ namespace ClubTimerXbox.Services
                     status: CashReconciliationStatus.Open,
                     note: $"Фактический остаток безнала больше программы на {difference} сом. Оставлено как резерв для ошибок типа оплаты."
                 );
-
-                if (cashlessExtra.Status == CashReconciliationStatus.Resolved)
-                    return $"Остаток безнала больше программы на {difference} сом. Излишек автоматически зачтен против недостачи налички.";
-
-                int forgivenCashShortage = ForgiveExistingCashShortagesWithCashlessExtra(
-                    cashlessExtra.Amount,
+                int netted = CashReconciliationService.NetOpenMoneyCorrections(
                     monthStart,
-                    nextMonthStart
+                    nextMonthStart,
+                    "Система",
+                    "Общий зачёт после сверки безнала."
                 );
 
-                if (forgivenCashShortage > 0)
-                    return $"Остаток безнала больше программы на {difference} сом. {forgivenCashShortage} сом зачтено против старой недостачи налички. Остаток излишка: {cashlessExtra.Amount} сом.";
+                if (cashlessExtra.Status == CashReconciliationStatus.Resolved)
+                    return $"Остаток безнала больше программы на {difference} сом. Общий зачёт после сверки закрыл разбор кассы на {netted} сом.";
+
+                if (netted > 0)
+                    return $"Остаток безнала больше программы на {difference} сом. Общий зачёт закрыл {netted} сом. Остаток излишка: {cashlessExtra.Amount} сом.";
 
                 return $"Остаток безнала больше программы на {difference} сом. Излишек оставлен как резерв.";
             }
@@ -3328,12 +3418,21 @@ namespace ClubTimerXbox.Services
                 status: CashReconciliationStatus.Open,
                 note: string.Join("\n", notes)
             );
+            int nettedShortage = CashReconciliationService.NetOpenMoneyCorrections(
+                monthStart,
+                nextMonthStart,
+                "Система",
+                "Общий зачёт после сверки безнала."
+            );
 
             if (reconciliation.Status == CashReconciliationStatus.Resolved)
             {
-                notes.Add("Закрыто автоматически излишком налички как ошибка типа оплаты.");
+                notes.Add($"Общий зачёт после сверки закрыл разбор кассы на {nettedShortage} сом.");
                 return string.Join(" ", notes);
             }
+
+            if (nettedShortage > 0)
+                notes.Add($"Общий зачёт закрыл встречные излишки и недостачи на {nettedShortage} сом. Активный остаток недостачи: {reconciliation.Amount} сом.");
 
             int? moneyShortageCap = CalculateMoneyShortageCapForReconciliation(
                 monthStart,
