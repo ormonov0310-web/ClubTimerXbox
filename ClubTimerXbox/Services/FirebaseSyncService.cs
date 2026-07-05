@@ -887,36 +887,6 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            DateTime? sourceTime = null;
-            int sourceAmount = 0;
-
-            void UseSource(int amount, DateTime time)
-            {
-                if (!sourceTime.HasValue || time > sourceTime.Value)
-                {
-                    sourceTime = time;
-                    sourceAmount = amount;
-                }
-            }
-
-            var checkpoint = CashBalanceCheckpointService.GetLatestByPeriod(
-                fromInclusive,
-                toExclusive
-            );
-
-            if (checkpoint != null)
-                UseSource(checkpoint.CashAmount, checkpoint.CreatedAt);
-
-            var latestAcceptance = CashAcceptanceService
-                .GetByPeriod(fromInclusive, toExclusive)
-                .FirstOrDefault();
-
-            if (latestAcceptance != null)
-                UseSource(latestAcceptance.ActualCashAmount, latestAcceptance.CreatedAt);
-
-            if (sourceTime.HasValue)
-                return CalculateCashBalanceAfterCheckpoint(sourceAmount, sourceTime.Value, toExclusive);
-
             return CalculateCashBalanceFromMonthStart(
                 fromInclusive,
                 toExclusive
@@ -927,19 +897,7 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            var checkpoint = CashBalanceCheckpointService.GetLatestByPeriod(
-                fromInclusive,
-                toExclusive
-            );
-
-            if (checkpoint == null)
-                return null;
-
-            return CalculateCashBalanceAfterCheckpoint(
-                checkpoint.CashAmount,
-                checkpoint.CreatedAt,
-                toExclusive
-            );
+            return CalculateExpectedCashBalanceByPeriod(fromInclusive, toExclusive);
         }
 
         private static int CalculateCashBalanceAfterCheckpoint(
@@ -981,7 +939,8 @@ namespace ClubTimerXbox.Services
                     record.CreatedAt >= fromInclusive &&
                     record.CreatedAt < toExclusive &&
                     record.Category == "Расходы" &&
-                    record.PaymentMethod == "Наличные")
+                    record.PaymentMethod == "Наличные" &&
+                    !CashService.IsPriorMonthExpense(record, fromInclusive))
                 .Sum(record => record.Amount);
 
             return Math.Max(0, income - expenses);
@@ -1030,40 +989,6 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            DateTime? sourceTime = null;
-            int sourceAmount = 0;
-
-            void UseSource(int amount, DateTime time)
-            {
-                if (!sourceTime.HasValue || time > sourceTime.Value)
-                {
-                    sourceTime = time;
-                    sourceAmount = amount;
-                }
-            }
-
-            var checkpoint = CashlessBalanceCheckpointService.GetLatestByPeriod(
-                fromInclusive,
-                toExclusive
-            );
-
-            if (checkpoint != null)
-                UseSource(checkpoint.CashlessAmount, checkpoint.CreatedAt);
-
-            var latestVerification = CashlessService.Records
-                .Where(record =>
-                    record.Date >= fromInclusive.Date &&
-                    record.Date < toExclusive.Date &&
-                    record.ExpectedAmount.HasValue)
-                .OrderByDescending(record => record.UpdatedAt)
-                .FirstOrDefault();
-
-            if (latestVerification?.ExpectedAmount != null)
-                UseSource(latestVerification.ExpectedAmount.Value, latestVerification.UpdatedAt);
-
-            if (sourceTime.HasValue)
-                return CalculateCashlessBalanceAfterCheckpoint(sourceAmount, sourceTime.Value, fromInclusive, toExclusive);
-
             return CalculateCashlessBalanceFromMonthStart(
                 fromInclusive,
                 toExclusive
@@ -1074,20 +999,7 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            var checkpoint = CashlessBalanceCheckpointService.GetLatestByPeriod(
-                fromInclusive,
-                toExclusive
-            );
-
-            if (checkpoint == null)
-                return null;
-
-            return CalculateCashlessBalanceAfterCheckpoint(
-                checkpoint.CashlessAmount,
-                checkpoint.CreatedAt,
-                fromInclusive,
-                toExclusive
-            );
+            return CalculateExpectedCashlessBalanceByPeriod(fromInclusive, toExclusive);
         }
 
         private static int CalculateCashlessBalanceAfterCheckpoint(
@@ -1130,7 +1042,8 @@ namespace ClubTimerXbox.Services
                     record.CreatedAt >= fromInclusive &&
                     record.CreatedAt < toExclusive &&
                     record.Category == "Расходы" &&
-                    record.PaymentMethod == "Безнал")
+                    record.PaymentMethod == "Безнал" &&
+                    !CashService.IsPriorMonthExpense(record, fromInclusive))
                 .Sum(record => record.Amount);
 
             return Math.Max(0, income - expenses);
@@ -1552,7 +1465,8 @@ namespace ClubTimerXbox.Services
             int movementAmount)
         {
             int endBalance = actualBalance ?? expectedBalance;
-            return Math.Max(0, endBalance - movementAmount);
+            int positiveMovement = Math.Max(0, movementAmount);
+            return Math.Max(0, endBalance - positiveMovement);
         }
 
         private static int CalculateExpectedBalanceWithOpening(
@@ -3458,19 +3372,6 @@ namespace ClubTimerXbox.Services
                     amount: Math.Abs(finalRawDifference),
                     isShortage: finalRawDifference < 0,
                     note: rawNote
-                );
-            }
-
-            CashlessBalanceCheckpointService.AddCurrentMonthCheckpoint(
-                actualCashless,
-                note
-            );
-
-            if (actualCash.HasValue)
-            {
-                CashBalanceCheckpointService.AddCurrentMonthCheckpoint(
-                    actualCash.Value,
-                    note
                 );
             }
 
