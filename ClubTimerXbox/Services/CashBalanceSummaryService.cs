@@ -130,14 +130,6 @@ namespace ClubTimerXbox.Services
             if (sourceTime.HasValue)
                 return CalculateCashBalanceAfterCheckpoint(sourceAmount, sourceTime.Value, toExclusive);
 
-            var rolloverSource = GetLatestCashRolloverSource(fromInclusive);
-            if (rolloverSource.HasValue)
-                return CalculateCashBalanceAfterCheckpoint(
-                    rolloverSource.Value.Amount,
-                    rolloverSource.Value.Time,
-                    toExclusive
-                );
-
             return CalculateCashBalanceFromMonthStart(fromInclusive, toExclusive);
         }
 
@@ -234,15 +226,6 @@ namespace ClubTimerXbox.Services
             if (sourceTime.HasValue)
                 return CalculateCashlessBalanceAfterCheckpoint(sourceAmount, sourceTime.Value, fromInclusive, toExclusive);
 
-            var rolloverSource = GetLatestCashlessRolloverSource(fromInclusive);
-            if (rolloverSource.HasValue)
-                return CalculateCashlessBalanceAfterCheckpoint(
-                    rolloverSource.Value.Amount,
-                    rolloverSource.Value.Time,
-                    fromInclusive,
-                    toExclusive
-                );
-
             return CalculateCashlessBalanceFromMonthStart(fromInclusive, toExclusive);
         }
 
@@ -288,44 +271,6 @@ namespace ClubTimerXbox.Services
             return Math.Max(0, checkpointAmount + incomeAfterCheckpoint - expensesAfterCheckpoint);
         }
 
-        private static (int Amount, DateTime Time)? GetLatestCashRolloverSource(DateTime fromInclusive)
-        {
-            DateTime? sourceTime = null;
-            int sourceAmount = 0;
-
-            void UseSource(int amount, DateTime time)
-            {
-                if (time >= fromInclusive)
-                    return;
-
-                if (!sourceTime.HasValue || time > sourceTime.Value)
-                {
-                    sourceTime = time;
-                    sourceAmount = amount;
-                }
-            }
-
-            var checkpoint = CashBalanceCheckpointService.Items
-                .Where(item => item.CreatedAt < fromInclusive)
-                .OrderByDescending(item => item.CreatedAt)
-                .FirstOrDefault();
-
-            if (checkpoint != null)
-                UseSource(checkpoint.CashAmount, checkpoint.CreatedAt);
-
-            var latestAcceptance = CashAcceptanceService.Items
-                .Where(item => item.CreatedAt < fromInclusive)
-                .OrderByDescending(item => item.CreatedAt)
-                .FirstOrDefault();
-
-            if (latestAcceptance != null)
-                UseSource(latestAcceptance.ActualCashAmount, latestAcceptance.CreatedAt);
-
-            return sourceTime.HasValue
-                ? (sourceAmount, sourceTime.Value)
-                : null;
-        }
-
         private static int CalculateCashBalanceFromMonthStart(
             DateTime fromInclusive,
             DateTime toExclusive)
@@ -368,46 +313,6 @@ namespace ClubTimerXbox.Services
                 .Sum(record => record.Amount);
 
             return Math.Max(0, checkpointAmount + incomeAfterCheckpoint - expensesAfterCheckpoint);
-        }
-
-        private static (int Amount, DateTime Time)? GetLatestCashlessRolloverSource(DateTime fromInclusive)
-        {
-            DateTime? sourceTime = null;
-            int sourceAmount = 0;
-
-            void UseSource(int amount, DateTime time)
-            {
-                if (time >= fromInclusive)
-                    return;
-
-                if (!sourceTime.HasValue || time > sourceTime.Value)
-                {
-                    sourceTime = time;
-                    sourceAmount = amount;
-                }
-            }
-
-            var checkpoint = CashlessBalanceCheckpointService.Items
-                .Where(item => item.CreatedAt < fromInclusive)
-                .OrderByDescending(item => item.CreatedAt)
-                .FirstOrDefault();
-
-            if (checkpoint != null)
-                UseSource(checkpoint.CashlessAmount, checkpoint.CreatedAt);
-
-            var latestVerification = CashlessService.Records
-                .Where(item =>
-                    item.UpdatedAt < fromInclusive &&
-                    item.ExpectedAmount.HasValue)
-                .OrderByDescending(item => item.UpdatedAt)
-                .FirstOrDefault();
-
-            if (latestVerification?.ExpectedAmount != null)
-                UseSource(latestVerification.ExpectedAmount.Value, latestVerification.UpdatedAt);
-
-            return sourceTime.HasValue
-                ? (sourceAmount, sourceTime.Value)
-                : null;
         }
 
         private static int CalculateCashlessBalanceFromMonthStart(
