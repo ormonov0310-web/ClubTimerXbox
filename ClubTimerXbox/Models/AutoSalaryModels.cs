@@ -32,6 +32,16 @@ namespace ClubTimerXbox.Models
         public int PunctualityBonusAmount { get; set; } = 50;
 
         public int LateActiveSessionBonusAmount { get; set; } = 50;
+
+        public string OpeningResponsibleEmployeeName { get; set; } = "";
+
+        public int LateOpeningGraceMinutes { get; set; } = 30;
+
+        public int LateOpeningPenaltyStepMinutes { get; set; } = 30;
+
+        public int LateOpeningPenaltyStepAmount { get; set; } = 100;
+
+        public int LateOpeningMaxAutoMinutes { get; set; } = 150;
     }
 
     public class AutoSalaryBonusItem

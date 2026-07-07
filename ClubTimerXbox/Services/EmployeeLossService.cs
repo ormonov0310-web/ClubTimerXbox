@@ -48,6 +48,17 @@ namespace ClubTimerXbox.Services
                 .ToList();
         }
 
+        public static bool HasNote(string note)
+        {
+            note = note.Trim();
+
+            if (string.IsNullOrWhiteSpace(note))
+                return false;
+
+            return Items.Any(item =>
+                item.Note.Equals(note, StringComparison.OrdinalIgnoreCase));
+        }
+
         public static int GetUnpaidTotalByEmployee(string employeeName)
         {
             employeeName = employeeName.Trim();

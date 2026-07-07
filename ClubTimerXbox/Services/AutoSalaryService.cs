@@ -182,6 +182,9 @@ namespace ClubTimerXbox.Services
                 foreach (var shift in shifts)
                 {
                     DateTime shiftEnd = shift.ClosedAt ?? DateTime.Now;
+                    if (shift.StartedAt >= scheduleEnd || shiftEnd <= scheduleStart)
+                        continue;
+
                     TimeSpan paidTime = GetOverlap(
                         shift.StartedAt,
                         shiftEnd,
@@ -497,6 +500,20 @@ namespace ClubTimerXbox.Services
             settings.OverNormBonusPercent = ClampPercent(settings.OverNormBonusPercent);
             settings.PunctualityBonusAmount = Math.Max(0, settings.PunctualityBonusAmount);
             settings.LateActiveSessionBonusAmount = Math.Max(0, settings.LateActiveSessionBonusAmount);
+            settings.OpeningResponsibleEmployeeName =
+                settings.OpeningResponsibleEmployeeName?.Trim() ?? "";
+            settings.LateOpeningGraceMinutes = settings.LateOpeningGraceMinutes <= 0
+                ? 30
+                : settings.LateOpeningGraceMinutes;
+            settings.LateOpeningPenaltyStepMinutes = settings.LateOpeningPenaltyStepMinutes <= 0
+                ? 30
+                : settings.LateOpeningPenaltyStepMinutes;
+            settings.LateOpeningPenaltyStepAmount = settings.LateOpeningPenaltyStepAmount <= 0
+                ? 100
+                : settings.LateOpeningPenaltyStepAmount;
+            settings.LateOpeningMaxAutoMinutes = settings.LateOpeningMaxAutoMinutes <= 0
+                ? 150
+                : settings.LateOpeningMaxAutoMinutes;
 
             int shareTotal =
                 settings.TimeSharePercent +

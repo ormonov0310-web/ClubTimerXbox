@@ -335,6 +335,8 @@ namespace ClubTimerXbox.Services
                     .Concat(serviceItems.Cast<object>())
                     .ToList();
 
+                LateOpeningPenaltyService.EnsureTodayNoOpeningRecommendation();
+
                 var reportsByMonth = BuildReportsByMonth();
                 var autoSalaryReport = AutoSalaryService.BuildReport(monthStart);
                 int salaryGrossMonth = autoSalaryReport.Employees.Sum(employee => employee.GrossAmount);
@@ -1127,7 +1129,12 @@ namespace ClubTimerXbox.Services
                     dailyGameRevenueNorm = report.Settings.DailyGameRevenueNorm,
                     overNormBonusPercent = report.Settings.OverNormBonusPercent,
                     punctualityBonusAmount = report.Settings.PunctualityBonusAmount,
-                    lateActiveSessionBonusAmount = report.Settings.LateActiveSessionBonusAmount
+                    lateActiveSessionBonusAmount = report.Settings.LateActiveSessionBonusAmount,
+                    openingResponsibleEmployeeName = report.Settings.OpeningResponsibleEmployeeName,
+                    lateOpeningGraceMinutes = report.Settings.LateOpeningGraceMinutes,
+                    lateOpeningPenaltyStepMinutes = report.Settings.LateOpeningPenaltyStepMinutes,
+                    lateOpeningPenaltyStepAmount = report.Settings.LateOpeningPenaltyStepAmount,
+                    lateOpeningMaxAutoMinutes = report.Settings.LateOpeningMaxAutoMinutes
                 },
                 gameRevenue = report.GameRevenue,
                 productRevenue = report.ProductRevenue,
@@ -2448,7 +2455,7 @@ namespace ClubTimerXbox.Services
                     await MarkCommandApplied(
                         commandId,
                         command,
-                        $"Настройки авто ЗП сохранены: резерв {settings.ExpenseReservePercent}%, фонд выручки {settings.SalaryFundPercent}%, фонд времени {settings.TimeMonthlyFundAmount} сом / {settings.TimeMonthlyPlannedHours} ч."
+                        $"Настройки авто ЗП сохранены: резерв {settings.ExpenseReservePercent}%, фонд выручки {settings.SalaryFundPercent}%, ставка времени {GetAutoSalaryHourlyRate(settings)} сом/ч, график {settings.WorkDayStartHour:00}:00-{settings.WorkDayEndHour:00}:00."
                     );
 
                     return;
@@ -3571,12 +3578,27 @@ namespace ClubTimerXbox.Services
                 DailyGameRevenueNorm = command.DailyGameRevenueNorm,
                 OverNormBonusPercent = command.OverNormBonusPercent,
                 PunctualityBonusAmount = command.PunctualityBonusAmount,
-                LateActiveSessionBonusAmount = command.LateActiveSessionBonusAmount
+                LateActiveSessionBonusAmount = command.LateActiveSessionBonusAmount,
+                OpeningResponsibleEmployeeName = command.OpeningResponsibleEmployeeName,
+                LateOpeningGraceMinutes = command.LateOpeningGraceMinutes,
+                LateOpeningPenaltyStepMinutes = command.LateOpeningPenaltyStepMinutes,
+                LateOpeningPenaltyStepAmount = command.LateOpeningPenaltyStepAmount,
+                LateOpeningMaxAutoMinutes = command.LateOpeningMaxAutoMinutes
             };
 
             AutoSalaryService.UpdateSettings(settings);
 
             return AutoSalaryService.Settings;
+        }
+
+        private static int GetAutoSalaryHourlyRate(AutoSalarySettings settings)
+        {
+            if (settings.TimeMonthlyFundAmount <= 0 || settings.TimeMonthlyPlannedHours <= 0)
+                return 0;
+
+            return (int)Math.Round(
+                settings.TimeMonthlyFundAmount / (double)settings.TimeMonthlyPlannedHours
+            );
         }
 
         private static void ApplySetCashlessForToday(FirebaseCommand command)
@@ -3851,6 +3873,11 @@ namespace ClubTimerXbox.Services
             public int OverNormBonusPercent { get; set; }
             public int PunctualityBonusAmount { get; set; }
             public int LateActiveSessionBonusAmount { get; set; }
+            public string OpeningResponsibleEmployeeName { get; set; } = "";
+            public int LateOpeningGraceMinutes { get; set; }
+            public int LateOpeningPenaltyStepMinutes { get; set; }
+            public int LateOpeningPenaltyStepAmount { get; set; }
+            public int LateOpeningMaxAutoMinutes { get; set; }
 
             public string CreatedAt { get; set; } = "";
             public string AppliedAt { get; set; } = "";

@@ -122,6 +122,7 @@ namespace ClubTimerXbox.Services
             );
 
             SaveLogs();
+            LateOpeningPenaltyService.EvaluateOpenedShift(shift);
 
             return shift;
         }
@@ -206,6 +207,7 @@ namespace ClubTimerXbox.Services
             }
 
             SaveLogs();
+            LateOpeningPenaltyService.EvaluateOpenedShift(newShift);
 
             return newShift;
         }
