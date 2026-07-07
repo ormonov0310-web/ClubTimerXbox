@@ -123,6 +123,12 @@ namespace ClubTimerXbox
                 () => _openTuyaSettings()
             ));
 
+            root.Children.Add(CreateSettingsButton(
+                "Новый филиал",
+                "Временная акция нового клуба.",
+                OpenNewBranchPromoWindow
+            ));
+
             var closeButton = new Button
             {
                 Content = "Закрыть",
@@ -140,6 +146,24 @@ namespace ClubTimerXbox
                 Content = root,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto
             };
+        }
+
+        private void OpenNewBranchPromoWindow()
+        {
+            var accessWindow = new NewBranchPromoAccessWindow
+            {
+                Owner = this
+            };
+
+            if (accessWindow.ShowDialog() != true || !accessWindow.IsAccessGranted)
+                return;
+
+            var window = new NewBranchPromoWindow
+            {
+                Owner = this
+            };
+
+            window.ShowDialog();
         }
 
         private Border CreateFirebaseStatusCard()

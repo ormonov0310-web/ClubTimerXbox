@@ -14,6 +14,7 @@ namespace ClubTimerXbox.Models
 
         public bool IsBusy { get; set; }
         public bool IsOpenMode { get; set; }
+        public bool IsNewBranchPromoSession { get; set; }
 
         // Место уже остановлено, но окно расчёта ещё открыто.
         // После нажатия OK место станет свободным.

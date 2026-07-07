@@ -50,6 +50,7 @@ namespace ClubTimerXbox
             UpdateMainCashText();
             UpdateStockAuditButtonState();
             UpdateSettingsButtonUpdateState();
+            UpdateNewBranchPromoTimerText();
 
             _mainTimer.Interval = TimeSpan.FromSeconds(1);
             _mainTimer.Tick += MainTimer_Tick;
@@ -101,6 +102,7 @@ namespace ClubTimerXbox
 
                 place.IsBusy = saved.IsBusy;
                 place.IsOpenMode = saved.IsOpenMode;
+                place.IsNewBranchPromoSession = saved.IsNewBranchPromoSession;
                 place.IsCalculating = saved.IsCalculating;
                 place.IsTimeExpiredAwaitingAcknowledgement = saved.IsTimeExpiredAwaitingAcknowledgement;
                 place.PaidAmount = saved.PaidAmount;
@@ -162,6 +164,7 @@ namespace ClubTimerXbox
 
                     IsBusy = place.IsBusy,
                     IsOpenMode = place.IsOpenMode,
+                    IsNewBranchPromoSession = place.IsNewBranchPromoSession,
                     IsCalculating = place.IsCalculating,
                     IsTimeExpiredAwaitingAcknowledgement = place.IsTimeExpiredAwaitingAcknowledgement,
 
@@ -446,6 +449,10 @@ namespace ClubTimerXbox
             };
 
             card.ContextMenu = CreateContextMenu(place);
+            card.ContextMenuOpening += (_, _) =>
+            {
+                card.ContextMenu = CreateContextMenu(place);
+            };
             ApplyCardMotion(card, place);
 
             return card;
@@ -548,13 +555,25 @@ namespace ClubTimerXbox
         {
             var menu = new ContextMenu();
             var tariff = GetTariffForPlace(place);
+            bool isNewBranchPromoAvailable = IsNewBranchPromoAvailableForPlace(place);
+
+            if (isNewBranchPromoAvailable)
+                AddNewBranchPromoTariffMenuItem(menu, place);
 
             AddTariffMenuItem(menu, place, tariff.OneHourPrice);
             AddTariffMenuItem(menu, place, tariff.HalfHourPrice);
             AddTariffMenuItem(menu, place, tariff.FiveMinutesPrice);
 
             menu.Items.Add(new Separator());
-            menu.Items.Add(CreateMenuItem("Открытый режим", () => StartOpenMode(place)));
+
+            if (isNewBranchPromoAvailable)
+            {
+                menu.Items.Add(CreateTariffMenuItem("Открытый режим акция", () => StartOpenMode(place, isPromo: true)));
+            }
+            else
+            {
+                menu.Items.Add(CreateMenuItem("Открытый режим", () => StartOpenMode(place)));
+            }
 
             menu.Items.Add(new Separator());
             menu.Items.Add(CreateMenuItem("Добавить время", () => OpenAddTimeWindow(place)));
@@ -565,6 +584,42 @@ namespace ClubTimerXbox
             menu.Items.Add(CreateMenuItem("Остановить", () => StopPlace(place)));
 
             return menu;
+        }
+
+        private bool IsNewBranchPromoAvailableForPlace(ClubPlace place)
+        {
+            return place.Type == PlaceType.NormalTv && NewBranchPromoService.IsActiveNow();
+        }
+
+        private void AddNewBranchPromoTariffMenuItem(ContextMenu menu, ClubPlace place)
+        {
+            var promo = NewBranchPromoService.Current;
+            int seconds = promo.TvPromoMinutes * 60;
+            string timeText = FormatPromoMinutes(promo.TvPromoMinutes);
+            string tariffText = $"{timeText} — {promo.TvPromoPrice} сом акция";
+            double activePricePerMinute = promo.TvPromoPrice / (double)promo.TvPromoMinutes;
+
+            menu.Items.Add(CreateTariffMenuItem(
+                tariffText,
+                () => StartPrepaid(
+                    place,
+                    seconds,
+                    promo.TvPromoPrice,
+                    tariffText,
+                    activePricePerMinute
+                )
+            ));
+        }
+
+        private static string FormatPromoMinutes(int minutes)
+        {
+            if (minutes > 0 && minutes % 60 == 0)
+            {
+                int hours = minutes / 60;
+                return hours == 1 ? "1 час" : $"{hours} часа";
+            }
+
+            return TariffService.FormatMenuTime(minutes * 60);
         }
 
         private void AddTariffMenuItem(ContextMenu menu, ClubPlace place, int amount)
@@ -625,7 +680,12 @@ namespace ClubTimerXbox
             return EmployeeService.CurrentEmployee?.Name ?? "Неизвестно";
         }
 
-        private void StartPrepaid(ClubPlace place, int seconds, int paidAmount)
+        private void StartPrepaid(
+            ClubPlace place,
+            int seconds,
+            int paidAmount,
+            string? tariffTextOverride = null,
+            double? activePricePerMinuteOverride = null)
         {
             if (place.IsBusy)
             {
@@ -640,7 +700,7 @@ namespace ClubTimerXbox
             }
 
             string employeeName = GetCurrentEmployeeName();
-            string tariffText = $"{TariffService.FormatMenuTime(seconds)} — {paidAmount} сом";
+            string tariffText = tariffTextOverride ?? $"{TariffService.FormatMenuTime(seconds)} — {paidAmount} сом";
 
             var checkoutItems = new List<CheckoutItem>
             {
@@ -675,6 +735,7 @@ namespace ClubTimerXbox
 
             place.IsBusy = true;
             place.IsOpenMode = false;
+            place.IsNewBranchPromoSession = activePricePerMinuteOverride != null;
             place.IsCalculating = false;
             place.IsTimeExpiredAwaitingAcknowledgement = false;
             place.PaidAmount = paidAmount;
@@ -683,7 +744,7 @@ namespace ClubTimerXbox
             place.StartTime = DateTime.Now;
             place.TotalMinutes = seconds / 60;
             place.RemainingSeconds = seconds;
-            place.ActivePricePerMinute = place.PricePerMinute;
+            place.ActivePricePerMinute = activePricePerMinuteOverride ?? place.PricePerMinute;
             place.AccruedAmountBeforeCurrentSegment = 0;
 
             place.StartedByEmployeeName = employeeName;
@@ -701,7 +762,7 @@ namespace ClubTimerXbox
             SaveActivePlacesToStorage();
         }
 
-        private void StartOpenMode(ClubPlace place)
+        private void StartOpenMode(ClubPlace place, bool isPromo = false)
         {
             if (place.IsBusy)
             {
@@ -710,12 +771,22 @@ namespace ClubTimerXbox
             }
 
             string employeeName = GetCurrentEmployeeName();
+            double activePricePerMinute = place.PricePerMinute;
+            string tariffText = "Открытый режим";
+
+            if (isPromo)
+            {
+                int discountPercent = NewBranchPromoService.Current.OpenModeDiscountPercent;
+                activePricePerMinute = place.PricePerMinute * (100 - discountPercent) / 100.0;
+                tariffText = "Открытый режим акция";
+            }
 
             CloseAlarmWindowForPlace(place.Name);
             _oneMinuteWarningShownPlaceNames.Remove(place.Name);
 
             place.IsBusy = true;
             place.IsOpenMode = true;
+            place.IsNewBranchPromoSession = isPromo;
             place.IsCalculating = false;
             place.IsTimeExpiredAwaitingAcknowledgement = false;
             place.PaidAmount = 0;
@@ -724,7 +795,7 @@ namespace ClubTimerXbox
             place.StartTime = DateTime.Now;
             place.TotalMinutes = 0;
             place.RemainingSeconds = 0;
-            place.ActivePricePerMinute = place.PricePerMinute;
+            place.ActivePricePerMinute = activePricePerMinute;
             place.AccruedAmountBeforeCurrentSegment = 0;
 
             place.StartedByEmployeeName = employeeName;
@@ -734,7 +805,7 @@ namespace ClubTimerXbox
                 placeName: place.Name,
                 employeeName: employeeName,
                 isOpenMode: true,
-                tariffText: "Открытый режим",
+                tariffText: tariffText,
                 paidAmount: 0
             );
 
@@ -1049,6 +1120,7 @@ namespace ClubTimerXbox
 
             toPlace.IsBusy = true;
             toPlace.IsOpenMode = true;
+            toPlace.IsNewBranchPromoSession = fromPlace.IsNewBranchPromoSession;
             toPlace.IsCalculating = false;
             toPlace.IsTimeExpiredAwaitingAcknowledgement = false;
             toPlace.PaidAmount = 0;
@@ -1083,6 +1155,7 @@ namespace ClubTimerXbox
 
             toPlace.IsBusy = true;
             toPlace.IsOpenMode = false;
+            toPlace.IsNewBranchPromoSession = fromPlace.IsNewBranchPromoSession;
             toPlace.IsCalculating = false;
             toPlace.IsTimeExpiredAwaitingAcknowledgement = false;
             toPlace.PaidAmount = fromPlace.PaidAmount;
@@ -1683,6 +1756,7 @@ namespace ClubTimerXbox
 
             place.IsBusy = false;
             place.IsOpenMode = false;
+            place.IsNewBranchPromoSession = false;
             place.IsCalculating = false;
             place.IsTimeExpiredAwaitingAcknowledgement = false;
             place.PaidAmount = 0;
@@ -1706,6 +1780,7 @@ namespace ClubTimerXbox
             _settingsUpdateBlinkState = !_settingsUpdateBlinkState;
             _expiredCardBlinkState = !_expiredCardBlinkState;
             UpdateSettingsButtonUpdateState();
+            UpdateNewBranchPromoTimerText();
 
             foreach (var place in _places)
             {
@@ -3506,6 +3581,44 @@ namespace ClubTimerXbox
             MainCashText.Text = $"Касса: {total} сом";
         }
 
+        private void UpdateNewBranchPromoTimerText()
+        {
+            if (NewBranchPromoTimerText == null)
+                return;
+
+            DateTime now = DateTime.Now;
+
+            if (!NewBranchPromoService.TryGetActiveEndAt(now, out DateTime endAt))
+            {
+                NewBranchPromoTimerText.Visibility = Visibility.Collapsed;
+                NewBranchPromoTimerText.Text = "";
+                return;
+            }
+
+            TimeSpan remaining = endAt - now;
+
+            if (remaining < TimeSpan.Zero)
+                remaining = TimeSpan.Zero;
+
+            NewBranchPromoTimerText.Visibility = Visibility.Visible;
+            NewBranchPromoTimerText.Text = $"Акция: осталось {FormatPromoRemainingTime(remaining)}";
+        }
+
+        private static string FormatPromoRemainingTime(TimeSpan remaining)
+        {
+            int totalHours = (int)Math.Floor(remaining.TotalHours);
+            int minutes = remaining.Minutes;
+            int seconds = remaining.Seconds;
+
+            if (totalHours > 0)
+                return $"{totalHours} ч {minutes} мин {seconds} сек";
+
+            if (minutes > 0)
+                return $"{minutes} мин {seconds} сек";
+
+            return $"{Math.Max(0, seconds)} сек";
+        }
+
         private string GetStatusText(ClubPlace place)
         {
             if (!place.IsBusy)
@@ -3518,9 +3631,13 @@ namespace ClubTimerXbox
                 return "Расчёт";
 
             if (place.IsOpenMode)
-                return "Открытый режим";
+                return place.IsNewBranchPromoSession
+                    ? "Открытый режим Акция"
+                    : "Открытый режим";
 
-            return "Занято";
+            return place.IsNewBranchPromoSession
+                ? "Занято · режим Акция"
+                : "Занято";
         }
 
         private string GetTimeText(ClubPlace place)
@@ -3747,6 +3864,9 @@ namespace ClubTimerXbox
             if (place.IsCalculating)
                 return new SolidColorBrush(Color.FromRgb(251, 191, 36));
 
+            if (place.IsNewBranchPromoSession)
+                return new SolidColorBrush(Color.FromRgb(74, 222, 128));
+
             if (place.IsOpenMode)
                 return new SolidColorBrush(Color.FromRgb(96, 165, 250));
 
@@ -3772,6 +3892,9 @@ namespace ClubTimerXbox
 
             if (place.IsCalculating)
                 return new SolidColorBrush(Color.FromRgb(70, 55, 20));
+
+            if (place.IsNewBranchPromoSession)
+                return new SolidColorBrush(Color.FromRgb(20, 70, 45));
 
             if (place.IsOpenMode)
                 return new SolidColorBrush(Color.FromRgb(20, 45, 75));

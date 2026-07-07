@@ -38,6 +38,7 @@ namespace ClubTimerXbox.Services
                 if (settings == null)
                     return new ClubSettings();
 
+                Normalize(settings);
                 return settings;
             }
             catch
@@ -58,6 +59,35 @@ namespace ClubTimerXbox.Services
             string json = JsonSerializer.Serialize(settings, options);
 
             File.WriteAllText(SettingsFilePath, json);
+        }
+
+        private static void Normalize(ClubSettings settings)
+        {
+            settings.NewBranchPromo ??= new NewBranchPromoSettings();
+
+            if (settings.NewBranchPromo.StartDate == default)
+                settings.NewBranchPromo.StartDate = DateTime.Today;
+
+            if (settings.NewBranchPromo.LastDay == default)
+                settings.NewBranchPromo.LastDay = settings.NewBranchPromo.StartDate;
+
+            if (settings.NewBranchPromo.GraceEndHour < 0 || settings.NewBranchPromo.GraceEndHour > 23)
+                settings.NewBranchPromo.GraceEndHour = 6;
+
+            if (settings.NewBranchPromo.TvPromoMinutes <= 0)
+                settings.NewBranchPromo.TvPromoMinutes = 120;
+
+            if (settings.NewBranchPromo.TvPromoPrice <= 0)
+                settings.NewBranchPromo.TvPromoPrice = 120;
+
+            if (settings.NewBranchPromo.OpenModeDiscountPercent < 0 ||
+                settings.NewBranchPromo.OpenModeDiscountPercent > 100)
+            {
+                settings.NewBranchPromo.OpenModeDiscountPercent = 50;
+            }
+
+            if (!settings.NewBranchPromo.IsOneMinuteEndTestEnabled)
+                settings.NewBranchPromo.OneMinuteEndTestEndsAt = null;
         }
     }
 }

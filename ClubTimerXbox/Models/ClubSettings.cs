@@ -36,6 +36,8 @@
             FiveMinutesPrice = 20,
             PricePerMinute = 3.33
         };
+
+        public NewBranchPromoSettings NewBranchPromo { get; set; } = new NewBranchPromoSettings();
     }
 
     public class TariffSettings
@@ -52,5 +54,22 @@
         // Пока оставляем для совместимости.
         // Позже уберём и будем считать только от OneHourPrice.
         public double PricePerMinute { get; set; }
+    }
+
+    public class NewBranchPromoSettings
+    {
+        public bool IsEnabled { get; set; }
+        public DateTime StartDate { get; set; } = DateTime.Today;
+        public DateTime LastDay { get; set; } = DateTime.Today;
+
+        // Последний день акции работает полностью, потом акция держится до 06:00 утра.
+        public int GraceEndHour { get; set; } = 6;
+
+        public int TvPromoMinutes { get; set; } = 120;
+        public int TvPromoPrice { get; set; } = 120;
+        public int OpenModeDiscountPercent { get; set; } = 50;
+
+        public bool IsOneMinuteEndTestEnabled { get; set; }
+        public DateTime? OneMinuteEndTestEndsAt { get; set; }
     }
 }

@@ -300,7 +300,8 @@ namespace ClubTimerXbox
                         PricePerMinute = wheelMain / 60.0
                     },
 
-                    VipTariff = AppSettingsService.Current.VipTariff
+                    VipTariff = AppSettingsService.Current.VipTariff,
+                    NewBranchPromo = AppSettingsService.Current.NewBranchPromo
                 };
 
                 AppSettingsService.Save(settings);

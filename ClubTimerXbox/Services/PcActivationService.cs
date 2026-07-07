@@ -93,7 +93,8 @@ namespace ClubTimerXbox.Services
                 VipRoomCount = GetInt(root, "vipRoomCount", current.VipRoomCount),
                 TvTariff = current.TvTariff,
                 WheelTariff = current.WheelTariff,
-                VipTariff = current.VipTariff
+                VipTariff = current.VipTariff,
+                NewBranchPromo = current.NewBranchPromo
             };
 
             if (root.TryGetProperty("tariffs", out JsonElement tariffs))

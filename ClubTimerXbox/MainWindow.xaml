@@ -102,6 +102,13 @@
                                FontSize="30"
                                FontWeight="Bold"/>
 
+                    <TextBlock x:Name="NewBranchPromoTimerText"
+                               Foreground="#4ADE80"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               Margin="0,4,0,0"
+                               Visibility="Collapsed"/>
+
                     <TextBlock Text="Игровой клуб • ТВ • Рули"
                                Foreground="#AAB4C3"
                                FontSize="15"

@@ -9,6 +9,7 @@ namespace ClubTimerXbox.Models
 
         public bool IsBusy { get; set; }
         public bool IsOpenMode { get; set; }
+        public bool IsNewBranchPromoSession { get; set; }
         public bool IsCalculating { get; set; }
         public bool IsTimeExpiredAwaitingAcknowledgement { get; set; }
 
