@@ -94,6 +94,78 @@ namespace ClubTimerXbox.Services
                 .Sum(item => item.Amount);
         }
 
+        public static int GetUnpaidViolationTotalByEmployee(
+            string employeeName,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            employeeName = employeeName.Trim();
+
+            return Items
+                .Where(item =>
+                    !item.IsPaid &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    item.IsFixed &&
+                    item.ResponsibleEmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase) &&
+                    IsViolationLoss(item))
+                .Sum(item => item.Amount);
+        }
+
+        public static int FormalizeViolationRecommendationsForEmployee(
+            string employeeName,
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            int amount,
+            string note)
+        {
+            employeeName = employeeName.Trim();
+
+            if (amount <= 0 || string.IsNullOrWhiteSpace(employeeName))
+                return 0;
+
+            int remaining = amount;
+            int formalized = 0;
+
+            var recommendations = Items
+                .Where(item =>
+                    !item.IsPaid &&
+                    !item.IsFixed &&
+                    item.Amount > 0 &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    item.ResponsibleEmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase) &&
+                    IsViolationLoss(item))
+                .OrderBy(item => item.CreatedAt)
+                .ToList();
+
+            foreach (var item in recommendations)
+            {
+                if (remaining <= 0)
+                    break;
+
+                int useAmount = Math.Min(item.Amount, remaining);
+                item.Amount -= useAmount;
+                formalized += useAmount;
+                remaining -= useAmount;
+
+                if (!string.IsNullOrWhiteSpace(note))
+                {
+                    item.Note = string.IsNullOrWhiteSpace(item.Note)
+                        ? note.Trim()
+                        : $"{item.Note.Trim()}\n{note.Trim()}";
+                }
+
+                if (item.Amount == 0)
+                    item.IsPaid = true;
+            }
+
+            if (formalized > 0)
+                Save();
+
+            return formalized;
+        }
+
         public static int GetRawUnpaidMoneyTotalByEmployee(
             string employeeName,
             DateTime fromInclusive,
@@ -325,18 +397,44 @@ namespace ClubTimerXbox.Services
 
         public static bool IsMoneyLoss(EmployeeLossItem item)
         {
+            if (IsViolationLoss(item))
+                return false;
+
             if (item.LossKind.Equals("money", StringComparison.OrdinalIgnoreCase))
                 return true;
 
-            if (item.LossKind.Equals("product", StringComparison.OrdinalIgnoreCase))
+            if (item.LossKind.Equals("product", StringComparison.OrdinalIgnoreCase) ||
+                item.LossKind.Equals("violation", StringComparison.OrdinalIgnoreCase))
                 return false;
 
             return !IsProductLoss(item);
         }
 
+        public static bool IsViolationLoss(EmployeeLossItem item)
+        {
+            if (item.LossKind.Equals("violation", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (item.LossKind.Equals("product", StringComparison.OrdinalIgnoreCase) ||
+                item.LossKind.Equals("money", StringComparison.OrdinalIgnoreCase))
+            {
+                string explicitText = $"{item.LossType} {item.Title} {item.Description} {item.Note}";
+                return LooksLikeViolationLoss(explicitText);
+            }
+
+            string text = $"{item.LossType} {item.Title} {item.Description} {item.Note}";
+            return LooksLikeViolationLoss(text);
+        }
+
         public static string GetLossKind(EmployeeLossItem item)
         {
-            return IsProductLoss(item) ? "product" : "money";
+            if (IsProductLoss(item))
+                return "product";
+
+            if (IsViolationLoss(item))
+                return "violation";
+
+            return "money";
         }
 
         private static string NormalizeLossKind(
@@ -348,10 +446,13 @@ namespace ClubTimerXbox.Services
         {
             lossKind = (lossKind ?? "").Trim().ToLowerInvariant();
 
-            if (lossKind == "product" || lossKind == "money")
+            if (lossKind == "product" || lossKind == "money" || lossKind == "violation")
                 return lossKind;
 
             string text = $"{lossType} {title} {description} {note}";
+
+            if (LooksLikeViolationLoss(text))
+                return "violation";
 
             if (text.Contains("товар", StringComparison.OrdinalIgnoreCase) ||
                 text.Contains("склад", StringComparison.OrdinalIgnoreCase) ||
@@ -362,6 +463,16 @@ namespace ClubTimerXbox.Services
             }
 
             return "money";
+        }
+
+        private static bool LooksLikeViolationLoss(string text)
+        {
+            return text.Contains("AutoLateOpeningPenalty", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("LateOpeningRecommendation", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("опоздан", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("позднее открытие", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("нарушен", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("нарушение", StringComparison.OrdinalIgnoreCase);
         }
 
         public static int ForgiveCashShortagesByPaymentMistake(

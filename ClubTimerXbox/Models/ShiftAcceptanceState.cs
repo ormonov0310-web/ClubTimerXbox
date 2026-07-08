@@ -16,6 +16,10 @@ namespace ClubTimerXbox.Models
 
         public string ResponsibleEmployeeName { get; set; } = "";
 
+        public string DisplayResponsibleEmployeeName { get; set; } = "";
+
+        public string DisplayNewEmployeeName { get; set; } = "";
+
         public DateTime CreatedAt { get; set; } = DateTime.Now;
 
         public DateTime? ProductsAcceptedAt { get; set; }
@@ -23,6 +27,24 @@ namespace ClubTimerXbox.Models
         public DateTime? CashAcceptedAt { get; set; }
 
         public DateTime? CompletedAt { get; set; }
+
+        public bool IsManualSelfAcceptance { get; set; }
+
+        public bool ManualSelfAcceptanceAvailable { get; set; }
+
+        public string ManualSelfAcceptanceEmployeeName { get; set; } = "";
+
+        public string ManualSelfAcceptanceKey { get; set; } = "";
+
+        public bool CashCorrectionAvailable { get; set; }
+
+        public string CashCorrectionAcceptanceKey { get; set; } = "";
+
+        public string CashCorrectionNewEmployeeName { get; set; } = "";
+
+        public string CashCorrectionResponsibleEmployeeName { get; set; } = "";
+
+        public DateTime? CashCorrectionUntil { get; set; }
 
         public bool IsCompleted
         {

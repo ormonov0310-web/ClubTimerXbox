@@ -271,11 +271,29 @@ namespace ClubTimerXbox
                 ? GetResponsibleEmployeeName()
                 : state.ResponsibleEmployeeName;
 
+            string displayNewEmployee = string.IsNullOrWhiteSpace(state.DisplayNewEmployeeName)
+                ? newEmployee
+                : state.DisplayNewEmployeeName;
+
+            string displayResponsible = string.IsNullOrWhiteSpace(state.DisplayResponsibleEmployeeName)
+                ? responsible
+                : state.DisplayResponsibleEmployeeName;
+
+            if (!state.IsRequired && state.IsCompleted && state.IsManualSelfAcceptance)
+                return "Приёмка завершена. Товары и наличка уже приняты.";
+
             if (!state.IsRequired && state.IsCompleted)
-                return $"Приёмка завершена. Передача: {responsible} → {newEmployee}.";
+                return $"Приёмка завершена. Передача: {displayResponsible} → {displayNewEmployee}.";
+
+            if (state.IsManualSelfAcceptance)
+            {
+                return
+                    $"Ручная самоприёмка: {newEmployee} проверяет кассу на себя.\n" +
+                    "Эта проверка не мигает на главном экране и не блокирует статистику.";
+            }
 
             return
-                $"Передача смены: {responsible} → {newEmployee}.\n" +
+                $"Передача смены: {displayResponsible} → {displayNewEmployee}.\n" +
                 "Чтобы кнопка “Приёмка” перестала мигать, нужно принять две части: товары и наличку.";
         }
 
@@ -306,6 +324,8 @@ namespace ClubTimerXbox
                 LineHeight = 23,
                 Margin = new Thickness(0, 0, 0, 14)
             });
+
+            AddRepeatAcceptanceButtonIfAvailable(ActiveSection.Products);
 
             if (ShiftAcceptanceService.Current.ProductsAccepted)
             {
@@ -398,6 +418,8 @@ namespace ClubTimerXbox
                 Margin = new Thickness(0, 0, 0, 14)
             });
 
+            AddRepeatAcceptanceButtonIfAvailable(ActiveSection.Cash);
+
             if (ShiftAcceptanceService.Current.CashAccepted)
             {
                 _contentPanel.Children.Add(CreateInfoCard(
@@ -408,6 +430,98 @@ namespace ClubTimerXbox
             }
 
             _contentPanel.Children.Add(CreateCashCard());
+        }
+
+        private void AddRepeatAcceptanceButtonIfAvailable(ActiveSection section)
+        {
+            string currentEmployeeName = EmployeeService.CurrentEmployee?.Name ?? "";
+            bool canRepeat = section == ActiveSection.Products
+                ? ShiftAcceptanceService.CanCorrectProductsAcceptance(currentEmployeeName)
+                : ShiftAcceptanceService.CanCorrectCashAcceptance(currentEmployeeName);
+
+            if (!canRepeat)
+                return;
+
+            var remaining = ShiftAcceptanceService.GetCashCorrectionRemaining();
+            string remainingText = remaining == null
+                ? ""
+                : $" Осталось: {Math.Ceiling(remaining.Value.TotalMinutes)} мин.";
+
+            var panel = new StackPanel();
+
+            panel.Children.Add(new TextBlock
+            {
+                Text = section == ActiveSection.Products
+                    ? $"Повторная приёмка товаров доступна.{remainingText}"
+                    : $"Повторная приёмка налички доступна.{remainingText}",
+                Foreground = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                FontSize = 15,
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = 22,
+                Margin = new Thickness(0, 0, 0, 12)
+            });
+
+            var button = CreateRepeatAcceptanceButton(
+                section == ActiveSection.Products
+                    ? "Повторить товары"
+                    : "Повторить наличку"
+            );
+
+            button.Click += (_, _) => StartRepeatAcceptance(section);
+
+            panel.Children.Add(button);
+
+            _contentPanel.Children.Add(CreateCard(panel, Color.FromRgb(42, 58, 78)));
+        }
+
+        private Button CreateRepeatAcceptanceButton(string text)
+        {
+            return new Button
+            {
+                Content = text,
+                Width = 170,
+                Height = 42,
+                FontSize = 15,
+                FontWeight = FontWeights.SemiBold,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+        }
+
+        private void StartRepeatAcceptance(ActiveSection section)
+        {
+            string currentEmployeeName = EmployeeService.CurrentEmployee?.Name ?? "";
+            bool started = section == ActiveSection.Products
+                ? ShiftAcceptanceService.StartProductsCorrection(currentEmployeeName)
+                : ShiftAcceptanceService.StartCashCorrection(currentEmployeeName);
+
+            if (!started)
+            {
+                MessageBox.Show(
+                    "Время повторной приёмки уже прошло или повторная приёмка уже была выполнена.",
+                    "Повторная приёмка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information
+                );
+
+                RefreshStatusCards();
+                if (section == ActiveSection.Products)
+                    ShowProductsSection();
+                else
+                    ShowCashSection();
+                return;
+            }
+
+            MessageBox.Show(
+                "Эта часть снова переведена в статус незавершённой. Ответственный останется тот же, что и в первой приёмке.",
+                "Повторная приёмка",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information
+            );
+
+            if (section == ActiveSection.Products)
+                ShowProductsSection();
+            else
+                ShowCashSection();
         }
 
         private Border CreateCashCard()
@@ -628,6 +742,11 @@ namespace ClubTimerXbox
             int originalCashShortage = 0;
             int coveredByCashlessExtra = 0;
             int finalCashShortage = 0;
+            int correctedInputMistake = 0;
+            int nettedReconciliation = 0;
+            int remainingCashExtra = Math.Max(0, difference);
+            var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            var nextMonthStart = monthStart.AddMonths(1);
 
             CashAcceptanceService.AddItem(
                 checkedByEmployeeName: checkedBy,
@@ -648,6 +767,12 @@ namespace ClubTimerXbox
                     actualAmount: actualCash,
                     note: "Приёмка налички"
                 );
+                nettedReconciliation = CashReconciliationService.NetOpenMoneyCorrections(
+                    monthStart,
+                    nextMonthStart,
+                    "Система",
+                    "Автозачёт после приёмки налички: встречные суммы нал/безнал закрыты как ошибка типа оплаты."
+                );
 
                 finalCashShortage = reconciliation.Status == CashReconciliationStatus.Resolved
                     ? 0
@@ -656,13 +781,41 @@ namespace ClubTimerXbox
             }
             else if (difference > 0)
             {
-                CashReconciliationService.AddCashAcceptanceDifference(
+                correctedInputMistake = CashReconciliationService.ResolveRecentCashAcceptanceInputMistakes(
                     checkedByEmployeeName: checkedBy,
-                    responsibleEmployeeName: responsible,
-                    expectedAmount: _expectedCashAmount,
-                    actualAmount: actualCash,
-                    note: "Приёмка налички"
+                    amount: difference,
+                    correctionWindow: TimeSpan.FromMinutes(15),
+                    note:
+                        $"Повторная приёмка налички: {checkedBy} ввёл {actualCash} сом. " +
+                        "Зачтено как исправление ошибки ввода.",
+                    fromInclusive: monthStart,
+                    toExclusive: nextMonthStart
                 );
+
+                remainingCashExtra = difference - correctedInputMistake;
+
+                if (remainingCashExtra > 0)
+                {
+                    var reconciliation = CashReconciliationService.AddCashAcceptanceDifference(
+                        checkedByEmployeeName: checkedBy,
+                        responsibleEmployeeName: responsible,
+                        expectedAmount: _expectedCashAmount,
+                        actualAmount: _expectedCashAmount + remainingCashExtra,
+                        note: correctedInputMistake > 0
+                            ? $"Приёмка налички. После исправления ошибки ввода осталось лишнее: {remainingCashExtra} сом."
+                            : "Приёмка налички"
+                    );
+                    nettedReconciliation = CashReconciliationService.NetOpenMoneyCorrections(
+                        monthStart,
+                        nextMonthStart,
+                        "Система",
+                        "Автозачёт после приёмки налички: встречные суммы нал/безнал закрыты как ошибка типа оплаты."
+                    );
+
+                    remainingCashExtra = reconciliation.Status == CashReconciliationStatus.Resolved
+                        ? 0
+                        : reconciliation.Amount;
+                }
             }
 
             ShiftAcceptanceService.AcceptCash();
@@ -679,6 +832,8 @@ namespace ClubTimerXbox
 
                 if (coveredByCashlessExtra > 0)
                     message += $"Зачтено излишком безнала: {coveredByCashlessExtra} сом\n";
+                else if (nettedReconciliation > 0)
+                    message += $"Автозачёт разборов: {nettedReconciliation} сом\n";
 
                 if (finalCashShortage > 0)
                     message += $"Активная разница: {finalCashShortage} сом\nОткройте на телефоне Разница кассы, чтобы закрыть её или оформить как потери.";
@@ -686,7 +841,18 @@ namespace ClubTimerXbox
                     message += "Недостача закрыта излишком безнала как ошибка типа оплаты.";
             }
             else if (difference > 0)
-                message += $"Излишек: {difference} сом\nРазница отправлена владельцу на разбор.";
+            {
+                if (correctedInputMistake > 0)
+                    message += $"Исправлена ошибка ввода прошлой приёмки: {correctedInputMistake} сом\n";
+
+                if (nettedReconciliation > 0)
+                    message += $"Автозачёт разборов: {nettedReconciliation} сом\n";
+
+                if (remainingCashExtra > 0)
+                    message += $"Излишек: {remainingCashExtra} сом\nРазница отправлена владельцу на разбор.";
+                else
+                    message += "Излишка нет: плюс ушёл на закрытие ошибки ввода прошлой приёмки.";
+            }
             else
                 message += "Разница: 0.";
 
@@ -697,7 +863,12 @@ namespace ClubTimerXbox
 
         private void ResolveSmallCashlessShortagesAfterCashAcceptance(int actualCash)
         {
-            var shortages = CashReconciliationService.GetOpenSmallCashlessShortages();
+            var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            var nextMonthStart = monthStart.AddMonths(1);
+            var shortages = CashReconciliationService.GetOpenSmallCashlessShortages(
+                monthStart,
+                nextMonthStart
+            );
 
             if (shortages.Count == 0)
                 return;
@@ -982,6 +1153,21 @@ namespace ClubTimerXbox
         {
             if (alreadyAccepted)
             {
+                string selfAcceptanceEmployeeName = EmployeeService.CurrentEmployee?.Name ?? "";
+
+                if (ShiftAcceptanceService.CanStartManualSelfAcceptance(selfAcceptanceEmployeeName) &&
+                    ShiftAcceptanceService.StartManualSelfAcceptance(selfAcceptanceEmployeeName))
+                {
+                    RefreshStatusCards();
+
+                    if (_activeSection == ActiveSection.Products)
+                        ShowProductsSection();
+                    else
+                        ShowCashSection();
+
+                    return false;
+                }
+
                 MessageBox.Show(
                     $"Эта часть приёмки уже завершена: {partName}. Повторно принять нельзя.",
                     "Приёмка смены",
@@ -1150,11 +1336,12 @@ namespace ClubTimerXbox
         {
             RefreshStatusCards();
 
-            if (!ShiftAcceptanceService.IsAcceptanceRequired())
+            if (!ShiftAcceptanceService.IsAcceptanceActive())
             {
                 MessageBox.Show(
-                    "Приёмка смены полностью завершена.\n\n" +
-                    "Кнопка “Приёмка” на главном экране перестанет мигать.",
+                    ShiftAcceptanceService.Current.IsManualSelfAcceptance
+                        ? "Самоприёмка полностью завершена."
+                        : "Приёмка смены полностью завершена.\n\nКнопка “Приёмка” на главном экране перестанет мигать.",
                     "Приёмка смены"
                 );
 

@@ -104,9 +104,9 @@ namespace ClubTimerXbox.Services
                     $"Ответственный: {responsible}.\n" +
                     $"Возможный штраф: {possibleAmount} сом.\n" +
                     "Автоматически не удержано: клуб мог не работать по уважительной причине.",
-                amount: 0,
+                amount: possibleAmount,
                 note: $"{RecommendationNotePrefix}:{dayKey}",
-                lossKind: "money",
+                lossKind: "violation",
                 isFixed: false
             );
         }
@@ -129,7 +129,7 @@ namespace ClubTimerXbox.Services
                     $"Автоштраф: {amount} сом.",
                 amount: amount,
                 note: $"{AutoNotePrefix}:{dayKey}",
-                lossKind: "money",
+                lossKind: "violation",
                 isFixed: true
             );
         }
@@ -155,9 +155,9 @@ namespace ClubTimerXbox.Services
                     $"Фактически открыл: {openedBy}.\n" +
                     $"Возможный штраф: {possibleAmount} сом.\n" +
                     "Автоматически не удержано, требуется решение владельца.",
-                amount: 0,
+                amount: possibleAmount,
                 note: $"{RecommendationNotePrefix}:{dayKey}",
-                lossKind: "money",
+                lossKind: "violation",
                 isFixed: false
             );
         }

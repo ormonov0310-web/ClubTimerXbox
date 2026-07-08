@@ -17,11 +17,7 @@ namespace ClubTimerXbox
             bool? result = window.ShowDialog();
 
             if (result == true)
-            {
-                // После приёмки могли измениться остатки.
-                // Поэтому просто оставляем главный экран актуальным.
                 DrawPlaces();
-            }
         }
     }
 }

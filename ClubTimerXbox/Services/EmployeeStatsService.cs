@@ -27,6 +27,7 @@ namespace ClubTimerXbox.Services
         public int MonthUnpaidMoneyLosses { get; set; }
         public int MonthRawUnpaidMoneyLosses { get; set; }
         public int MonthUnpaidProductLosses { get; set; }
+        public int MonthUnpaidViolationLosses { get; set; }
 
         public int ClosedGameSessionsCount { get; set; }
         public int ProductServiceOperationsCount { get; set; }
@@ -90,6 +91,7 @@ namespace ClubTimerXbox.Services
         public string Title { get; set; } = "";
         public string Description { get; set; } = "";
         public int Amount { get; set; }
+        public bool IsFixed { get; set; }
     }
 
     public static class EmployeeStatsService
@@ -113,6 +115,11 @@ namespace ClubTimerXbox.Services
             var todayLosses = GetLossRecordsForEmployee(employeeName, todayStart, tomorrowStart);
             var monthLosses = GetLossRecordsForEmployee(employeeName, monthStart, nextMonthStart);
             int unpaidProductLosses = EmployeeLossService.GetUnpaidProductTotalByEmployee(
+                employeeName,
+                monthStart,
+                nextMonthStart
+            );
+            int unpaidViolationLosses = EmployeeLossService.GetUnpaidViolationTotalByEmployee(
                 employeeName,
                 monthStart,
                 nextMonthStart
@@ -164,11 +171,12 @@ namespace ClubTimerXbox.Services
 
                 TodayShortages = todayLosses.Sum(record => record.Amount),
                 MonthShortages = monthLosses.Sum(record => record.Amount),
-                MonthUnpaidLosses = unpaidProductLosses + cappedUnpaidMoneyLosses,
+                MonthUnpaidLosses = unpaidProductLosses + cappedUnpaidMoneyLosses + unpaidViolationLosses,
                 MonthPaidLosses = monthLosses.Where(record => record.IsPaid).Sum(record => record.Amount),
                 MonthUnpaidMoneyLosses = cappedUnpaidMoneyLosses,
                 MonthRawUnpaidMoneyLosses = rawUnpaidMoneyLosses,
                 MonthUnpaidProductLosses = unpaidProductLosses,
+                MonthUnpaidViolationLosses = unpaidViolationLosses,
 
                 ClosedGameSessionsCount = monthSessions.Count,
                 ProductServiceOperationsCount = monthRecords.Count(record => record.Category == "Товары и услуги"),
@@ -386,7 +394,8 @@ namespace ClubTimerXbox.Services
                     LossKind = EmployeeLossService.GetLossKind(record),
                     Title = record.Title,
                     Description = record.Description,
-                    Amount = record.Amount
+                    Amount = record.Amount,
+                    IsFixed = record.IsFixed
                 });
             }
         }

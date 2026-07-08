@@ -72,7 +72,8 @@ namespace ClubTimerXbox.Services
             int actualAmount,
             int amount,
             CashReconciliationStatus status,
-            string note)
+            string note,
+            string suspectedEmployeeName = "")
         {
             var item = new CashReconciliationItem
             {
@@ -88,6 +89,7 @@ namespace ClubTimerXbox.Services
                 ActualAmount = actualAmount,
                 CheckedByEmployeeName = "Владелец",
                 ResponsibleEmployeeName = "",
+                SuspectedEmployeeName = suspectedEmployeeName.Trim(),
                 Title = actualAmount >= expectedAmount
                     ? "Излишек безнала"
                     : "Недостача безнала",
@@ -109,12 +111,41 @@ namespace ClubTimerXbox.Services
             return item;
         }
 
+        public static bool SetSuspectedEmployee(
+            Guid id,
+            string suspectedEmployeeName,
+            string note = "")
+        {
+            if (string.IsNullOrWhiteSpace(suspectedEmployeeName))
+                return false;
+
+            var item = _items.FirstOrDefault(entry => entry.Id == id);
+
+            if (item == null)
+                return false;
+
+            string nextName = suspectedEmployeeName.Trim();
+
+            if (item.SuspectedEmployeeName.Equals(nextName, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            item.SuspectedEmployeeName = nextName;
+
+            if (!string.IsNullOrWhiteSpace(note))
+                AppendNote(item, note.Trim());
+
+            Save();
+            return true;
+        }
+
         public static int NetOpenMoneyCorrections(
             DateTime fromInclusive,
             DateTime toExclusive,
             string resolvedBy,
             string note)
         {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
             var extras = _items
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
@@ -185,6 +216,8 @@ namespace ClubTimerXbox.Services
             int expectedAmount,
             int actualAmount)
         {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
             if (expectedAmount != actualAmount)
                 return 0;
 
@@ -220,7 +253,8 @@ namespace ClubTimerXbox.Services
             int actualAmount,
             int amount,
             bool isShortage,
-            string note)
+            string note,
+            string responsibleEmployeeName = "")
         {
             var item = new CashReconciliationItem
             {
@@ -235,7 +269,7 @@ namespace ClubTimerXbox.Services
                 ExpectedAmount = expectedAmount,
                 ActualAmount = actualAmount,
                 CheckedByEmployeeName = "Владелец",
-                ResponsibleEmployeeName = "",
+                ResponsibleEmployeeName = responsibleEmployeeName.Trim(),
                 Title = isShortage
                     ? "Сырые потери"
                     : "Излишек после корректировки",
@@ -248,11 +282,60 @@ namespace ClubTimerXbox.Services
             return item;
         }
 
-        public static void AutoResolveSmallPaymentMistakes()
+        public static string GetSuggestedResponsibleForOpenShortages(
+            DateTime fromInclusive,
+            DateTime toExclusive)
         {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
+            return _items
+                .Where(item =>
+                    item.Status == CashReconciliationStatus.Open &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    IsShortageKind(item.Kind) &&
+                    item.Amount > 0 &&
+                    !string.IsNullOrWhiteSpace(item.ResponsibleEmployeeName))
+                .GroupBy(item => item.ResponsibleEmployeeName.Trim(), StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(group => group.Sum(item => item.Amount))
+                .ThenByDescending(group => group.Max(item => item.CreatedAt))
+                .Select(group => group.Key)
+                .FirstOrDefault() ?? "";
+        }
+
+        public static string GetSuggestedSuspectForOpenShortages(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
+            return _items
+                .Where(item =>
+                    item.Status == CashReconciliationStatus.Open &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    IsShortageKind(item.Kind) &&
+                    item.Amount > 0 &&
+                    string.IsNullOrWhiteSpace(item.ResponsibleEmployeeName) &&
+                    !string.IsNullOrWhiteSpace(item.SuspectedEmployeeName))
+                .GroupBy(item => item.SuspectedEmployeeName.Trim(), StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(group => group.Sum(item => item.Amount))
+                .ThenByDescending(group => group.Max(item => item.CreatedAt))
+                .Select(group => group.Key)
+                .FirstOrDefault() ?? "";
+        }
+
+        public static void AutoResolveSmallPaymentMistakes(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
             bool changed = false;
 
             changed |= AutoResolveOppositeSmallItems(
+                fromInclusive,
+                toExclusive,
                 extraKind: CashReconciliationKind.CashExtra,
                 shortageKind: CashReconciliationKind.CashlessShortage,
                 extraResolvedNote: "Автоматически закрыто: безнал указали в программе, а деньги оказались наличными.",
@@ -260,6 +343,8 @@ namespace ClubTimerXbox.Services
             );
 
             changed |= AutoResolveOppositeSmallItems(
+                fromInclusive,
+                toExclusive,
                 extraKind: CashReconciliationKind.CashlessExtra,
                 shortageKind: CashReconciliationKind.CashShortage,
                 extraResolvedNote: "Автоматически закрыто: наличку указали в программе, а деньги оказались безналом.",
@@ -271,6 +356,8 @@ namespace ClubTimerXbox.Services
         }
 
         private static bool AutoResolveOppositeSmallItems(
+            DateTime fromInclusive,
+            DateTime toExclusive,
             CashReconciliationKind extraKind,
             CashReconciliationKind shortageKind,
             string extraResolvedNote,
@@ -281,6 +368,8 @@ namespace ClubTimerXbox.Services
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
                     item.Kind == extraKind &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
                     IsAutoResolvablePaymentMistakeAmount(item.Amount))
                 .OrderBy(item => item.CreatedAt)
                 .ToList();
@@ -289,6 +378,8 @@ namespace ClubTimerXbox.Services
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
                     item.Kind == shortageKind &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
                     IsAutoResolvablePaymentMistakeAmount(item.Amount))
                 .OrderBy(item => item.CreatedAt)
                 .ToList();
@@ -335,10 +426,15 @@ namespace ClubTimerXbox.Services
             return amount > 0 && amount <= AutoResolveLimit;
         }
 
-        public static int ConsumeOpenCashExtra(int amount)
+        public static int ConsumeOpenCashExtra(
+            int amount,
+            DateTime fromInclusive,
+            DateTime toExclusive)
         {
             if (amount <= 0)
                 return 0;
+
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
 
             int remaining = amount;
             int consumed = 0;
@@ -347,6 +443,8 @@ namespace ClubTimerXbox.Services
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
                     item.Kind == CashReconciliationKind.CashExtra &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
                     item.Amount > 0)
                 .OrderBy(item => item.CreatedAt)
                 .ToList();
@@ -376,10 +474,15 @@ namespace ClubTimerXbox.Services
             return consumed;
         }
 
-        public static int ConsumeOpenCashlessExtra(int amount)
+        public static int ConsumeOpenCashlessExtra(
+            int amount,
+            DateTime fromInclusive,
+            DateTime toExclusive)
         {
             if (amount <= 0)
                 return 0;
+
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
 
             int remaining = amount;
             int consumed = 0;
@@ -388,6 +491,8 @@ namespace ClubTimerXbox.Services
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
                     item.Kind == CashReconciliationKind.CashlessExtra &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
                     item.Amount > 0)
                 .OrderBy(item => item.CreatedAt)
                 .ToList();
@@ -425,12 +530,18 @@ namespace ClubTimerXbox.Services
                 .ToList();
         }
 
-        public static List<CashReconciliationItem> GetOpenSmallCashlessShortages()
+        public static List<CashReconciliationItem> GetOpenSmallCashlessShortages(
+            DateTime fromInclusive,
+            DateTime toExclusive)
         {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
             return _items
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
                     item.Kind == CashReconciliationKind.CashlessShortage &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
                     IsAutoResolvablePaymentMistakeAmount(item.Amount))
                 .OrderBy(item => item.CreatedAt)
                 .ToList();
@@ -491,6 +602,8 @@ namespace ClubTimerXbox.Services
             string resolvedBy,
             string note)
         {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
             int closed = 0;
 
             foreach (var item in _items
@@ -521,6 +634,197 @@ namespace ClubTimerXbox.Services
                 Save();
 
             return closed;
+        }
+
+        public static int FormalizeOpenShortagesForPeriod(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            int amount,
+            string resolvedBy,
+            string note)
+        {
+            return FormalizeOpenShortages(
+                fromInclusive,
+                toExclusive,
+                amount,
+                resolvedBy,
+                note,
+                responsibleEmployeeName: ""
+            );
+        }
+
+        public static int FormalizeOpenShortagesForEmployee(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string responsibleEmployeeName,
+            int amount,
+            string resolvedBy,
+            string note)
+        {
+            responsibleEmployeeName = responsibleEmployeeName.Trim();
+
+            if (string.IsNullOrWhiteSpace(responsibleEmployeeName))
+                return 0;
+
+            return FormalizeOpenShortages(
+                fromInclusive,
+                toExclusive,
+                amount,
+                resolvedBy,
+                note,
+                responsibleEmployeeName
+            );
+        }
+
+        private static int FormalizeOpenShortages(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            int amount,
+            string resolvedBy,
+            string note,
+            string responsibleEmployeeName)
+        {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+            responsibleEmployeeName = responsibleEmployeeName.Trim();
+
+            if (amount <= 0)
+                return 0;
+
+            int remaining = amount;
+            int formalized = 0;
+
+            foreach (var item in _items
+                .Where(item =>
+                    item.Status == CashReconciliationStatus.Open &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    IsShortageKind(item.Kind) &&
+                    (string.IsNullOrWhiteSpace(responsibleEmployeeName) ||
+                        item.ResponsibleEmployeeName.Trim().Equals(
+                            responsibleEmployeeName,
+                            StringComparison.OrdinalIgnoreCase)) &&
+                    item.Amount > 0)
+                .OrderBy(item => item.CreatedAt)
+                .ToList())
+            {
+                if (remaining <= 0)
+                    break;
+
+                NormalizeItem(item);
+
+                int useAmount = Math.Min(item.Amount, remaining);
+                item.Amount -= useAmount;
+                item.FormalizedAmount += useAmount;
+                formalized += useAmount;
+                remaining -= useAmount;
+
+                if (!string.IsNullOrWhiteSpace(note))
+                {
+                    item.Note = string.IsNullOrWhiteSpace(item.Note)
+                        ? note.Trim()
+                        : $"{item.Note.Trim()}\n{note.Trim()}";
+                }
+
+                if (item.Amount == 0)
+                {
+                    item.Status = CashReconciliationStatus.Resolved;
+                    item.ResolvedAt = DateTime.Now;
+                    item.ResolvedBy = string.IsNullOrWhiteSpace(resolvedBy)
+                        ? "Владелец"
+                        : resolvedBy.Trim();
+                    item.ResolutionNote = string.IsNullOrWhiteSpace(note)
+                        ? "Оформлено штрафом владельца."
+                        : note.Trim();
+                }
+            }
+
+            if (formalized > 0)
+                Save();
+
+            return formalized;
+        }
+
+        public static int GetOpenShortageTotal(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
+            return _items
+                .Where(item =>
+                    item.Status == CashReconciliationStatus.Open &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    IsShortageKind(item.Kind) &&
+                    item.Amount > 0)
+                .Sum(item => item.Amount);
+        }
+
+        public static int ResolveRecentCashAcceptanceInputMistakes(
+            string checkedByEmployeeName,
+            int amount,
+            TimeSpan correctionWindow,
+            string note,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            checkedByEmployeeName = checkedByEmployeeName.Trim();
+
+            if (string.IsNullOrWhiteSpace(checkedByEmployeeName) || amount <= 0)
+                return 0;
+
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
+            DateTime fromTime = DateTime.Now.Subtract(correctionWindow);
+            int remaining = amount;
+            int resolved = 0;
+
+            foreach (var item in _items
+                .Where(item =>
+                    item.Status == CashReconciliationStatus.Open &&
+                    item.Kind == CashReconciliationKind.CashShortage &&
+                    item.CreatedAt >= fromTime &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    item.Amount > 0 &&
+                    item.FormalizedAmount <= 0 &&
+                    item.CheckedByEmployeeName.Trim().Equals(
+                        checkedByEmployeeName,
+                        StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(item => item.CreatedAt)
+                .ToList())
+            {
+                if (remaining <= 0)
+                    break;
+
+                NormalizeItem(item);
+
+                int useAmount = Math.Min(item.Amount, remaining);
+                item.Amount -= useAmount;
+                item.ResolvedAmount += useAmount;
+                resolved += useAmount;
+                remaining -= useAmount;
+
+                if (!string.IsNullOrWhiteSpace(note))
+                {
+                    item.Note = string.IsNullOrWhiteSpace(item.Note)
+                        ? note.Trim()
+                        : $"{item.Note.Trim()}\n{note.Trim()}";
+                }
+
+                if (item.Amount == 0)
+                {
+                    item.Status = CashReconciliationStatus.Resolved;
+                    item.ResolvedAt = DateTime.Now;
+                    item.ResolvedBy = checkedByEmployeeName;
+                    item.ResolutionNote = "Закрыто повторной приёмкой: сотрудник исправил свою ошибку ввода налички.";
+                }
+            }
+
+            if (resolved > 0)
+                Save();
+
+            return resolved;
         }
 
         public static CashReconciliationItem Resolve(
@@ -590,6 +894,22 @@ namespace ClubTimerXbox.Services
             {
                 // Ошибка очистки сверок не должна ломать работу кассы.
             }
+        }
+
+        private static (DateTime fromInclusive, DateTime toExclusive) LimitToSingleMonth(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            var monthStart = new DateTime(fromInclusive.Year, fromInclusive.Month, 1);
+            var nextMonthStart = monthStart.AddMonths(1);
+
+            if (fromInclusive < monthStart)
+                fromInclusive = monthStart;
+
+            if (toExclusive > nextMonthStart || toExclusive <= fromInclusive)
+                toExclusive = nextMonthStart;
+
+            return (fromInclusive, toExclusive);
         }
 
         private static bool IsExtraKind(CashReconciliationKind kind)

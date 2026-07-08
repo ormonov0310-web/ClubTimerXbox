@@ -125,6 +125,7 @@ namespace ClubTimerXbox.Services
                     MoneyLossesAmount = input.Summary.MonthUnpaidMoneyLosses,
                     RawMoneyLossesAmount = input.Summary.MonthRawUnpaidMoneyLosses,
                     ProductLossesAmount = input.Summary.MonthUnpaidProductLosses,
+                    ViolationLossesAmount = input.Summary.MonthUnpaidViolationLosses,
                     PaidAmount = input.PaidSalary,
                     RemainingAmount = remaining
                 });
@@ -163,7 +164,45 @@ namespace ClubTimerXbox.Services
                 day = day.AddDays(1);
             }
 
+            ApplyManualOwnerBonuses(result, monthStart, nextMonthStart);
+
             return result;
+        }
+
+        private static void ApplyManualOwnerBonuses(
+            Dictionary<string, EmployeeBonusInput> result,
+            DateTime monthStart,
+            DateTime nextMonthStart)
+        {
+            foreach (var bonus in EmployeeBonusService.GetSalaryMonthBonuses(monthStart, nextMonthStart))
+            {
+                if (bonus.Amount <= 0)
+                    continue;
+
+                string employeeName = bonus.EmployeeName.Trim();
+                if (string.IsNullOrWhiteSpace(employeeName))
+                    continue;
+
+                if (!result.TryGetValue(employeeName, out var input))
+                {
+                    input = new EmployeeBonusInput
+                    {
+                        EmployeeName = employeeName
+                    };
+                    result[employeeName] = input;
+                }
+
+                input.Bonuses.Add(new AutoSalaryBonusItem
+                {
+                    CreatedAt = bonus.CreatedAt,
+                    Type = bonus.BonusType,
+                    Title = string.IsNullOrWhiteSpace(bonus.Title)
+                        ? "Премия от владельца"
+                        : bonus.Title,
+                    Description = bonus.Description,
+                    Amount = bonus.Amount
+                });
+            }
         }
 
         private static void ApplyPaidTimeForDay(

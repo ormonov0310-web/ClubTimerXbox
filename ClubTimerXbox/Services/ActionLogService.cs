@@ -7,6 +7,9 @@ namespace ClubTimerXbox.Services
 {
     public static class ActionLogService
     {
+        private static readonly TimeSpan SameEmployeeRequiredAcceptanceGap =
+            TimeSpan.FromHours(2);
+
         // Старый простой журнал.
         // Пока оставляем для совместимости.
         public static List<ActionLogItem> Items { get; private set; } = new List<ActionLogItem>();
@@ -225,9 +228,6 @@ namespace ClubTimerXbox.Services
             ShiftLogItem? responsibleShift,
             ShiftLogItem newShift)
         {
-            if (ShiftAcceptanceService.IsAcceptanceRequired())
-                return;
-
             if (responsibleShift == null)
                 return;
 
@@ -237,7 +237,43 @@ namespace ClubTimerXbox.Services
                 return;
 
             if (responsibleEmployeeName.Equals(newEmployeeName, StringComparison.OrdinalIgnoreCase))
+            {
+                CancelStaleAcceptanceIfNeeded(
+                    newEmployeeName,
+                    "Предыдущая незавершённая приёмка отменена: тот же сотрудник снова открыл смену."
+                );
+
+                string acceptanceKey = BuildAcceptanceKey(responsibleShift.Id, newShift.Id);
+
+                if (ShouldRequireSameEmployeeAcceptance(responsibleShift, newShift))
+                {
+                    ShiftAcceptanceService.StartRequiredAcceptance(
+                        newEmployeeName: newEmployeeName,
+                        responsibleEmployeeName: newEmployeeName,
+                        acceptanceKey: acceptanceKey
+                    );
+                }
+                else
+                {
+                    ShiftAcceptanceService.AllowManualSelfAcceptanceAfterReentry(
+                        newEmployeeName,
+                        acceptanceKey
+                    );
+                }
+
                 return;
+            }
+
+            if (ShiftAcceptanceService.IsAcceptanceRequired())
+            {
+                if (ShiftAcceptanceService.IsPendingForEmployee(newEmployeeName))
+                    return;
+
+                CancelStaleAcceptanceIfNeeded(
+                    newEmployeeName,
+                    "Предыдущая незавершённая приёмка отменена: открыта новая актуальная смена."
+                );
+            }
 
             ShiftAcceptanceService.StartRequiredAcceptance(
                 newEmployeeName: newEmployeeName,
@@ -251,11 +287,19 @@ namespace ClubTimerXbox.Services
             return $"{responsibleShiftId:N}->{newShiftId:N}";
         }
 
+        private static bool ShouldRequireSameEmployeeAcceptance(
+            ShiftLogItem responsibleShift,
+            ShiftLogItem newShift)
+        {
+            if (responsibleShift.ClosedAt == null)
+                return false;
+
+            return newShift.StartedAt - responsibleShift.ClosedAt.Value >=
+                SameEmployeeRequiredAcceptanceGap;
+        }
+
         public static void EnsureAcceptanceForCurrentShift()
         {
-            if (ShiftAcceptanceService.IsAcceptanceRequired())
-                return;
-
             var currentShift = CurrentShift;
 
             if (currentShift == null)
@@ -266,18 +310,50 @@ namespace ClubTimerXbox.Services
             if (string.IsNullOrWhiteSpace(newEmployeeName))
                 return;
 
+            if (ShiftAcceptanceService.IsAcceptanceRequired())
+            {
+                if (ShiftAcceptanceService.IsPendingForEmployee(newEmployeeName))
+                    return;
+
+                if (ShiftAcceptanceService.IsResponsibleEmployee(newEmployeeName))
+                {
+                    CancelStaleAcceptanceIfNeeded(
+                        newEmployeeName,
+                        "Предыдущая незавершённая приёмка отменена: ответственный сотрудник снова вошёл сам."
+                    );
+
+                    ShiftAcceptanceService.AllowManualSelfAcceptanceAfterReentry(
+                        newEmployeeName,
+                        $"manual-self:{DateTime.Now:yyyyMMddHHmmss}:{Guid.NewGuid():N}"
+                    );
+
+                    return;
+                }
+
+                CancelStaleAcceptanceIfNeeded(
+                    newEmployeeName,
+                    "Предыдущая незавершённая приёмка отменена: она относится к другой смене."
+                );
+            }
+
             var responsibleShift = Shifts
                 .Where(shift =>
                     shift.Id != currentShift.Id &&
                     shift.IsClosed &&
                     shift.ClosedAt != null &&
-                    shift.EmployeeName.Trim().Length > 0 &&
-                    !shift.EmployeeName.Trim().Equals(newEmployeeName, StringComparison.OrdinalIgnoreCase))
+                    shift.EmployeeName.Trim().Length > 0)
                 .OrderByDescending(shift => shift.ClosedAt)
                 .FirstOrDefault();
 
             if (responsibleShift == null)
                 return;
+
+            if (responsibleShift.EmployeeName.Trim().Equals(
+                    newEmployeeName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
 
             string acceptanceKey = BuildAcceptanceKey(responsibleShift.Id, currentShift.Id);
 
@@ -301,6 +377,25 @@ namespace ClubTimerXbox.Services
                 responsibleEmployeeName: responsibleShift.EmployeeName,
                 acceptanceKey: acceptanceKey
             );
+        }
+
+        private static void CancelStaleAcceptanceIfNeeded(string employeeName, string reason)
+        {
+            if (!ShiftAcceptanceService.IsAcceptanceRequired())
+                return;
+
+            var state = ShiftAcceptanceService.Current;
+
+            Add(
+                employeeName: employeeName,
+                actionType: "Приёмка отменена",
+                placeName: "",
+                description:
+                    $"{reason} " +
+                    $"Было: {state.ResponsibleEmployeeName} → {state.NewEmployeeName}."
+            );
+
+            ShiftAcceptanceService.CancelPendingAcceptance();
         }
 
         public static List<ShiftLogItem> GetAllShifts()
