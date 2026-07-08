@@ -899,7 +899,19 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            return CalculateExpectedCashBalanceByPeriod(fromInclusive, toExclusive);
+            var checkpoint = CashBalanceCheckpointService.GetLatestByPeriod(
+                fromInclusive,
+                toExclusive
+            );
+
+            if (checkpoint == null)
+                return CalculateExpectedCashBalanceByPeriod(fromInclusive, toExclusive);
+
+            return CalculateCashBalanceAfterCheckpoint(
+                checkpoint.CashAmount,
+                checkpoint.CreatedAt,
+                toExclusive
+            );
         }
 
         private static int CalculateCashBalanceAfterCheckpoint(
@@ -1001,7 +1013,23 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            return CalculateExpectedCashlessBalanceByPeriod(fromInclusive, toExclusive);
+            var latestVerification = CashlessService.Records
+                .Where(record =>
+                    record.Date >= fromInclusive.Date &&
+                    record.Date < toExclusive.Date)
+                .OrderByDescending(record => record.Date)
+                .ThenByDescending(record => record.UpdatedAt)
+                .FirstOrDefault(record => record.ExpectedAmount.HasValue);
+
+            if (latestVerification == null)
+                return CalculateExpectedCashlessBalanceByPeriod(fromInclusive, toExclusive);
+
+            return CalculateCashlessBalanceAfterCheckpoint(
+                latestVerification.ExpectedAmount!.Value,
+                latestVerification.UpdatedAt,
+                fromInclusive,
+                toExclusive
+            );
         }
 
         private static int CalculateCashlessBalanceAfterCheckpoint(
@@ -3349,6 +3377,14 @@ namespace ClubTimerXbox.Services
                 note: note,
                 expectedAmount: actualCashless
             );
+
+            if (actualCash.HasValue)
+            {
+                CashBalanceCheckpointService.AddCurrentMonthCheckpoint(
+                    actualCash.Value,
+                    note
+                );
+            }
 
             int closed = CashReconciliationService.CloseOpenItemsForBalance(
                 monthStart,
