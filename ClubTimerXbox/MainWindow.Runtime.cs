@@ -9,8 +9,12 @@ namespace ClubTimerXbox
     public partial class MainWindow
     {
         private bool _runtimeShiftChecked = false;
+        private readonly string _notificationSessionId = Guid.NewGuid().ToString("N");
 
-        private readonly DispatcherTimer _firebaseSyncTimer = new DispatcherTimer();
+        private readonly DispatcherTimer _firebaseStatePushTimer = new DispatcherTimer();
+        private readonly DispatcherTimer _firebaseCommandTimer = new DispatcherTimer();
+        private bool _isFirebaseStatePushRunning;
+        private bool _isFirebaseCommandCheckRunning;
 
         private void CheckRuntimeShiftAfterStart()
         {
@@ -25,6 +29,10 @@ namespace ClubTimerXbox
             var state = AppRuntimeStateStorageService.Load();
 
             AppRuntimeStateStorageService.SaveOpenedNow();
+            _ = FirebaseEventService.PublishClubOpenedAsync(
+                _notificationSessionId,
+                EmployeeService.CurrentEmployee?.Name ?? "Не выбран"
+            );
 
             if (state.LastClosedAt == null)
                 return;
@@ -69,31 +77,72 @@ namespace ClubTimerXbox
 
         private void StartFirebaseSync()
         {
-            _firebaseSyncTimer.Stop();
+            _firebaseStatePushTimer.Stop();
+            _firebaseCommandTimer.Stop();
 
-            _firebaseSyncTimer.Interval = TimeSpan.FromSeconds(5);
-            _firebaseSyncTimer.Tick += async (_, _) =>
+            _firebaseCommandTimer.Interval = TimeSpan.FromSeconds(1);
+            _firebaseCommandTimer.Tick += async (_, _) => await RunFirebaseCommandCheckAsync();
+
+            _firebaseStatePushTimer.Interval = TimeSpan.FromSeconds(5);
+            _firebaseStatePushTimer.Tick += async (_, _) => await RunFirebaseStatePushAsync();
+
+            _firebaseCommandTimer.Start();
+            _firebaseStatePushTimer.Start();
+
+            _ = RunFirebaseCommandCheckAsync();
+            _ = RunFirebaseStatePushAsync();
+        }
+
+        private async Task RunFirebaseCommandCheckAsync()
+        {
+            if (_isFirebaseCommandCheckRunning)
+                return;
+
+            _isFirebaseCommandCheckRunning = true;
+
+            try
+            {
+                await FirebaseSyncService.CheckCommandsAsync(_places.ToList());
+            }
+            finally
+            {
+                _isFirebaseCommandCheckRunning = false;
+            }
+        }
+
+        private async Task RunFirebaseStatePushAsync()
+        {
+            if (_isFirebaseStatePushRunning)
+                return;
+
+            _isFirebaseStatePushRunning = true;
+
+            try
             {
                 var places = _places.ToList();
+                await FirebaseEventService.FlushPendingAsync();
                 await FirebaseSyncService.PushCurrentStateAsync(places);
-                await FirebaseSyncService.CheckCommandsAsync(places);
                 await AppUpdateService.CheckAndReportAsync(places);
                 await RefreshSettingsUpdateIndicatorAsync(forceRefresh: false);
-            };
-
-            _firebaseSyncTimer.Start();
-
-            _ = FirebaseSyncService.PushCurrentStateAsync(_places.ToList());
-            _ = FirebaseSyncService.CheckCommandsAsync(_places.ToList());
-            _ = AppUpdateService.CheckAndReportAsync(_places.ToList());
-            _ = RefreshSettingsUpdateIndicatorAsync(forceRefresh: false);
+            }
+            finally
+            {
+                _isFirebaseStatePushRunning = false;
+            }
         }
 
         private void SaveRuntimeClosedNow()
         {
             AppRuntimeStateStorageService.SaveClosedNow();
 
-            _firebaseSyncTimer.Stop();
+            FirebaseEventService.PublishClubClosedAndWait(
+                _notificationSessionId,
+                EmployeeService.CurrentEmployee?.Name ?? "Не выбран",
+                TimeSpan.FromSeconds(3)
+            );
+
+            _firebaseStatePushTimer.Stop();
+            _firebaseCommandTimer.Stop();
 
             OwnerApiServer.Stop();
         }

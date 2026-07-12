@@ -565,6 +565,22 @@ namespace ClubTimerXbox.Services
             Save();
         }
 
+        public static bool DeleteFixedViolation(Guid id)
+        {
+            var item = Items.FirstOrDefault(loss => loss.Id == id);
+
+            if (item == null)
+                return false;
+
+            if (!item.IsFixed || item.IsPaid || !IsViolationLoss(item))
+                return false;
+
+            Items.Remove(item);
+            Save();
+
+            return true;
+        }
+
         public static void Clear()
         {
             Items.Clear();

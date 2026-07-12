@@ -62,6 +62,10 @@ namespace ClubTimerXbox
                 ActionLogService.SwitchShift(newEmployeeName);
 
                 UpdateCurrentEmployeeText();
+                _ = FirebaseEventService.PublishEmployeeChangedAsync(
+                    oldEmployeeName,
+                    newEmployeeName
+                );
 
                 MessageBox.Show(
                     $"Смена изменена.\n\n" +

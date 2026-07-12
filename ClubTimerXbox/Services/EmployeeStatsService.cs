@@ -85,6 +85,7 @@ namespace ClubTimerXbox.Services
 
     public class EmployeeJournalInfo
     {
+        public Guid? Id { get; set; }
         public DateTime CreatedAt { get; set; }
         public string Type { get; set; } = "";
         public string LossKind { get; set; } = "";
@@ -389,6 +390,7 @@ namespace ClubTimerXbox.Services
             {
                 result.Add(new EmployeeJournalInfo
                 {
+                    Id = record.Id,
                     CreatedAt = record.CreatedAt,
                     Type = "Потеря",
                     LossKind = EmployeeLossService.GetLossKind(record),

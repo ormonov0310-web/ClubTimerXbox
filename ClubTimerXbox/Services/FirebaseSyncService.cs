@@ -13,7 +13,10 @@ namespace ClubTimerXbox.Services
 {
     public static class FirebaseSyncService
     {
-        private static readonly HttpClient _httpClient = new HttpClient();
+        private static readonly HttpClient _httpClient = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(8)
+        };
         private static DateTime _lastOwnerEmployeesPush = DateTime.MinValue;
 
         private static string LegacyCurrentPath => "club/current";
@@ -568,6 +571,7 @@ namespace ClubTimerXbox.Services
                         var allJournal = journal
                             .Select(item => new
                             {
+                                id = item.Id?.ToString() ?? "",
                                 createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                                 type = item.Type,
                                 lossKind = item.LossKind,
@@ -586,6 +590,7 @@ namespace ClubTimerXbox.Services
                                 item.Type == "Товары и услуги")
                             .Select(item => new
                             {
+                                id = item.Id?.ToString() ?? "",
                                 createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                                 type = item.Type,
                                 lossKind = item.LossKind,
@@ -603,6 +608,7 @@ namespace ClubTimerXbox.Services
                                 item.Type.Contains("Штраф"))
                             .Select(item => new
                             {
+                                id = item.Id?.ToString() ?? "",
                                 createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                                 type = item.Type,
                                 lossKind = item.LossKind,
@@ -2015,6 +2021,7 @@ namespace ClubTimerXbox.Services
                     var allJournal = journal
                         .Select(item => new
                         {
+                            id = item.Id?.ToString() ?? "",
                             createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                             type = item.Type,
                             lossKind = item.LossKind,
@@ -2033,6 +2040,7 @@ namespace ClubTimerXbox.Services
                             item.Type == "Товары и услуги")
                         .Select(item => new
                         {
+                            id = item.Id?.ToString() ?? "",
                             createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                             type = item.Type,
                             lossKind = item.LossKind,
@@ -2050,6 +2058,7 @@ namespace ClubTimerXbox.Services
                             item.Type.Contains("Штраф"))
                         .Select(item => new
                         {
+                            id = item.Id?.ToString() ?? "",
                             createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                             type = item.Type,
                             lossKind = item.LossKind,
@@ -2457,6 +2466,19 @@ namespace ClubTimerXbox.Services
                         commandId,
                         command,
                         $"Фиксированный штраф добавлен: {command.EmployeeName}, {command.Amount} сом."
+                    );
+
+                    return;
+                }
+
+                if (command.Type == "DeleteEmployeeViolationLoss")
+                {
+                    ApplyDeleteEmployeeViolationLoss(command);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        "Штраф за нарушение удалён."
                     );
 
                     return;
@@ -3277,6 +3299,22 @@ namespace ClubTimerXbox.Services
                     command.Amount,
                     "Владелец",
                     $"Оформлено ручным денежным штрафом на {employee.Name}: {command.Amount} сом."
+                );
+            }
+        }
+
+        private static void ApplyDeleteEmployeeViolationLoss(FirebaseCommand command)
+        {
+            if (!Guid.TryParse(command.RecordId, out Guid lossId))
+                throw new Exception("Не указан корректный id штрафа.");
+
+            bool deleted = EmployeeLossService.DeleteFixedViolation(lossId);
+
+            if (!deleted)
+            {
+                throw new Exception(
+                    "Можно удалить только оформленный штраф за нарушение. " +
+                    "Кассовые потери, товарные потери и рекомендации этим действием не удаляются."
                 );
             }
         }

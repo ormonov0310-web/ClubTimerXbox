@@ -39,7 +39,7 @@ namespace ClubTimerXbox.Models
 
         public int LateOpeningPenaltyStepMinutes { get; set; } = 30;
 
-        public int LateOpeningPenaltyStepAmount { get; set; } = 100;
+        public int LateOpeningPenaltyStepAmount { get; set; } = 50;
 
         public int LateOpeningMaxAutoMinutes { get; set; } = 150;
     }

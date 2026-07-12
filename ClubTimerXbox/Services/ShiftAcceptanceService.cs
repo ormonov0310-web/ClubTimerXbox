@@ -473,6 +473,7 @@ namespace ClubTimerXbox.Services
             {
                 Current.IsRequired = false;
                 Current.CompletedAt = DateTime.Now;
+                _ = FirebaseEventService.PublishAcceptanceCompletedAsync(Current);
             }
         }
 

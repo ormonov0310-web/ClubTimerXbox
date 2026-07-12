@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace ClubTimerXbox.Services
@@ -38,12 +39,11 @@ namespace ClubTimerXbox.Services
                     return CurrentEmail;
 
                 string clubId = PcIdentityService.Current.ClubId.Trim().ToLowerInvariant();
-                return clubId switch
-                {
-                    "club_1" => "club1@xbox.local",
-                    "club_2" => "club2@xbox.local",
-                    _ => ""
-                };
+                Match match = Regex.Match(clubId, @"^club[_-]?(\d+)$");
+
+                return match.Success
+                    ? $"club{match.Groups[1].Value}@xbox.local"
+                    : "club1@xbox.local";
             }
         }
 
@@ -62,8 +62,9 @@ namespace ClubTimerXbox.Services
             }
             catch
             {
-                SignOut();
-                return false;
+                // Do not delete a saved refresh token on a single startup/network failure.
+                // Firebase sync will retry token refresh in the background once the network is back.
+                return true;
             }
         }
 

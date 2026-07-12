@@ -50,7 +50,7 @@ namespace ClubTimerXbox
 
             root.Children.Add(new TextBlock
             {
-                Text = "Войдите в Firebase, чтобы приложение могло работать с защищённой базой.",
+                Text = "Введите логин и пароль Firebase. Пример: club1@xbox.local. Для другого клуба меняется только номер: club2@xbox.local, club3@xbox.local и далее.",
                 Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
                 FontSize = 15,
                 TextWrapping = TextWrapping.Wrap,

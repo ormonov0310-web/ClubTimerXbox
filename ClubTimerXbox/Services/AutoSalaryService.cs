@@ -548,7 +548,7 @@ namespace ClubTimerXbox.Services
                 ? 30
                 : settings.LateOpeningPenaltyStepMinutes;
             settings.LateOpeningPenaltyStepAmount = settings.LateOpeningPenaltyStepAmount <= 0
-                ? 100
+                ? 50
                 : settings.LateOpeningPenaltyStepAmount;
             settings.LateOpeningMaxAutoMinutes = settings.LateOpeningMaxAutoMinutes <= 0
                 ? 150
