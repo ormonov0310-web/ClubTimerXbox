@@ -191,7 +191,12 @@ $manifest = [ordered]@{
     publishedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
 }
 
-$manifest | ConvertTo-Json -Depth 4 | Set-Content -Path $manifestPath -Encoding UTF8
+$manifestJson = $manifest | ConvertTo-Json -Depth 4
+[System.IO.File]::WriteAllText(
+    $manifestPath,
+    $manifestJson,
+    [System.Text.UTF8Encoding]::new($false)
+)
 
 Write-Host "Release package:"
 Write-Host $zipPath
