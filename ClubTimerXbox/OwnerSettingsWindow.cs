@@ -96,6 +96,17 @@ namespace ClubTimerXbox
 
             root.Children.Add(CreateFirebaseStatusCard());
 
+            var identity = PcIdentityService.Current;
+            string phoneConnectionSubtitle = string.IsNullOrWhiteSpace(identity.ClubId)
+                ? "Канал не выбран"
+                : $"{identity.ClubName} · {identity.ClubId}";
+
+            root.Children.Add(CreateSettingsButton(
+                "Связь с телефоном",
+                phoneConnectionSubtitle,
+                OpenPhoneConnectionSettings
+            ));
+
             _updateCard = CreateUpdateCard();
             root.Children.Add(_updateCard);
 
@@ -159,6 +170,16 @@ namespace ClubTimerXbox
                 return;
 
             var window = new NewBranchPromoWindow
+            {
+                Owner = this
+            };
+
+            window.ShowDialog();
+        }
+
+        private void OpenPhoneConnectionSettings()
+        {
+            var window = new PhoneConnectionSettingsWindow
             {
                 Owner = this
             };

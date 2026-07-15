@@ -19,10 +19,10 @@ namespace ClubTimerXbox
             Title = "Вход Firebase";
             Width = 470;
             Height = 520;
-            MinWidth = 470;
-            MinHeight = 500;
+            MinWidth = 420;
+            MinHeight = 420;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
-            ResizeMode = ResizeMode.NoResize;
+            ResizeMode = ResizeMode.CanResize;
             Background = new SolidColorBrush(Color.FromRgb(16, 20, 28));
 
             Content = new ScrollViewer

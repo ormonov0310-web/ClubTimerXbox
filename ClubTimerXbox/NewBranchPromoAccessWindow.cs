@@ -2,13 +2,12 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using ClubTimerXbox.Services;
 
 namespace ClubTimerXbox
 {
     public class NewBranchPromoAccessWindow : Window
     {
-        private const string OwnerCode = "105103";
-
         private readonly PasswordBox _codeBox = new PasswordBox();
         private readonly TextBlock _errorText = new TextBlock();
 
@@ -113,7 +112,7 @@ namespace ClubTimerXbox
 
         private void ConfirmCode()
         {
-            if (_codeBox.Password == OwnerCode)
+            if (OwnerAccessService.IsValidCode(_codeBox.Password))
             {
                 IsAccessGranted = true;
                 DialogResult = true;

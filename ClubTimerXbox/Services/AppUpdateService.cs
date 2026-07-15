@@ -46,6 +46,9 @@ namespace ClubTimerXbox.Services
 
         public static async Task CheckAndReportAsync(IReadOnlyList<ClubPlace> places)
         {
+            if (!FirebaseConnectionService.CanSync)
+                return;
+
             try
             {
                 await ReportLocalUpdaterStatusIfAnyAsync(places);
@@ -74,6 +77,9 @@ namespace ClubTimerXbox.Services
             IReadOnlyList<ClubPlace> places,
             bool forceRefresh = false)
         {
+            if (!FirebaseConnectionService.CanSync)
+                return BuildUpdateInfo(null, places);
+
             if (!forceRefresh &&
                 _lastInfo != null &&
                 DateTime.Now - _lastInfo.CheckedAt < CheckInterval)
@@ -235,6 +241,9 @@ namespace ClubTimerXbox.Services
             string state,
             string message)
         {
+            if (!FirebaseConnectionService.CanSync)
+                return;
+
             var payload = new
             {
                 currentVersion = AppVersionService.Version,

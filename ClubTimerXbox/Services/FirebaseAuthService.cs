@@ -6,14 +6,19 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace ClubTimerXbox.Services
 {
     public static class FirebaseAuthService
     {
-        private static readonly HttpClient _httpClient = new HttpClient();
+        private static readonly HttpClient _httpClient = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(8)
+        };
         private static readonly object Sync = new object();
+        private static readonly SemaphoreSlim TokenRefreshLock = new SemaphoreSlim(1, 1);
 
         private static readonly string FolderPath =
             Path.Combine(
@@ -24,12 +29,62 @@ namespace ClubTimerXbox.Services
         private static readonly string SessionFilePath =
             Path.Combine(FolderPath, "firebase_auth.json");
 
+        private static readonly string SessionBackupFilePath =
+            Path.Combine(FolderPath, "firebase_auth.backup.json");
+
         private static FirebaseAuthSession? _session = LoadSession();
 
         public static bool IsConfigured =>
             !string.IsNullOrWhiteSpace(FirebaseSettings.WebApiKey);
 
-        public static string CurrentEmail => _session?.Email ?? "";
+        public static string CurrentEmail
+        {
+            get
+            {
+                lock (Sync)
+                    return _session?.Email ?? "";
+            }
+        }
+
+        public static string CurrentUserId
+        {
+            get
+            {
+                lock (Sync)
+                    return _session?.UserId ?? "";
+            }
+        }
+
+        public static bool HasSavedSession
+        {
+            get
+            {
+                if (!IsConfigured)
+                    return true;
+
+                lock (Sync)
+                {
+                    return _session != null &&
+                           !string.IsNullOrWhiteSpace(_session.RefreshToken);
+                }
+            }
+        }
+
+        public static bool CanManageAllClubs
+        {
+            get
+            {
+                string email = CurrentEmail.Trim();
+                return email.Equals(
+                           "owner@clubtimer.local",
+                           StringComparison.OrdinalIgnoreCase
+                       ) ||
+                       email.Equals(
+                           "codex@clubtimer.local",
+                           StringComparison.OrdinalIgnoreCase
+                       );
+            }
+        }
 
         public static string SuggestedEmail
         {
@@ -73,6 +128,21 @@ namespace ClubTimerXbox.Services
             if (!IsConfigured)
                 return;
 
+            await TokenRefreshLock.WaitAsync();
+
+            try
+            {
+                await SignInCoreAsync(email, password);
+            }
+            finally
+            {
+                TokenRefreshLock.Release();
+            }
+        }
+
+        private static async Task SignInCoreAsync(string email, string password)
+        {
+
             var payload = new
             {
                 email = email.Trim(),
@@ -107,15 +177,21 @@ namespace ClubTimerXbox.Services
                 throw new InvalidOperationException("Firebase не вернул токен входа.");
             }
 
-            _session = new FirebaseAuthSession
+            var nextSession = new FirebaseAuthSession
             {
                 Email = signIn.Email,
+                UserId = signIn.LocalId,
                 IdToken = signIn.IdToken,
                 RefreshToken = signIn.RefreshToken,
                 ExpiresAtUtc = DateTime.UtcNow.AddSeconds(ParseExpiresIn(signIn.ExpiresIn))
             };
 
-            SaveSession(_session);
+            lock (Sync)
+            {
+                _session = nextSession;
+            }
+
+            SaveSession(nextSession);
         }
 
         public static void SignOut()
@@ -129,6 +205,9 @@ namespace ClubTimerXbox.Services
             {
                 if (File.Exists(SessionFilePath))
                     File.Delete(SessionFilePath);
+
+                if (File.Exists(SessionBackupFilePath))
+                    File.Delete(SessionBackupFilePath);
             }
             catch
             {
@@ -154,22 +233,32 @@ namespace ClubTimerXbox.Services
             if (!IsConfigured)
                 return "";
 
-            FirebaseAuthSession? session;
-            lock (Sync)
-            {
-                session = _session;
-            }
+            FirebaseAuthSession? session = GetSessionSnapshot();
 
             if (session == null || string.IsNullOrWhiteSpace(session.RefreshToken))
                 throw new InvalidOperationException("Нужно войти в Firebase.");
 
-            if (!string.IsNullOrWhiteSpace(session.IdToken) &&
-                session.ExpiresAtUtc > DateTime.UtcNow.AddMinutes(5))
-            {
+            if (HasUsableIdToken(session))
                 return session.IdToken;
-            }
 
-            return await RefreshTokenAsync(session.RefreshToken);
+            await TokenRefreshLock.WaitAsync();
+
+            try
+            {
+                session = GetSessionSnapshot();
+
+                if (session == null || string.IsNullOrWhiteSpace(session.RefreshToken))
+                    throw new InvalidOperationException("Нужно войти в Firebase.");
+
+                if (HasUsableIdToken(session))
+                    return session.IdToken;
+
+                return await RefreshTokenAsync(session.RefreshToken);
+            }
+            finally
+            {
+                TokenRefreshLock.Release();
+            }
         }
 
         private static async Task<string> RefreshTokenAsync(string refreshToken)
@@ -201,9 +290,16 @@ namespace ClubTimerXbox.Services
                 throw new InvalidOperationException("Firebase не обновил токен.");
             }
 
+            string email;
+            lock (Sync)
+                email = _session?.Email ?? "";
+
             var nextSession = new FirebaseAuthSession
             {
-                Email = _session?.Email ?? "",
+                Email = email,
+                UserId = string.IsNullOrWhiteSpace(refresh.UserId)
+                    ? GetSessionSnapshot()?.UserId ?? ""
+                    : refresh.UserId,
                 IdToken = refresh.IdToken,
                 RefreshToken = refresh.RefreshToken,
                 ExpiresAtUtc = DateTime.UtcNow.AddSeconds(ParseExpiresIn(refresh.ExpiresIn))
@@ -254,17 +350,49 @@ namespace ClubTimerXbox.Services
 
         private static FirebaseAuthSession? LoadSession()
         {
+            if (TryLoadSessionFile(SessionFilePath, out FirebaseAuthSession primary))
+            {
+                TrySaveSession(primary);
+                return primary;
+            }
+
+            if (TryLoadSessionFile(SessionBackupFilePath, out FirebaseAuthSession backup))
+            {
+                TrySaveSession(backup);
+                return backup;
+            }
+
+            return null;
+        }
+
+        private static bool TryLoadSessionFile(
+            string path,
+            out FirebaseAuthSession session)
+        {
+            session = new FirebaseAuthSession();
+
             try
             {
-                if (!File.Exists(SessionFilePath))
-                    return null;
+                if (!File.Exists(path))
+                    return false;
 
-                string json = File.ReadAllText(SessionFilePath);
-                return JsonSerializer.Deserialize<FirebaseAuthSession>(json);
+                string json = File.ReadAllText(path, Encoding.UTF8);
+                FirebaseAuthSession? loaded =
+                    JsonSerializer.Deserialize<FirebaseAuthSession>(json);
+
+                if (loaded == null || string.IsNullOrWhiteSpace(loaded.RefreshToken))
+                    return false;
+
+                if (string.IsNullOrWhiteSpace(loaded.UserId))
+                    loaded.UserId = TryReadUserIdFromToken(loaded.IdToken);
+
+                session = loaded;
+                return true;
             }
             catch
             {
-                return null;
+                session = new FirebaseAuthSession();
+                return false;
             }
         }
 
@@ -277,12 +405,171 @@ namespace ClubTimerXbox.Services
                 new JsonSerializerOptions { WriteIndented = true }
             );
 
-            File.WriteAllText(SessionFilePath, json);
+            string temporaryPath = SessionFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
+            try
+            {
+                WriteTextThrough(temporaryPath, json);
+
+                if (File.Exists(SessionFilePath))
+                {
+                    try
+                    {
+                        File.Replace(
+                            temporaryPath,
+                            SessionFilePath,
+                            SessionBackupFilePath,
+                            ignoreMetadataErrors: true
+                        );
+                    }
+                    catch (PlatformNotSupportedException)
+                    {
+                        File.Move(temporaryPath, SessionFilePath, overwrite: true);
+                    }
+                    catch (IOException)
+                    {
+                        File.Move(temporaryPath, SessionFilePath, overwrite: true);
+                    }
+                }
+                else
+                {
+                    File.Move(temporaryPath, SessionFilePath);
+                }
+
+                TryWriteSessionBackup(json);
+            }
+            finally
+            {
+                TryDelete(temporaryPath);
+            }
+        }
+
+        private static void TrySaveSession(FirebaseAuthSession session)
+        {
+            try
+            {
+                SaveSession(session);
+            }
+            catch
+            {
+                // A valid in-memory session can still be used for this launch.
+            }
+        }
+
+        private static FirebaseAuthSession? GetSessionSnapshot()
+        {
+            lock (Sync)
+            {
+                if (_session == null)
+                    return null;
+
+                return new FirebaseAuthSession
+                {
+                    Email = _session.Email,
+                    UserId = _session.UserId,
+                    IdToken = _session.IdToken,
+                    RefreshToken = _session.RefreshToken,
+                    ExpiresAtUtc = _session.ExpiresAtUtc
+                };
+            }
+        }
+
+        private static bool HasUsableIdToken(FirebaseAuthSession session)
+        {
+            return !string.IsNullOrWhiteSpace(session.IdToken) &&
+                   session.ExpiresAtUtc > DateTime.UtcNow.AddMinutes(5);
+        }
+
+        private static string TryReadUserIdFromToken(string idToken)
+        {
+            try
+            {
+                string[] parts = idToken.Split('.');
+                if (parts.Length < 2)
+                    return "";
+
+                string payload = parts[1]
+                    .Replace('-', '+')
+                    .Replace('_', '/');
+                payload = payload.PadRight(
+                    payload.Length + ((4 - payload.Length % 4) % 4),
+                    '='
+                );
+
+                byte[] bytes = Convert.FromBase64String(payload);
+                using JsonDocument document = JsonDocument.Parse(bytes);
+
+                if (document.RootElement.TryGetProperty("user_id", out JsonElement userId))
+                    return userId.GetString() ?? "";
+
+                if (document.RootElement.TryGetProperty("sub", out JsonElement subject))
+                    return subject.GetString() ?? "";
+            }
+            catch
+            {
+                // A future token refresh will fill the UID if this token is unavailable.
+            }
+
+            return "";
+        }
+
+        private static void TryWriteSessionBackup(string json)
+        {
+            string temporaryPath =
+                SessionBackupFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
+            try
+            {
+                WriteTextThrough(temporaryPath, json);
+                File.Move(temporaryPath, SessionBackupFilePath, overwrite: true);
+            }
+            catch
+            {
+                // The committed primary session remains authoritative.
+            }
+            finally
+            {
+                TryDelete(temporaryPath);
+            }
+        }
+
+        private static void WriteTextThrough(string path, string content)
+        {
+            using var stream = new FileStream(
+                path,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 4096,
+                FileOptions.WriteThrough
+            );
+            using var writer = new StreamWriter(
+                stream,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
+            );
+
+            writer.Write(content);
+            writer.Flush();
+            stream.Flush(flushToDisk: true);
+        }
+
+        private static void TryDelete(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch
+            {
+                // Temporary cleanup must not replace the original persistence error.
+            }
         }
 
         private sealed class FirebaseAuthSession
         {
             public string Email { get; set; } = "";
+            public string UserId { get; set; } = "";
             public string IdToken { get; set; } = "";
             public string RefreshToken { get; set; } = "";
             public DateTime ExpiresAtUtc { get; set; } = DateTime.MinValue;
@@ -291,6 +578,7 @@ namespace ClubTimerXbox.Services
         private sealed class FirebaseSignInResponse
         {
             public string Email { get; set; } = "";
+            public string LocalId { get; set; } = "";
             public string IdToken { get; set; } = "";
             public string RefreshToken { get; set; } = "";
             public string ExpiresIn { get; set; } = "";
@@ -303,6 +591,9 @@ namespace ClubTimerXbox.Services
 
             [JsonPropertyName("refresh_token")]
             public string RefreshToken { get; set; } = "";
+
+            [JsonPropertyName("user_id")]
+            public string UserId { get; set; } = "";
 
             [JsonPropertyName("expires_in")]
             public string ExpiresIn { get; set; } = "";

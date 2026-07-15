@@ -95,13 +95,16 @@ namespace ClubTimerXbox
 
         private async Task RunFirebaseCommandCheckAsync()
         {
-            if (_isFirebaseCommandCheckRunning)
+            if (!FirebaseConnectionService.CanConnect || _isFirebaseCommandCheckRunning)
                 return;
 
             _isFirebaseCommandCheckRunning = true;
 
             try
             {
+                if (!await FirebaseChannelBindingService.EnsureCurrentBindingAsync())
+                    return;
+
                 await FirebaseSyncService.CheckCommandsAsync(_places.ToList());
             }
             finally
@@ -112,13 +115,16 @@ namespace ClubTimerXbox
 
         private async Task RunFirebaseStatePushAsync()
         {
-            if (_isFirebaseStatePushRunning)
+            if (!FirebaseConnectionService.CanConnect || _isFirebaseStatePushRunning)
                 return;
 
             _isFirebaseStatePushRunning = true;
 
             try
             {
+                if (!await FirebaseChannelBindingService.EnsureCurrentBindingAsync())
+                    return;
+
                 var places = _places.ToList();
                 await FirebaseEventService.FlushPendingAsync();
                 await FirebaseSyncService.PushCurrentStateAsync(places);

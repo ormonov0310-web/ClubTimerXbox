@@ -19,10 +19,6 @@ namespace ClubTimerXbox.Services
         };
         private static DateTime _lastOwnerEmployeesPush = DateTime.MinValue;
 
-        private static string LegacyCurrentPath => "club/current";
-
-        private static string LegacyCommandsPath => "club/commands";
-
         private static string ClubRootPath => $"clubs/{PcIdentityService.Current.ClubId}";
 
         private static string ClubCurrentPath => $"{ClubRootPath}/current";
@@ -35,6 +31,9 @@ namespace ClubTimerXbox.Services
 
         public static async Task PushCurrentStateAsync(List<ClubPlace> places)
         {
+            if (!FirebaseConnectionService.CanSync)
+                return;
+
             try
             {
                 var pcIdentity = PcIdentityService.Current;
@@ -700,10 +699,9 @@ namespace ClubTimerXbox.Services
                         .ToList()
                 };
 
-                await PutAsync(LegacyCurrentPath, data);
                 await PutAsync(ClubCurrentPath, data);
-                await PutAsync(ClubMetaPath, BuildClubMeta(pcIdentity));
-                await PutAsync(OwnerClubMetaPath, BuildClubMeta(pcIdentity));
+                await PatchAsync(ClubMetaPath, BuildClubMeta(pcIdentity));
+                await PatchAsync(OwnerClubMetaPath, BuildClubMeta(pcIdentity));
                 await PushOwnerEmployeesIfNeededAsync(employees, pcIdentity);
             }
             catch
@@ -714,11 +712,13 @@ namespace ClubTimerXbox.Services
 
         public static async Task CheckCommandsAsync(IReadOnlyList<ClubPlace>? places = null)
         {
+            if (!FirebaseConnectionService.CanSync)
+                return;
+
             try
             {
                 var currentPlaces = places ?? Array.Empty<ClubPlace>();
                 await CheckCommandsAsync(ClubCommandsPath, currentPlaces);
-                await CheckCommandsAsync(LegacyCommandsPath, currentPlaces);
             }
             catch
             {
@@ -730,7 +730,22 @@ namespace ClubTimerXbox.Services
             string commandsPath,
             IReadOnlyList<ClubPlace> places)
         {
-            var commands = await GetAsync<Dictionary<string, FirebaseCommand>>(commandsPath);
+            Dictionary<string, FirebaseCommand>? commands;
+
+            try
+            {
+                commands = await GetAsync<Dictionary<string, FirebaseCommand>>(
+                    commandsPath,
+                    "orderBy=%22status%22&equalTo=%22pending%22"
+                );
+            }
+            catch (HttpRequestException)
+            {
+                // The status index is deployed separately from the desktop update.
+                commands = await GetAsync<Dictionary<string, FirebaseCommand>>(
+                    commandsPath
+                );
+            }
 
             if (commands == null)
                 return;
@@ -747,8 +762,38 @@ namespace ClubTimerXbox.Services
                     continue;
 
                 command.FirebasePath = commandsPath;
+
+                if (!IsCommandForCurrentPc(command))
+                {
+                    await MarkCommandError(
+                        commandId,
+                        command,
+                        "Команда адресована другому ПК или каналу."
+                    );
+                    continue;
+                }
+
                 await ApplyCommandAsync(commandId, command, places);
             }
+        }
+
+        private static bool IsCommandForCurrentPc(FirebaseCommand command)
+        {
+            var identity = PcIdentityService.Current;
+
+            bool clubMatches = string.IsNullOrWhiteSpace(command.TargetClubId) ||
+                command.TargetClubId.Equals(
+                    identity.ClubId,
+                    StringComparison.OrdinalIgnoreCase
+                );
+            bool installationMatches =
+                string.IsNullOrWhiteSpace(command.TargetInstallationId) ||
+                command.TargetInstallationId.Equals(
+                    identity.InstallationId,
+                    StringComparison.OrdinalIgnoreCase
+                );
+
+            return clubMatches && installationMatches;
         }
 
         private static object BuildClubMeta(PcIdentity identity)
@@ -2276,6 +2321,21 @@ namespace ClubTimerXbox.Services
                     return;
                 }
 
+                if (command.Type == "RenameClub")
+                {
+                    string clubName = ApplyRenameClub(command);
+
+                    await PushCurrentStateAsync(places.ToList());
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Клуб переименован: {clubName}."
+                    );
+
+                    return;
+                }
+
                 if (command.Type == "UpdateProductSalePrice")
                 {
                     ApplyUpdateProductSalePrice(command);
@@ -3046,6 +3106,23 @@ namespace ClubTimerXbox.Services
                 expenseCategory: expenseCategory,
                 accountingMonthKey: accountingMonthKey
             );
+        }
+
+        private static string ApplyRenameClub(FirebaseCommand command)
+        {
+            string clubName = command.NewClubName?.Trim() ?? "";
+
+            if (string.IsNullOrWhiteSpace(clubName))
+                throw new InvalidOperationException("Название клуба не должно быть пустым.");
+
+            if (clubName.Length > 80)
+                throw new InvalidOperationException("Название клуба слишком длинное.");
+
+            var identity = PcIdentityService.Current;
+            identity.ClubName = clubName;
+            PcIdentityService.Save(identity);
+
+            return clubName;
         }
 
         private static void ApplyDeleteExpense(FirebaseCommand command)
@@ -4275,13 +4352,19 @@ namespace ClubTimerXbox.Services
         private static string GetCommandPath(FirebaseCommand command)
         {
             return string.IsNullOrWhiteSpace(command.FirebasePath)
-                ? LegacyCommandsPath
+                ? ClubCommandsPath
                 : command.FirebasePath;
         }
 
-        private static async Task<T?> GetAsync<T>(string path)
+        private static async Task<T?> GetAsync<T>(string path, string query = "")
         {
             string url = await FirebaseAuthService.BuildDatabaseUrlAsync(path);
+
+            if (!string.IsNullOrWhiteSpace(query))
+            {
+                string separator = url.Contains('?') ? "&" : "?";
+                url += separator + query.TrimStart('?', '&');
+            }
 
             string json = await _httpClient.GetStringAsync(url);
 
@@ -4315,7 +4398,29 @@ namespace ClubTimerXbox.Services
                 "application/json"
             );
 
-            await _httpClient.PutAsync(url, content);
+            using var response = await _httpClient.PutAsync(url, content);
+            response.EnsureSuccessStatusCode();
+        }
+
+        private static async Task PatchAsync(string path, object data)
+        {
+            string url = await FirebaseAuthService.BuildDatabaseUrlAsync(path);
+            string json = JsonSerializer.Serialize(data);
+
+            using var request = new HttpRequestMessage(
+                new HttpMethod("PATCH"),
+                url
+            )
+            {
+                Content = new StringContent(
+                    json,
+                    Encoding.UTF8,
+                    "application/json"
+                )
+            };
+
+            using var response = await _httpClient.SendAsync(request);
+            response.EnsureSuccessStatusCode();
         }
 
         private class FirebaseCommand
@@ -4325,8 +4430,12 @@ namespace ClubTimerXbox.Services
 
             public string Type { get; set; } = "";
             public string Status { get; set; } = "pending";
+            public string TargetClubId { get; set; } = "";
+            public string TargetInstallationId { get; set; } = "";
 
             public string Message { get; set; } = "";
+
+            public string NewClubName { get; set; } = "";
 
             public string ItemType { get; set; } = "Product";
 

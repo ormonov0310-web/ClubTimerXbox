@@ -43,16 +43,26 @@ namespace ClubTimerXbox.Services
 
             var settingsJson = await GetJsonAsync($"clubs/{clubId}/settings");
             var employeesJson = await GetJsonAsync($"clubs/{clubId}/employees");
-
-            if (settingsJson != null)
-                AppSettingsService.Save(ParseClubSettings(settingsJson.Value));
+            ClubSettings? importedSettings = settingsJson != null
+                ? ParseClubSettings(settingsJson.Value)
+                : null;
 
             var employees = ParseEmployees(employeesJson);
             if (employees.Count == 0)
                 return PcActivationResult.Fail("В клубе нет сотрудников. Добавьте сотрудника на телефоне.");
 
+            FirebaseChannelSwitchResult channelResult =
+                await FirebaseChannelBindingService.TrySwitchCurrentChannelAsync(clubId);
+
+            if (!channelResult.Success)
+                return PcActivationResult.Fail(channelResult.Message);
+
+            clubName = channelResult.ClubName;
+
+            if (importedSettings != null)
+                AppSettingsService.Save(importedSettings);
+
             EmployeeService.ReplaceAll(employees);
-            PcIdentityService.Activate(clubId, clubName);
 
             string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             string installationId = PcIdentityService.Current.InstallationId;

@@ -15,28 +15,28 @@ namespace ClubTimerXbox
             WindowSizeStorageService.EnableForAllWindows();
             UiSoundService.EnableGlobalUiSounds();
 
-            if (FirebaseAuthService.IsConfigured)
+            if (!PcIdentityService.HasAssignedClub)
             {
-                bool hasFirebaseSession = await FirebaseAuthService.TryRestoreAsync();
-                if (!hasFirebaseSession)
+                if (FirebaseAuthService.IsConfigured)
                 {
-                    var firebaseLoginWindow = new FirebaseLoginWindow();
-                    bool? firebaseLoginResult = firebaseLoginWindow.ShowDialog();
-
-                    if (firebaseLoginResult != true)
+                    bool hasFirebaseSession = await FirebaseAuthService.TryRestoreAsync();
+                    if (!hasFirebaseSession)
                     {
-                        Shutdown();
-                        return;
+                        var firebaseLoginWindow = new FirebaseLoginWindow();
+                        bool? firebaseLoginResult = firebaseLoginWindow.ShowDialog();
+
+                        if (firebaseLoginResult != true)
+                        {
+                            Shutdown();
+                            return;
+                        }
                     }
                 }
-            }
 
-            if (!PcIdentityService.Current.IsActivated)
-            {
                 var activationWindow = new ActivationWindow();
                 bool? activationResult = activationWindow.ShowDialog();
 
-                if (activationResult != true || !PcIdentityService.Current.IsActivated)
+                if (activationResult != true || !PcIdentityService.HasAssignedClub)
                 {
                     Shutdown();
                     return;

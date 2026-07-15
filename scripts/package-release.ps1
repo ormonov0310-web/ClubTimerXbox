@@ -33,37 +33,45 @@ $requiredAlarmSounds = @(
     "whatsapp-short-ringtone.mp3"
 )
 
-function Assert-PublishedAlarmSounds {
+$requiredUiSounds = @(
+    "action.mp3",
+    "click.mp3",
+    "hover.mp3"
+)
+
+function Assert-PublishedSounds {
     param(
         [string]$SourceRoot,
         [string]$PublishRoot,
+        [string]$RelativeDirectory,
         [string[]]$RequiredNames
     )
 
     foreach ($name in $RequiredNames) {
-        $sourcePath = Join-Path $SourceRoot "ClubTimerXbox\Assets\AlarmSounds\$name"
-        $publishedPath = Join-Path $PublishRoot "Assets\AlarmSounds\$name"
+        $sourcePath = Join-Path $SourceRoot "ClubTimerXbox\Assets\$RelativeDirectory\$name"
+        $publishedPath = Join-Path $PublishRoot "Assets\$RelativeDirectory\$name"
 
         if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
-            throw "Required alarm sound is missing from source: $name"
+            throw "Required sound is missing from source: Assets/$RelativeDirectory/$name"
         }
 
         if (-not (Test-Path -LiteralPath $publishedPath -PathType Leaf)) {
-            throw "Required alarm sound is missing from publish output: $name"
+            throw "Required sound is missing from publish output: Assets/$RelativeDirectory/$name"
         }
 
         $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourcePath).Hash
         $publishedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $publishedPath).Hash
         if ($sourceHash -ne $publishedHash) {
-            throw "Published alarm sound does not match source: $name"
+            throw "Published sound does not match source: Assets/$RelativeDirectory/$name"
         }
     }
 }
 
-function Assert-ArchivedAlarmSounds {
+function Assert-ArchivedSounds {
     param(
         [string]$ZipPath,
         [string]$SourceRoot,
+        [string]$RelativeDirectory,
         [string[]]$RequiredNames
     )
 
@@ -72,18 +80,18 @@ function Assert-ArchivedAlarmSounds {
 
     try {
         foreach ($name in $RequiredNames) {
-            $entryName = "Assets/AlarmSounds/$name"
+            $entryName = "Assets/$RelativeDirectory/$name"
             $entry = $archive.Entries |
                 Where-Object { $_.FullName.Replace('\', '/') -eq $entryName } |
                 Select-Object -First 1
 
             if ($null -eq $entry) {
-                throw "Required alarm sound is missing from release ZIP: $name"
+                throw "Required sound is missing from release ZIP: $entryName"
             }
 
-            $sourcePath = Join-Path $SourceRoot "ClubTimerXbox\Assets\AlarmSounds\$name"
+            $sourcePath = Join-Path $SourceRoot "ClubTimerXbox\Assets\$RelativeDirectory\$name"
             if ($entry.Length -ne (Get-Item -LiteralPath $sourcePath).Length) {
-                throw "Alarm sound has an unexpected size in release ZIP: $name"
+                throw "Sound has an unexpected size in release ZIP: $entryName"
             }
         }
     }
@@ -160,10 +168,17 @@ if (-not (Test-Path -LiteralPath $windowsBasePath -PathType Leaf)) {
     throw "WindowsBase.dll is missing. Release packages must be built with -SelfContained."
 }
 
-Assert-PublishedAlarmSounds `
+Assert-PublishedSounds `
     -SourceRoot $root `
     -PublishRoot $mainPublish `
+    -RelativeDirectory "AlarmSounds" `
     -RequiredNames $requiredAlarmSounds
+
+Assert-PublishedSounds `
+    -SourceRoot $root `
+    -PublishRoot $mainPublish `
+    -RelativeDirectory "UiSounds" `
+    -RequiredNames $requiredUiSounds
 
 $zipPath = Join-Path $releaseRoot "ClubTimerXbox-$Version.zip"
 if (Test-Path $zipPath) {
@@ -172,10 +187,17 @@ if (Test-Path $zipPath) {
 
 Compress-Archive -Path (Join-Path $mainPublish "*") -DestinationPath $zipPath -Force
 
-Assert-ArchivedAlarmSounds `
+Assert-ArchivedSounds `
     -ZipPath $zipPath `
     -SourceRoot $root `
+    -RelativeDirectory "AlarmSounds" `
     -RequiredNames $requiredAlarmSounds
+
+Assert-ArchivedSounds `
+    -ZipPath $zipPath `
+    -SourceRoot $root `
+    -RelativeDirectory "UiSounds" `
+    -RequiredNames $requiredUiSounds
 
 $hash = (Get-FileHash -Algorithm SHA256 -Path $zipPath).Hash.ToLowerInvariant()
 $manifestPath = Join-Path $releaseRoot "firebase-update-manifest-$Channel.json"

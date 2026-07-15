@@ -195,6 +195,9 @@ namespace ClubTimerXbox.Services
 
         public static async Task FlushPendingAsync()
         {
+            if (!FirebaseConnectionService.CanSync)
+                return;
+
             if (!await FlushLock.WaitAsync(0).ConfigureAwait(false))
                 return;
 
@@ -340,8 +343,7 @@ namespace ClubTimerXbox.Services
 
         private static bool CanPublish(PcIdentity identity)
         {
-            return identity.IsActivated &&
-                !string.IsNullOrWhiteSpace(identity.ClubId) &&
+            return PcIdentityService.HasAssignedClub &&
                 !string.IsNullOrWhiteSpace(identity.ClubName);
         }
 
