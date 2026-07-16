@@ -254,7 +254,8 @@ namespace ClubTimerXbox.Services
             int amount,
             bool isShortage,
             string note,
-            string responsibleEmployeeName = "")
+            string responsibleEmployeeName = "",
+            string suspectedEmployeeName = "")
         {
             var item = new CashReconciliationItem
             {
@@ -270,6 +271,7 @@ namespace ClubTimerXbox.Services
                 ActualAmount = actualAmount,
                 CheckedByEmployeeName = "Владелец",
                 ResponsibleEmployeeName = responsibleEmployeeName.Trim(),
+                SuspectedEmployeeName = suspectedEmployeeName.Trim(),
                 Title = isShortage
                     ? "Сырые потери"
                     : "Излишек после корректировки",
@@ -322,6 +324,43 @@ namespace ClubTimerXbox.Services
                 .OrderByDescending(group => group.Sum(item => item.Amount))
                 .ThenByDescending(group => group.Max(item => item.CreatedAt))
                 .Select(group => group.Key)
+                .FirstOrDefault() ?? "";
+        }
+
+        public static string GetSuggestedResponsibleForShortageHistory(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
+            return _items
+                .Where(item =>
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    IsShortageKind(item.Kind) &&
+                    item.FormalizedAmount > 0 &&
+                    !string.IsNullOrWhiteSpace(item.ResponsibleEmployeeName))
+                .OrderByDescending(item => item.CreatedAt)
+                .Select(item => item.ResponsibleEmployeeName.Trim())
+                .FirstOrDefault() ?? "";
+        }
+
+        public static string GetSuggestedSuspectForShortageHistory(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
+            return _items
+                .Where(item =>
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    IsShortageKind(item.Kind) &&
+                    (item.OriginalAmount > 0 || item.Amount > 0 || item.FormalizedAmount > 0) &&
+                    string.IsNullOrWhiteSpace(item.ResponsibleEmployeeName) &&
+                    !string.IsNullOrWhiteSpace(item.SuspectedEmployeeName))
+                .OrderByDescending(item => item.CreatedAt)
+                .Select(item => item.SuspectedEmployeeName.Trim())
                 .FirstOrDefault() ?? "";
         }
 
@@ -756,6 +795,22 @@ namespace ClubTimerXbox.Services
                     item.CreatedAt >= fromInclusive &&
                     item.CreatedAt < toExclusive &&
                     IsShortageKind(item.Kind) &&
+                    item.Amount > 0)
+                .Sum(item => item.Amount);
+        }
+
+        public static int GetOpenExtraTotal(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
+            return _items
+                .Where(item =>
+                    item.Status == CashReconciliationStatus.Open &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    IsExtraKind(item.Kind) &&
                     item.Amount > 0)
                 .Sum(item => item.Amount);
         }

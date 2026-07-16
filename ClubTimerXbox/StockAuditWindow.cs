@@ -747,6 +747,8 @@ namespace ClubTimerXbox
             int remainingCashExtra = Math.Max(0, difference);
             var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
             var nextMonthStart = monthStart.AddMonths(1);
+            DateTime reconciliationCycleStart = CashBalanceCheckpointService
+                .GetCurrentCycleStart(monthStart, nextMonthStart);
 
             CashAcceptanceService.AddItem(
                 checkedByEmployeeName: checkedBy,
@@ -768,7 +770,7 @@ namespace ClubTimerXbox
                     note: "Приёмка налички"
                 );
                 nettedReconciliation = CashReconciliationService.NetOpenMoneyCorrections(
-                    monthStart,
+                    reconciliationCycleStart,
                     nextMonthStart,
                     "Система",
                     "Автозачёт после приёмки налички: встречные суммы нал/безнал закрыты как ошибка типа оплаты."
@@ -788,7 +790,7 @@ namespace ClubTimerXbox
                     note:
                         $"Повторная приёмка налички: {checkedBy} ввёл {actualCash} сом. " +
                         "Зачтено как исправление ошибки ввода.",
-                    fromInclusive: monthStart,
+                    fromInclusive: reconciliationCycleStart,
                     toExclusive: nextMonthStart
                 );
 
@@ -806,7 +808,7 @@ namespace ClubTimerXbox
                             : "Приёмка налички"
                     );
                     nettedReconciliation = CashReconciliationService.NetOpenMoneyCorrections(
-                        monthStart,
+                        reconciliationCycleStart,
                         nextMonthStart,
                         "Система",
                         "Автозачёт после приёмки налички: встречные суммы нал/безнал закрыты как ошибка типа оплаты."

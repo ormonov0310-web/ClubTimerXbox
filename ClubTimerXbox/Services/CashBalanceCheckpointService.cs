@@ -56,6 +56,20 @@ namespace ClubTimerXbox.Services
                 .FirstOrDefault();
         }
 
+        public static DateTime GetCurrentCycleStart(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            var checkpoint = GetLatestByPeriod(fromInclusive, toExclusive);
+
+            if (checkpoint == null || checkpoint.CreatedAt < fromInclusive)
+                return fromInclusive;
+
+            return checkpoint.CreatedAt < toExclusive
+                ? checkpoint.CreatedAt
+                : fromInclusive;
+        }
+
         public static void Clear()
         {
             _items.Clear();
