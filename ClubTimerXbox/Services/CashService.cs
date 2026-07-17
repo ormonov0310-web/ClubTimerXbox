@@ -710,6 +710,33 @@ namespace ClubTimerXbox.Services
             return true;
         }
 
+        public static bool TryCorrectKnownShortage(
+            Guid id,
+            int incorrectAmount,
+            int correctedAmount,
+            string responsibleEmployeeName)
+        {
+            var record = _records.FirstOrDefault(item => item.Id == id);
+
+            if (record == null ||
+                record.Category != "Недостачи" ||
+                record.Amount != incorrectAmount ||
+                !record.RelatedEmployeeName.Equals(
+                    responsibleEmployeeName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            record.Amount = correctedAmount;
+            record.Description = record.Description.Replace(
+                $"{incorrectAmount} сом",
+                $"{correctedAmount} сом",
+                StringComparison.Ordinal);
+            Save();
+            return true;
+        }
+
         public static int RenameExpenseCategoryByPeriod(
             DateTime fromInclusive,
             DateTime toExclusive,

@@ -43,6 +43,8 @@ namespace ClubTimerXbox
                 }
             }
 
+            KnownDataRepairService.Apply();
+
             var loginWindow = new LoginWindow();
 
             bool? loginResult = loginWindow.ShowDialog();

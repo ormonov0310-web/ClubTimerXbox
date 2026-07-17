@@ -20,6 +20,7 @@ namespace ClubTimerXbox
         private readonly List<ClubPlace> _places = new List<ClubPlace>();
         private bool _isTuyaDevicesView;
         private readonly DispatcherTimer _tuyaRefreshTimer = new DispatcherTimer();
+        private readonly DispatcherTimer _tuyaInactivityTimer = new DispatcherTimer();
         private bool _isRefreshingTuyaDevices;
 
         // Чтобы предупреждение за 1 минуту не повторялось каждую секунду.
@@ -63,6 +64,19 @@ namespace ClubTimerXbox
             _tuyaRefreshTimer.Interval = TimeSpan.FromSeconds(10);
             _tuyaRefreshTimer.Tick += async (_, _) => await RefreshTuyaDevicesIfNeededAsync();
 
+            _tuyaInactivityTimer.Interval = TimeSpan.FromMinutes(1);
+            _tuyaInactivityTimer.Tick += (_, _) =>
+            {
+                _tuyaInactivityTimer.Stop();
+
+                if (_isTuyaDevicesView)
+                    DrawPlaces();
+            };
+
+            PreviewMouseDown += (_, _) => ResetTuyaInactivityTimer();
+            PreviewMouseWheel += (_, _) => ResetTuyaInactivityTimer();
+            PreviewKeyDown += (_, _) => ResetTuyaInactivityTimer();
+
             Closing += (_, _) => HandleWindowClosing();
 
             _ = RefreshSettingsUpdateIndicatorAsync(forceRefresh: true);
@@ -72,6 +86,7 @@ namespace ClubTimerXbox
         {
             _stockAuditBlinkTimer.Stop();
             _tuyaRefreshTimer.Stop();
+            _tuyaInactivityTimer.Stop();
 
             CloseAllAlarmWindows();
             SaveActivePlacesToStorage();
@@ -351,6 +366,7 @@ namespace ClubTimerXbox
         {
             _isTuyaDevicesView = false;
             _tuyaRefreshTimer.Stop();
+            _tuyaInactivityTimer.Stop();
             UpdateMainViewButtons();
 
             PlacesItemsControl.Items.Clear();
@@ -2143,10 +2159,20 @@ namespace ClubTimerXbox
         {
             _isTuyaDevicesView = true;
             UpdateMainViewButtons();
+            ResetTuyaInactivityTimer();
             await DrawTuyaDevicesAsync();
 
             if (_isTuyaDevicesView)
                 _tuyaRefreshTimer.Start();
+        }
+
+        private void ResetTuyaInactivityTimer()
+        {
+            if (!_isTuyaDevicesView)
+                return;
+
+            _tuyaInactivityTimer.Stop();
+            _tuyaInactivityTimer.Start();
         }
 
         private async Task DrawTuyaDevicesAsync()
@@ -3052,6 +3078,8 @@ namespace ClubTimerXbox
 
         private async Task SendTuyaCommandFromMainAsync(TuyaDevice device, bool turnOn)
         {
+            ResetTuyaInactivityTimer();
+
             var settings = TuyaSettingsStorageService.Current;
             string action = turnOn ? "включить" : "выключить";
             string deviceName = TuyaSettingsStorageService.GetDeviceDisplayName(settings, device);
@@ -3090,7 +3118,10 @@ namespace ClubTimerXbox
                 await TuyaCloudService.SetSwitchAsync(settings, device.Id, turnOn);
 
                 if (_isTuyaDevicesView)
+                {
                     await DrawTuyaDevicesAsync();
+                    ResetTuyaInactivityTimer();
+                }
             }
             catch (Exception ex)
             {

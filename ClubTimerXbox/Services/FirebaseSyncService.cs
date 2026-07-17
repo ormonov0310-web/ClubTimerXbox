@@ -1603,10 +1603,16 @@ namespace ClubTimerXbox.Services
             DateTime nextMonthStart,
             int? actualCashBalance)
         {
-            return CalculateExpectedCashBalanceByPeriod(
-                monthStart,
-                nextMonthStart
-            );
+            _ = actualCashBalance;
+
+            return CashBalanceSummaryService.CalculateProgramCashBalanceByPeriod(
+                       monthStart,
+                       nextMonthStart
+                   ) ??
+                   CashBalanceSummaryService.CalculateExpectedCashBalanceByPeriod(
+                       monthStart,
+                       nextMonthStart
+                   );
         }
 
         private static int CalculateExpectedCashlessBalanceForReconciliation(
@@ -1614,10 +1620,16 @@ namespace ClubTimerXbox.Services
             DateTime nextMonthStart,
             int? actualCashlessBalance)
         {
-            return CalculateExpectedCashlessBalanceByPeriod(
-                monthStart,
-                nextMonthStart
-            );
+            _ = actualCashlessBalance;
+
+            return CashBalanceSummaryService.CalculateProgramCashlessBalanceByPeriod(
+                       monthStart,
+                       nextMonthStart
+                   ) ??
+                   CashBalanceSummaryService.CalculateExpectedCashlessBalanceByPeriod(
+                       monthStart,
+                       nextMonthStart
+                   );
         }
 
         private static int? CalculateMoneyShortageCapForReconciliation(

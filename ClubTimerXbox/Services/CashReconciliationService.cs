@@ -24,6 +24,53 @@ namespace ClubTimerXbox.Services
 
         public static IReadOnlyList<CashReconciliationItem> Items => _items;
 
+        public static bool TryDeleteKnownItem(
+            Guid id,
+            int expectedOriginalAmount,
+            string responsibleEmployeeName)
+        {
+            var item = _items.FirstOrDefault(entry => entry.Id == id);
+
+            if (item == null ||
+                item.OriginalAmount != expectedOriginalAmount ||
+                !item.ResponsibleEmployeeName.Equals(
+                    responsibleEmployeeName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            _items.Remove(item);
+            Save();
+            return true;
+        }
+
+        public static bool TryCorrectKnownResolutionText(
+            Guid id,
+            string incorrectAmountText,
+            string correctedAmountText)
+        {
+            var item = _items.FirstOrDefault(entry => entry.Id == id);
+
+            if (item == null ||
+                (!item.Note.Contains(incorrectAmountText, StringComparison.Ordinal) &&
+                 !item.ResolutionNote.Contains(incorrectAmountText, StringComparison.Ordinal)))
+            {
+                return false;
+            }
+
+            item.Note = item.Note.Replace(
+                incorrectAmountText,
+                correctedAmountText,
+                StringComparison.Ordinal);
+            item.ResolutionNote = item.ResolutionNote.Replace(
+                incorrectAmountText,
+                correctedAmountText,
+                StringComparison.Ordinal);
+            Save();
+            return true;
+        }
+
         public static CashReconciliationItem AddCashAcceptanceDifference(
             string checkedByEmployeeName,
             string responsibleEmployeeName,

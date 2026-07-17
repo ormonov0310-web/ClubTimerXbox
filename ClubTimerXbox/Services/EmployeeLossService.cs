@@ -341,6 +341,36 @@ namespace ClubTimerXbox.Services
             return item;
         }
 
+        public static bool TryCorrectKnownFixedLoss(
+            Guid id,
+            int incorrectAmount,
+            int correctedAmount,
+            string responsibleEmployeeName)
+        {
+            var item = Items.FirstOrDefault(loss => loss.Id == id);
+
+            if (item == null ||
+                !item.IsFixed ||
+                item.Amount != incorrectAmount ||
+                !item.ResponsibleEmployeeName.Equals(
+                    responsibleEmployeeName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            item.Amount = correctedAmount;
+            item.Description = item.Description.Replace(
+                $"{incorrectAmount} сом",
+                $"{correctedAmount} сом",
+                StringComparison.Ordinal);
+            item.Note = string.IsNullOrWhiteSpace(item.Note)
+                ? "Исправлена ошибочная повторная месячная автокоррекция."
+                : item.Note.Trim() + "\nИсправлена ошибочная повторная месячная автокоррекция.";
+            Save();
+            return true;
+        }
+
         public static EmployeeLossItem AddProductShortage(
             string responsibleEmployeeName,
             string checkedByEmployeeName,
