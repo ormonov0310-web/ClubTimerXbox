@@ -20,6 +20,48 @@ namespace ClubTimerXbox.Services
 
         public static List<EmployeeBonusItem> Items { get; private set; } = Load();
 
+        public static int RenameEmployeeReferences(
+            string oldEmployeeName,
+            string newEmployeeName)
+        {
+            int changed = 0;
+
+            foreach (var item in Items)
+            {
+                bool itemChanged = false;
+
+                if (EmployeeReferenceRenameService.Matches(item.EmployeeName, oldEmployeeName))
+                {
+                    item.EmployeeName = newEmployeeName;
+                    itemChanged = true;
+                }
+
+                if (EmployeeReferenceRenameService.Matches(item.CreatedBy, oldEmployeeName))
+                {
+                    item.CreatedBy = newEmployeeName;
+                    itemChanged = true;
+                }
+
+                if (!itemChanged)
+                    continue;
+
+                item.Title = EmployeeReferenceRenameService.RenameText(
+                    item.Title,
+                    oldEmployeeName,
+                    newEmployeeName);
+                item.Description = EmployeeReferenceRenameService.RenameText(
+                    item.Description,
+                    oldEmployeeName,
+                    newEmployeeName);
+                changed++;
+            }
+
+            if (changed > 0)
+                Save();
+
+            return changed;
+        }
+
         public static EmployeeBonusItem AddOwnerBonus(
             string employeeName,
             int amount,

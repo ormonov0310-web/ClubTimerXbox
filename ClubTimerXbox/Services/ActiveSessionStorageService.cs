@@ -17,6 +17,43 @@ namespace ClubTimerXbox.Services
         private static readonly string SessionsFilePath =
             Path.Combine(SessionsFolderPath, "active_sessions.json");
 
+        public static int RenameEmployeeReferences(
+            string oldEmployeeName,
+            string newEmployeeName)
+        {
+            var places = Load();
+            int changed = 0;
+
+            foreach (var place in places)
+            {
+                bool placeChanged = false;
+
+                if (EmployeeReferenceRenameService.Matches(
+                        place.StartedByEmployeeName,
+                        oldEmployeeName))
+                {
+                    place.StartedByEmployeeName = newEmployeeName;
+                    placeChanged = true;
+                }
+
+                if (EmployeeReferenceRenameService.Matches(
+                        place.IncomeEmployeeName,
+                        oldEmployeeName))
+                {
+                    place.IncomeEmployeeName = newEmployeeName;
+                    placeChanged = true;
+                }
+
+                if (placeChanged)
+                    changed++;
+            }
+
+            if (changed > 0)
+                Save(places);
+
+            return changed;
+        }
+
         public static void Save(List<SavedActivePlace> activePlaces)
         {
             Directory.CreateDirectory(SessionsFolderPath);

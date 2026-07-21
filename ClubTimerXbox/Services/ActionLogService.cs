@@ -41,6 +41,106 @@ namespace ClubTimerXbox.Services
             LogStorageService.Save(Shifts, GameSessions);
         }
 
+        public static int RenameEmployeeReferences(
+            string oldEmployeeName,
+            string newEmployeeName)
+        {
+            int changed = 0;
+            bool persistedDataChanged = false;
+
+            foreach (var item in Items)
+            {
+                bool itemChanged = false;
+
+                if (EmployeeReferenceRenameService.Matches(item.EmployeeName, oldEmployeeName))
+                {
+                    item.EmployeeName = newEmployeeName;
+                    itemChanged = true;
+                }
+
+                if (EmployeeReferenceRenameService.Matches(item.IncomeEmployeeName, oldEmployeeName))
+                {
+                    item.IncomeEmployeeName = newEmployeeName;
+                    itemChanged = true;
+                }
+
+                if (!itemChanged)
+                    continue;
+
+                item.Description = EmployeeReferenceRenameService.RenameText(
+                    item.Description,
+                    oldEmployeeName,
+                    newEmployeeName);
+                changed++;
+            }
+
+            foreach (var shift in Shifts)
+            {
+                if (!EmployeeReferenceRenameService.Matches(shift.EmployeeName, oldEmployeeName))
+                    continue;
+
+                shift.EmployeeName = newEmployeeName;
+                persistedDataChanged = true;
+                changed++;
+            }
+
+            foreach (var session in GameSessions)
+            {
+                bool sessionChanged = false;
+
+                if (EmployeeReferenceRenameService.Matches(session.StartedByEmployeeName, oldEmployeeName))
+                {
+                    session.StartedByEmployeeName = newEmployeeName;
+                    sessionChanged = true;
+                }
+
+                if (EmployeeReferenceRenameService.Matches(session.ClosedByEmployeeName, oldEmployeeName))
+                {
+                    session.ClosedByEmployeeName = newEmployeeName;
+                    sessionChanged = true;
+                }
+
+                if (EmployeeReferenceRenameService.Matches(session.IncomeEmployeeName, oldEmployeeName))
+                {
+                    session.IncomeEmployeeName = newEmployeeName;
+                    sessionChanged = true;
+                }
+
+                foreach (var extra in session.ExtraLines)
+                {
+                    if (!EmployeeReferenceRenameService.Matches(extra.EmployeeName, oldEmployeeName))
+                        continue;
+
+                    extra.EmployeeName = newEmployeeName;
+                    extra.Description = EmployeeReferenceRenameService.RenameText(
+                        extra.Description,
+                        oldEmployeeName,
+                        newEmployeeName);
+                    sessionChanged = true;
+                }
+
+                foreach (var sale in session.SaleLines)
+                {
+                    if (!EmployeeReferenceRenameService.Matches(sale.EmployeeName, oldEmployeeName))
+                        continue;
+
+                    sale.EmployeeName = newEmployeeName;
+                    sessionChanged = true;
+                }
+
+                if (!sessionChanged)
+                    continue;
+
+                persistedDataChanged = true;
+                changed++;
+            }
+
+            if (persistedDataChanged)
+                SaveLogs();
+
+            return changed;
+        }
+
         // ------------------------------------------------------------
         // СТАРЫЙ ЖУРНАЛ
         // ------------------------------------------------------------

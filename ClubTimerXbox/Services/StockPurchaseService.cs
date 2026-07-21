@@ -11,6 +11,31 @@ namespace ClubTimerXbox.Services
 
         public static IReadOnlyList<StockPurchase> Purchases => _purchases;
 
+        public static int RenameEmployeeReferences(
+            string oldEmployeeName,
+            string newEmployeeName)
+        {
+            int changed = 0;
+
+            foreach (var purchase in _purchases)
+            {
+                if (!EmployeeReferenceRenameService.Matches(purchase.AddedBy, oldEmployeeName))
+                    continue;
+
+                purchase.AddedBy = newEmployeeName;
+                purchase.Note = EmployeeReferenceRenameService.RenameText(
+                    purchase.Note,
+                    oldEmployeeName,
+                    newEmployeeName);
+                changed++;
+            }
+
+            if (changed > 0)
+                Save();
+
+            return changed;
+        }
+
         public static StockPurchase AddPurchase(
             List<StockPurchaseItem> items,
             string addedBy = "Владелец",

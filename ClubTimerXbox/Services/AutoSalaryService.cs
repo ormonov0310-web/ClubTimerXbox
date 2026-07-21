@@ -14,6 +14,22 @@ namespace ClubTimerXbox.Services
         public static AutoSalarySettings Settings { get; private set; } =
             NormalizeSettings(AutoSalarySettingsStorageService.Load());
 
+        public static int RenameEmployeeReferences(
+            string oldEmployeeName,
+            string newEmployeeName)
+        {
+            if (!EmployeeReferenceRenameService.Matches(
+                    Settings.OpeningResponsibleEmployeeName,
+                    oldEmployeeName))
+            {
+                return 0;
+            }
+
+            Settings.OpeningResponsibleEmployeeName = newEmployeeName;
+            AutoSalarySettingsStorageService.Save(Settings);
+            return 1;
+        }
+
         public static void UpdateSettings(AutoSalarySettings settings)
         {
             Settings = NormalizeSettings(settings);

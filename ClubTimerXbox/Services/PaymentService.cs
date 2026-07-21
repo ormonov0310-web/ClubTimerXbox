@@ -11,6 +11,35 @@ namespace ClubTimerXbox.Services
 
         public static IReadOnlyList<PaymentRecord> Records => _records;
 
+        public static int RenameEmployeeReferences(
+            string oldEmployeeName,
+            string newEmployeeName)
+        {
+            int changed = 0;
+
+            foreach (var record in _records)
+            {
+                if (!EmployeeReferenceRenameService.Matches(record.EmployeeName, oldEmployeeName))
+                    continue;
+
+                record.EmployeeName = newEmployeeName;
+                record.OperationTitle = EmployeeReferenceRenameService.RenameText(
+                    record.OperationTitle,
+                    oldEmployeeName,
+                    newEmployeeName);
+                record.Comment = EmployeeReferenceRenameService.RenameText(
+                    record.Comment,
+                    oldEmployeeName,
+                    newEmployeeName);
+                changed++;
+            }
+
+            if (changed > 0)
+                Save();
+
+            return changed;
+        }
+
         public static void AddPayment(PaymentRecord record)
         {
             if (record == null)

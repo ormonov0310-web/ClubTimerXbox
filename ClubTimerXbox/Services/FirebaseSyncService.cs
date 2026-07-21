@@ -2762,12 +2762,13 @@ namespace ClubTimerXbox.Services
 
                 if (command.Type == "UpdateEmployeeName")
                 {
-                    ApplyUpdateEmployeeName(command);
+                    int renamedReferences = ApplyUpdateEmployeeName(command, places);
 
                     await MarkCommandApplied(
                         commandId,
                         command,
-                        $"Имя работника изменено: {command.EmployeeName} -> {command.NewEmployeeName}."
+                        $"Имя работника изменено: {command.EmployeeName} -> {command.NewEmployeeName}. " +
+                        $"Перенесено связанных записей: {renamedReferences}."
                     );
 
                     return;
@@ -4382,7 +4383,9 @@ namespace ClubTimerXbox.Services
             EmployeeService.ChangePinCode(employeeName, pinCode);
         }
 
-        private static void ApplyUpdateEmployeeName(FirebaseCommand command)
+        private static int ApplyUpdateEmployeeName(
+            FirebaseCommand command,
+            IReadOnlyList<ClubPlace> places)
         {
             string employeeName = command.EmployeeName.Trim();
             string newEmployeeName = command.NewEmployeeName.Trim();
@@ -4406,7 +4409,13 @@ namespace ClubTimerXbox.Services
                 throw new Exception($"Работник уже существует: {newEmployeeName}");
             }
 
+            int renamedReferences = EmployeeReferenceRenameService.RenameAll(
+                employeeName,
+                newEmployeeName,
+                places);
+
             EmployeeService.ChangeName(employeeName, newEmployeeName);
+            return renamedReferences;
         }
 
         private static void ApplyDisableEmployee(FirebaseCommand command)

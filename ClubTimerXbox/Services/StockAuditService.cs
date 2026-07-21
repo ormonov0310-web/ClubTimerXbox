@@ -11,6 +11,48 @@ namespace ClubTimerXbox.Services
 
         public static IReadOnlyList<StockAuditItem> Items => _items;
 
+        public static int RenameEmployeeReferences(
+            string oldEmployeeName,
+            string newEmployeeName)
+        {
+            int changed = 0;
+
+            foreach (var item in _items)
+            {
+                bool itemChanged = false;
+
+                if (EmployeeReferenceRenameService.Matches(
+                        item.CheckedByEmployeeName,
+                        oldEmployeeName))
+                {
+                    item.CheckedByEmployeeName = newEmployeeName;
+                    itemChanged = true;
+                }
+
+                if (EmployeeReferenceRenameService.Matches(
+                        item.ResponsibleEmployeeName,
+                        oldEmployeeName))
+                {
+                    item.ResponsibleEmployeeName = newEmployeeName;
+                    itemChanged = true;
+                }
+
+                if (!itemChanged)
+                    continue;
+
+                item.Note = EmployeeReferenceRenameService.RenameText(
+                    item.Note,
+                    oldEmployeeName,
+                    newEmployeeName);
+                changed++;
+            }
+
+            if (changed > 0)
+                Save();
+
+            return changed;
+        }
+
         public static void AddAuditItem(
             Guid batchId,
             string checkedByEmployeeName,

@@ -12,6 +12,72 @@ namespace ClubTimerXbox.Services
         public static ShiftAcceptanceStatus Current { get; private set; } =
             ShiftAcceptanceStorageService.Load();
 
+        public static int RenameEmployeeReferences(
+            string oldEmployeeName,
+            string newEmployeeName)
+        {
+            bool changed = false;
+
+            if (EmployeeReferenceRenameService.Matches(Current.NewEmployeeName, oldEmployeeName))
+            {
+                Current.NewEmployeeName = newEmployeeName;
+                changed = true;
+            }
+
+            if (EmployeeReferenceRenameService.Matches(
+                    Current.ResponsibleEmployeeName,
+                    oldEmployeeName))
+            {
+                Current.ResponsibleEmployeeName = newEmployeeName;
+                changed = true;
+            }
+
+            if (EmployeeReferenceRenameService.Matches(
+                    Current.DisplayResponsibleEmployeeName,
+                    oldEmployeeName))
+            {
+                Current.DisplayResponsibleEmployeeName = newEmployeeName;
+                changed = true;
+            }
+
+            if (EmployeeReferenceRenameService.Matches(
+                    Current.DisplayNewEmployeeName,
+                    oldEmployeeName))
+            {
+                Current.DisplayNewEmployeeName = newEmployeeName;
+                changed = true;
+            }
+
+            if (EmployeeReferenceRenameService.Matches(
+                    Current.ManualSelfAcceptanceEmployeeName,
+                    oldEmployeeName))
+            {
+                Current.ManualSelfAcceptanceEmployeeName = newEmployeeName;
+                changed = true;
+            }
+
+            if (EmployeeReferenceRenameService.Matches(
+                    Current.CashCorrectionNewEmployeeName,
+                    oldEmployeeName))
+            {
+                Current.CashCorrectionNewEmployeeName = newEmployeeName;
+                changed = true;
+            }
+
+            if (EmployeeReferenceRenameService.Matches(
+                    Current.CashCorrectionResponsibleEmployeeName,
+                    oldEmployeeName))
+            {
+                Current.CashCorrectionResponsibleEmployeeName = newEmployeeName;
+                changed = true;
+            }
+
+            if (changed)
+                Save();
+
+            return changed ? 1 : 0;
+        }
+
         public static bool IsAcceptanceRequired()
         {
             ExpireCashCorrectionIfNeeded();

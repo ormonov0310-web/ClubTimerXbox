@@ -20,6 +20,56 @@ namespace ClubTimerXbox.Services
 
         public static List<EmployeeLossItem> Items { get; private set; } = Load();
 
+        public static int RenameEmployeeReferences(
+            string oldEmployeeName,
+            string newEmployeeName)
+        {
+            int changed = 0;
+
+            foreach (var item in Items)
+            {
+                bool itemChanged = false;
+
+                if (EmployeeReferenceRenameService.Matches(
+                        item.ResponsibleEmployeeName,
+                        oldEmployeeName))
+                {
+                    item.ResponsibleEmployeeName = newEmployeeName;
+                    itemChanged = true;
+                }
+
+                if (EmployeeReferenceRenameService.Matches(
+                        item.CheckedByEmployeeName,
+                        oldEmployeeName))
+                {
+                    item.CheckedByEmployeeName = newEmployeeName;
+                    itemChanged = true;
+                }
+
+                if (!itemChanged)
+                    continue;
+
+                item.Title = EmployeeReferenceRenameService.RenameText(
+                    item.Title,
+                    oldEmployeeName,
+                    newEmployeeName);
+                item.Description = EmployeeReferenceRenameService.RenameText(
+                    item.Description,
+                    oldEmployeeName,
+                    newEmployeeName);
+                item.Note = EmployeeReferenceRenameService.RenameText(
+                    item.Note,
+                    oldEmployeeName,
+                    newEmployeeName);
+                changed++;
+            }
+
+            if (changed > 0)
+                Save();
+
+            return changed;
+        }
+
         public static List<EmployeeLossItem> GetAll()
         {
             return Items
