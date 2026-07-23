@@ -416,6 +416,31 @@ namespace ClubTimerXbox.Services
                 .FirstOrDefault() ?? "";
         }
 
+        public static IReadOnlyList<(string EmployeeName, int Amount)>
+            GetOpenResponsibleShortageTotals(
+                DateTime fromInclusive,
+                DateTime toExclusive)
+        {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
+            return _items
+                .Where(item =>
+                    item.Status == CashReconciliationStatus.Open &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    IsShortageKind(item.Kind) &&
+                    item.Amount > 0 &&
+                    !string.IsNullOrWhiteSpace(item.ResponsibleEmployeeName))
+                .GroupBy(
+                    item => item.ResponsibleEmployeeName.Trim(),
+                    StringComparer.OrdinalIgnoreCase)
+                .OrderBy(group => group.Min(item => item.CreatedAt))
+                .Select(group => (
+                    EmployeeName: group.Key,
+                    Amount: group.Sum(item => item.Amount)))
+                .ToList();
+        }
+
         public static string GetSuggestedSuspectForOpenShortages(
             DateTime fromInclusive,
             DateTime toExclusive)
@@ -777,6 +802,47 @@ namespace ClubTimerXbox.Services
                     ? "Владелец"
                     : resolvedBy.Trim();
                 item.ResolutionNote = note.Trim();
+                closed++;
+            }
+
+            if (closed > 0)
+                Save();
+
+            return closed;
+        }
+
+        public static int SupersedeOpenCashlessVerifications(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string note)
+        {
+            (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
+
+            int closed = 0;
+
+            foreach (var item in _items
+                .Where(item =>
+                    item.Status == CashReconciliationStatus.Open &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    (item.Kind == CashReconciliationKind.CashlessShortage ||
+                     item.Kind == CashReconciliationKind.CashlessExtra))
+                .OrderBy(item => item.CreatedAt)
+                .ToList())
+            {
+                NormalizeItem(item);
+
+                if (item.Amount > 0)
+                {
+                    item.ResolvedAmount += item.Amount;
+                    item.Amount = 0;
+                }
+
+                item.Status = CashReconciliationStatus.Resolved;
+                item.ResolvedAt = DateTime.Now;
+                item.ResolvedBy = "Система";
+                item.ResolutionNote = note.Trim();
+                AppendNote(item, note.Trim());
                 closed++;
             }
 
