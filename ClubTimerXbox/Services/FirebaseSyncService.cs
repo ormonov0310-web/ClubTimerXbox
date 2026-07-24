@@ -721,7 +721,12 @@ namespace ClubTimerXbox.Services
                             isActive = employee.IsActive,
 
                             todayWorkTime = EmployeeStatsService.FormatTime(summary.TodayWorkTime),
-                            monthWorkTime = EmployeeStatsService.FormatTime(summary.MonthWorkTime),
+                            monthWorkTime = EmployeeStatsService.FormatTime(
+                                TimeSpan.FromHours(
+                                    autoSalary?.WorkHours ??
+                                    summary.MonthWorkTime.TotalHours
+                                )
+                            ),
 
                             todayIncome = summary.TodayTotalIncome,
                             monthIncome = summary.MonthTotalIncome,
@@ -2227,7 +2232,12 @@ namespace ClubTimerXbox.Services
                         name = employee.Name,
                         pinCode = employee.PinCode,
                         isActive = employee.IsActive,
-                        monthWorkTime = EmployeeStatsService.FormatTime(summary.MonthWorkTime),
+                        monthWorkTime = EmployeeStatsService.FormatTime(
+                            TimeSpan.FromHours(
+                                autoSalary?.WorkHours ??
+                                summary.MonthWorkTime.TotalHours
+                            )
+                        ),
                         monthIncome = summary.MonthTotalIncome,
                         monthGameIncome = summary.MonthGameIncome,
                         monthProductsIncome = summary.MonthProductsIncome,
@@ -2699,6 +2709,21 @@ namespace ClubTimerXbox.Services
                         commandId,
                         command,
                         $"Премия добавлена: {bonus.EmployeeName}, {bonus.Amount} сом, месяц: {bonus.SalaryMonthKey}."
+                    );
+
+                    return;
+                }
+
+                if (command.Type == "RestoreEmployeeWorkHours")
+                {
+                    var restored = ApplyRestoreEmployeeWorkHours(command);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Часы восстановлены: {restored.EmployeeName}, " +
+                        $"{restored.WorkHours:0.00} ч, месяц: {restored.MonthStart:yyyy-MM}. " +
+                        $"Остаток ЗП: {restored.RemainingAmount} сом."
                     );
 
                     return;
@@ -4319,6 +4344,46 @@ namespace ClubTimerXbox.Services
             );
         }
 
+        private static (
+            string EmployeeName,
+            DateTime MonthStart,
+            double WorkHours,
+            int RemainingAmount)
+            ApplyRestoreEmployeeWorkHours(FirebaseCommand command)
+        {
+            string employeeName = command.EmployeeName.Trim();
+            var employee = EmployeeService.FindByName(employeeName);
+
+            if (employee == null)
+                throw new Exception($"Работник не найден: {employeeName}");
+
+            if (command.WorkHours < 0 || command.WorkHours > 24 * 366)
+                throw new Exception("Количество восстанавливаемых часов некорректно.");
+
+            var (monthStart, _) = ParseCommandMonth(command.MonthKey);
+
+            AutoSalaryService.SetRecoveredWorkHours(
+                monthStart,
+                employee.Name,
+                command.WorkHours
+            );
+
+            var salary = AutoSalaryService
+                .BuildReport(monthStart)
+                .Employees
+                .FirstOrDefault(item =>
+                    item.EmployeeName.Equals(
+                        employee.Name,
+                        StringComparison.OrdinalIgnoreCase));
+
+            return (
+                EmployeeName: employee.Name,
+                MonthStart: monthStart,
+                WorkHours: salary?.WorkHours ?? command.WorkHours,
+                RemainingAmount: salary?.RemainingAmount ?? 0
+            );
+        }
+
         private static AutoSalarySettings ApplyUpdateAutoSalarySettings(FirebaseCommand command)
         {
             var settings = new AutoSalarySettings
@@ -4376,6 +4441,7 @@ namespace ClubTimerXbox.Services
             // alarm settings, Tuya credentials, device preferences, work modes, and cloud schedules.
             ActiveSessionStorageService.Clear();
             ActionLogService.Clear();
+            SalaryWorkTimeProtectionService.Clear();
             CashService.Clear();
             CashBalanceCheckpointService.Clear();
             CashlessService.Clear();
@@ -4641,6 +4707,7 @@ namespace ClubTimerXbox.Services
             public string Title { get; set; } = "";
             public string Description { get; set; } = "";
             public int Amount { get; set; }
+            public double WorkHours { get; set; }
             public int ExpectedAmount { get; set; } = -1;
 
             public string PaymentMethod { get; set; } = "Наличные";

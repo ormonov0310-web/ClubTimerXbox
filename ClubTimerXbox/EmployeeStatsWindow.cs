@@ -411,7 +411,7 @@ namespace ClubTimerXbox
                 return $"Бонусы за выбранный месяц: {(autoSalary?.BonusAmount ?? 0) + (autoSalary?.ProductBonusAmount ?? 0)} сом.";
 
             if (_section == StatsSection.Time)
-                return $"Общее время смен: {EmployeeStatsService.FormatTime(summary.MonthWorkTime)}.";
+                return $"Общее время смен: {EmployeeStatsService.FormatTime(GetDisplayedWorkTime(summary, autoSalary))}.";
 
             if (_section == StatsSection.Income)
                 return $"Игровая выручка: {summary.MonthGameIncome} сом. Общая выручка: {summary.MonthTotalIncome} сом.";
@@ -461,7 +461,7 @@ namespace ClubTimerXbox
                 Children =
                 {
                     CreateBigLine("Зарплата за выбранный месяц"),
-                    CreateLine($"Общее время: {EmployeeStatsService.FormatTime(summary.MonthWorkTime)}"),
+                    CreateLine($"Общее время: {EmployeeStatsService.FormatTime(GetDisplayedWorkTime(summary, autoSalary))}"),
                     CreateLine($"Заработал по времени: {timeAmount} сом"),
                     CreateLine(""),
                     CreateLine($"Общая игровая выручка: {summary.MonthGameIncome} сом"),
@@ -478,6 +478,15 @@ namespace ClubTimerXbox
                 }
             }));
 
+        }
+
+        private static TimeSpan GetDisplayedWorkTime(
+            EmployeeStatsSummary summary,
+            AutoSalaryEmployeeResult? autoSalary)
+        {
+            return autoSalary == null
+                ? summary.MonthWorkTime
+                : TimeSpan.FromHours(autoSalary.WorkHours);
         }
 
         private void RenderBonusesSection(AutoSalaryEmployeeResult? autoSalary)

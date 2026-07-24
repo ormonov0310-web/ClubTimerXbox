@@ -14,6 +14,7 @@ namespace ClubTimerXbox
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             WindowSizeStorageService.EnableForAllWindows();
             UiSoundService.EnableGlobalUiSounds();
+            VisualThemeService.EnableForAllWindows();
 
             if (!PcIdentityService.HasAssignedClub)
             {

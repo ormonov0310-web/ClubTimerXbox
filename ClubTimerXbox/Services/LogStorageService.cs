@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using ClubTimerXbox.Models;
 
@@ -14,6 +15,8 @@ namespace ClubTimerXbox.Services
 
     public static class LogStorageService
     {
+        private static readonly object Sync = new object();
+
         private static readonly string LogsFolderPath =
             Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -23,24 +26,22 @@ namespace ClubTimerXbox.Services
         private static readonly string LogsFilePath =
             Path.Combine(LogsFolderPath, "logs.json");
 
+        private static readonly string BackupFilePath = LogsFilePath + ".bak";
+        private static readonly string TemporaryFilePath = LogsFilePath + ".tmp";
+
         public static LogStorageData Load()
         {
-            try
+            lock (Sync)
             {
-                if (!File.Exists(LogsFilePath))
-                    return new LogStorageData();
+                if (TryLoad(LogsFilePath, out var data))
+                    return data;
 
-                string json = File.ReadAllText(LogsFilePath);
+                if (TryLoad(BackupFilePath, out data))
+                {
+                    RestorePrimaryFromBackup();
+                    return data;
+                }
 
-                var data = JsonSerializer.Deserialize<LogStorageData>(json);
-
-                if (data == null)
-                    return new LogStorageData();
-
-                return data;
-            }
-            catch
-            {
                 return new LogStorageData();
             }
         }
@@ -49,22 +50,85 @@ namespace ClubTimerXbox.Services
             List<ShiftLogItem> shifts,
             List<GameSessionLogItem> gameSessions)
         {
-            Directory.CreateDirectory(LogsFolderPath);
-
-            var data = new LogStorageData
+            lock (Sync)
             {
-                Shifts = shifts,
-                GameSessions = gameSessions
-            };
+                Directory.CreateDirectory(LogsFolderPath);
 
-            var options = new JsonSerializerOptions
+                var data = new LogStorageData
+                {
+                    Shifts = shifts ?? new List<ShiftLogItem>(),
+                    GameSessions = gameSessions ?? new List<GameSessionLogItem>()
+                };
+
+                var options = new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                };
+
+                string json = JsonSerializer.Serialize(data, options);
+
+                WriteDurable(TemporaryFilePath, json);
+
+                if (TryLoad(LogsFilePath, out _))
+                    File.Copy(LogsFilePath, BackupFilePath, true);
+
+                File.Move(TemporaryFilePath, LogsFilePath, true);
+            }
+        }
+
+        private static bool TryLoad(string path, out LogStorageData data)
+        {
+            data = new LogStorageData();
+
+            try
             {
-                WriteIndented = true
-            };
+                if (!File.Exists(path))
+                    return false;
 
-            string json = JsonSerializer.Serialize(data, options);
+                string json = File.ReadAllText(path);
+                var loaded = JsonSerializer.Deserialize<LogStorageData>(json);
+                if (loaded == null)
+                    return false;
 
-            File.WriteAllText(LogsFilePath, json);
+                loaded.Shifts ??= new List<ShiftLogItem>();
+                loaded.GameSessions ??= new List<GameSessionLogItem>();
+                data = loaded;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void RestorePrimaryFromBackup()
+        {
+            try
+            {
+                Directory.CreateDirectory(LogsFolderPath);
+                File.Copy(BackupFilePath, LogsFilePath, true);
+            }
+            catch
+            {
+                // Данные уже загружены из резерва и будут записаны при следующем изменении.
+            }
+        }
+
+        private static void WriteDurable(string path, string content)
+        {
+            byte[] bytes = new UTF8Encoding(false).GetBytes(content);
+
+            using var stream = new FileStream(
+                path,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                FileOptions.WriteThrough
+            );
+
+            stream.Write(bytes, 0, bytes.Length);
+            stream.Flush(true);
         }
     }
 }

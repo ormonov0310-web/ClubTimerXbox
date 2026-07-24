@@ -41,6 +41,7 @@ namespace ClubTimerXbox
         public MainWindow()
         {
             InitializeComponent();
+            VisualThemeService.ThemeChanged += VisualThemeService_ThemeChanged;
 
             UpdateCurrentEmployeeText();
 
@@ -84,6 +85,7 @@ namespace ClubTimerXbox
 
         private void HandleWindowClosing()
         {
+            VisualThemeService.ThemeChanged -= VisualThemeService_ThemeChanged;
             _stockAuditBlinkTimer.Stop();
             _tuyaRefreshTimer.Stop();
             _tuyaInactivityTimer.Stop();
@@ -96,6 +98,14 @@ namespace ClubTimerXbox
             // но рабочая смена сотрудника должна закрыться,
             // чтобы время сотрудника не накручивалось после закрытия программы.
             ActionLogService.CloseCurrentShift();
+        }
+
+        private void VisualThemeService_ThemeChanged(object? sender, EventArgs e)
+        {
+            if (_isTuyaDevicesView)
+                _ = DrawTuyaDevicesAsync();
+            else
+                DrawPlaces();
         }
 
         private void RestoreActivePlacesFromStorage()
@@ -3909,28 +3919,36 @@ namespace ClubTimerXbox
             if (!place.IsBusy)
             {
                 if (place.Type == PlaceType.Wheel)
-                    return new SolidColorBrush(Color.FromRgb(30, 41, 59));
+                {
+                    return VisualThemeService.CreateTintedSurfaceBrush(
+                        Color.FromRgb(30, 41, 59),
+                        184
+                    );
+                }
 
-                return new SolidColorBrush(Color.FromRgb(24, 32, 43));
+                return VisualThemeService.CreateTintedSurfaceBrush(
+                    Color.FromRgb(24, 32, 43),
+                    176
+                );
             }
 
             if (place.IsTimeExpiredAwaitingAcknowledgement)
             {
                 return _expiredCardBlinkState
-                    ? new SolidColorBrush(Color.FromRgb(127, 29, 29))
-                    : new SolidColorBrush(Color.FromRgb(45, 15, 18));
+                    ? VisualThemeService.CreateTintedSurfaceBrush(Color.FromRgb(127, 29, 29), 210)
+                    : VisualThemeService.CreateTintedSurfaceBrush(Color.FromRgb(45, 15, 18), 205);
             }
 
             if (place.IsCalculating)
-                return new SolidColorBrush(Color.FromRgb(70, 55, 20));
+                return VisualThemeService.CreateTintedSurfaceBrush(Color.FromRgb(70, 55, 20), 202);
 
             if (place.IsNewBranchPromoSession)
-                return new SolidColorBrush(Color.FromRgb(20, 70, 45));
+                return VisualThemeService.CreateTintedSurfaceBrush(Color.FromRgb(20, 70, 45), 196);
 
             if (place.IsOpenMode)
-                return new SolidColorBrush(Color.FromRgb(20, 45, 75));
+                return VisualThemeService.CreateTintedSurfaceBrush(Color.FromRgb(20, 45, 75), 196);
 
-            return new SolidColorBrush(Color.FromRgb(65, 35, 40));
+            return VisualThemeService.CreateTintedSurfaceBrush(Color.FromRgb(65, 35, 40), 200);
         }
 
         private string FormatPrice(double pricePerMinute)

@@ -6,13 +6,13 @@
         Height="720"
         Width="1180"
         WindowStartupLocation="CenterScreen"
-        Background="#10141C">
+        Background="{DynamicResource Theme.WindowBrush}">
 
     <Window.Resources>
         <Style TargetType="Button">
             <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Background" Value="#253044"/>
-            <Setter Property="BorderBrush" Value="#344155"/>
+            <Setter Property="Background" Value="{DynamicResource Theme.ButtonBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Theme.BorderBrush}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Padding" Value="10,4"/>
@@ -37,7 +37,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ButtonChrome" Property="Background" Value="#334155"/>
+                                <Setter TargetName="ButtonChrome" Property="Background" Value="{DynamicResource Theme.ButtonHoverBrush}"/>
                                 <Setter TargetName="ButtonChrome" Property="BorderBrush" Value="#60A5FA"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
@@ -79,14 +79,17 @@
         </Style>
     </Window.Resources>
 
-    <Grid Margin="16">
+    <Grid Margin="16"
+          Background="Transparent">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
         <!-- Верхняя панель -->
-        <Border Background="#18202B"
+        <Border Background="{DynamicResource Theme.HeaderBrush}"
+                BorderBrush="{DynamicResource Theme.BorderBrush}"
+                BorderThickness="1"
                 CornerRadius="16"
                 Padding="18"
                 Margin="0,0,0,16">

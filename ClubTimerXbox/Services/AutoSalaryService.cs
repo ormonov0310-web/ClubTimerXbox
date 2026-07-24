@@ -18,16 +18,21 @@ namespace ClubTimerXbox.Services
             string oldEmployeeName,
             string newEmployeeName)
         {
-            if (!EmployeeReferenceRenameService.Matches(
+            int changed = SalaryWorkTimeProtectionService.RenameEmployeeReferences(
+                oldEmployeeName,
+                newEmployeeName
+            );
+
+            if (EmployeeReferenceRenameService.Matches(
                     Settings.OpeningResponsibleEmployeeName,
                     oldEmployeeName))
             {
-                return 0;
+                Settings.OpeningResponsibleEmployeeName = newEmployeeName;
+                AutoSalarySettingsStorageService.Save(Settings);
+                changed++;
             }
 
-            Settings.OpeningResponsibleEmployeeName = newEmployeeName;
-            AutoSalarySettingsStorageService.Save(Settings);
-            return 1;
+            return changed;
         }
 
         public static void UpdateSettings(AutoSalarySettings settings)
@@ -182,7 +187,28 @@ namespace ClubTimerXbox.Services
 
             ApplyManualOwnerBonuses(result, monthStart, nextMonthStart);
 
+            foreach (var input in result.Values)
+            {
+                input.WorkHours = SalaryWorkTimeProtectionService.Protect(
+                    monthStart,
+                    input.EmployeeName,
+                    input.WorkHours
+                );
+            }
+
             return result;
+        }
+
+        public static void SetRecoveredWorkHours(
+            DateTime monthStart,
+            string employeeName,
+            double recoveredHours)
+        {
+            SalaryWorkTimeProtectionService.SetRecoveredHours(
+                monthStart,
+                employeeName,
+                recoveredHours
+            );
         }
 
         private static void ApplyManualOwnerBonuses(

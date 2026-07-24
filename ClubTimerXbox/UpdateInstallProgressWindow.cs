@@ -20,17 +20,17 @@ namespace ClubTimerXbox
         public UpdateInstallProgressWindow()
         {
             Title = "Скачивание обновления";
-            Width = 520;
-            Height = 360;
-            MinWidth = 480;
-            MinHeight = 320;
+            Width = 580;
+            Height = 460;
+            MinWidth = 520;
+            MinHeight = 420;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ResizeMode = ResizeMode.NoResize;
-            Background = new SolidColorBrush(Color.FromRgb(11, 14, 20));
+            Background = Brushes.Transparent;
 
             var root = new StackPanel
             {
-                Margin = new Thickness(26)
+                Margin = new Thickness(30, 26, 30, 28)
             };
 
             root.Children.Add(new TextBlock
@@ -72,14 +72,20 @@ namespace ClubTimerXbox
             root.Children.Add(new TextBlock
             {
                 Text = "После 100% откроется установщик. Не закрывайте программу и не выключайте компьютер.",
-                Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                Foreground = Application.Current.TryFindResource("Theme.MutedTextBrush") as Brush
+                    ?? new SolidColorBrush(Color.FromRgb(170, 180, 195)),
                 FontSize = 13,
                 TextWrapping = TextWrapping.Wrap,
                 LineHeight = 20,
                 Margin = new Thickness(0, 18, 0, 0)
             });
 
-            Content = root;
+            Content = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Content = root
+            };
             UpdateProgress(AppUpdateService.AppUpdateProgress.Downloading(0, "Готовим скачивание..."));
         }
 
@@ -150,11 +156,15 @@ namespace ClubTimerXbox
 
             return new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(20, 24, 34)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(38, 44, 60)),
+                Background = VisualThemeService.CreateTintedSurfaceBrush(
+                    Color.FromRgb(20, 28, 38),
+                    190
+                ),
+                BorderBrush = Application.Current.TryFindResource("Theme.BorderBrush") as Brush
+                    ?? new SolidColorBrush(Color.FromRgb(72, 82, 98)),
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(10),
-                Padding = new Thickness(14),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(16),
                 Margin = new Thickness(0, 0, 0, 14),
                 Child = panel
             };

@@ -13,23 +13,22 @@ namespace ClubTimerXbox
         public LoginWindow()
         {
             Title = "Вход сотрудника";
-            Width = 440;
-            Height = 360;
+            Width = 520;
+            Height = 440;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             ResizeMode = ResizeMode.NoResize;
-            Background = new SolidColorBrush(Color.FromRgb(16, 20, 28));
 
             Content = CreateContent();
         }
 
         private UIElement CreateContent()
         {
-            var root = new StackPanel
+            var panel = new StackPanel
             {
                 Margin = new Thickness(28)
             };
 
-            root.Children.Add(new TextBlock
+            panel.Children.Add(new TextBlock
             {
                 Text = "Club Timer Xbox",
                 Foreground = Brushes.White,
@@ -38,7 +37,7 @@ namespace ClubTimerXbox
                 Margin = new Thickness(0, 0, 0, 8)
             });
 
-            root.Children.Add(new TextBlock
+            panel.Children.Add(new TextBlock
             {
                 Text = "Введите код сотрудника для начала смены",
                 Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
@@ -46,7 +45,7 @@ namespace ClubTimerXbox
                 Margin = new Thickness(0, 0, 0, 24)
             });
 
-            root.Children.Add(new TextBlock
+            panel.Children.Add(new TextBlock
             {
                 Text = "Код сотрудника",
                 Foreground = Brushes.White,
@@ -64,14 +63,14 @@ namespace ClubTimerXbox
                     TryLogin();
             };
 
-            root.Children.Add(_pinBox);
+            panel.Children.Add(_pinBox);
 
             _errorText.Text = "";
             _errorText.Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113));
             _errorText.FontSize = 14;
             _errorText.Margin = new Thickness(0, 8, 0, 0);
 
-            root.Children.Add(_errorText);
+            panel.Children.Add(_errorText);
 
             var loginButton = new Button
             {
@@ -84,9 +83,9 @@ namespace ClubTimerXbox
 
             loginButton.Click += (_, _) => TryLogin();
 
-            root.Children.Add(loginButton);
+            panel.Children.Add(loginButton);
 
-            root.Children.Add(new TextBlock
+            panel.Children.Add(new TextBlock
             {
                 Text = "Тестовые коды: 1111, 2222, 3333, 4444",
                 Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
@@ -96,7 +95,31 @@ namespace ClubTimerXbox
 
             Loaded += (_, _) => _pinBox.Focus();
 
-            return root;
+            var card = new Border
+            {
+                Width = 430,
+                CornerRadius = new CornerRadius(8),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(2),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = panel,
+                Effect = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    BlurRadius = 28,
+                    ShadowDepth = 8,
+                    Opacity = 0.32,
+                    Color = Colors.Black
+                }
+            };
+            card.SetResourceReference(Border.BackgroundProperty, "Theme.CardBrush");
+            card.SetResourceReference(Border.BorderBrushProperty, "Theme.BorderBrush");
+
+            return new Grid
+            {
+                Margin = new Thickness(22),
+                Children = { card }
+            };
         }
 
         private void TryLogin()

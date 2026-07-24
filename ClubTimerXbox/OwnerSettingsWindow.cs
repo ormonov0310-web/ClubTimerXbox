@@ -25,6 +25,7 @@ namespace ClubTimerXbox
         private Border? _updateCard;
         private TextBlock? _updateTitleText;
         private TextBlock? _updateSubtitleText;
+        private TextBlock? _themeSubtitleText;
         private Button? _updateButton;
         private bool _isInstallingUpdate;
 
@@ -107,6 +108,13 @@ namespace ClubTimerXbox
                 OpenPhoneConnectionSettings
             ));
 
+            root.Children.Add(CreateSettingsButton(
+                "Изменить стиль",
+                $"Сейчас выбран: {VisualThemeService.Current.DisplayName}",
+                OpenThemeSettings,
+                subtitle => _themeSubtitleText = subtitle
+            ));
+
             _updateCard = CreateUpdateCard();
             root.Children.Add(_updateCard);
 
@@ -185,6 +193,22 @@ namespace ClubTimerXbox
             };
 
             window.ShowDialog();
+        }
+
+        private void OpenThemeSettings()
+        {
+            var window = new ThemeSettingsWindow
+            {
+                Owner = this
+            };
+
+            window.ShowDialog();
+
+            if (_themeSubtitleText != null)
+            {
+                _themeSubtitleText.Text =
+                    $"Сейчас выбран: {VisualThemeService.Current.DisplayName}";
+            }
         }
 
         private Border CreateFirebaseStatusCard()
@@ -403,7 +427,8 @@ namespace ClubTimerXbox
         private Button CreateSettingsButton(
             string title,
             string subtitle,
-            Action clickAction)
+            Action clickAction,
+            Action<TextBlock>? captureSubtitle = null)
         {
             var panel = new StackPanel
             {
@@ -418,14 +443,16 @@ namespace ClubTimerXbox
                 FontWeight = FontWeights.Bold
             });
 
-            panel.Children.Add(new TextBlock
+            var subtitleText = new TextBlock
             {
                 Text = subtitle,
                 Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
                 FontSize = 14,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 5, 0, 0)
-            });
+            };
+            panel.Children.Add(subtitleText);
+            captureSubtitle?.Invoke(subtitleText);
 
             var button = new Button
             {

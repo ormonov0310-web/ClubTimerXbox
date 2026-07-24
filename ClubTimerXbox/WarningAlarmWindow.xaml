@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Скоро время закончится"
         Width="460"
-        Height="300"
+        Height="340"
         WindowStartupLocation="CenterOwner"
         Background="#070A10"
         ResizeMode="NoResize"
@@ -14,7 +14,7 @@
                 BorderBrush="#FBBF24"
                 BorderThickness="1"
                 CornerRadius="18"
-                Padding="22">
+                Padding="24">
             <StackPanel VerticalAlignment="Center">
             <TextBlock x:Name="TitleText"
                        Text="Скоро время заканчивается"

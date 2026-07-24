@@ -10,7 +10,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace ClubTimerUpdater
 {
@@ -83,12 +85,13 @@ namespace ClubTimerUpdater
             _options = options;
 
             Title = "Обновление ClubTimerXbox";
-            Width = 560;
-            Height = 260;
+            Width = 620;
+            Height = 390;
             ResizeMode = ResizeMode.NoResize;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             Topmost = true;
-            Background = Brush("#0F1117");
+            WindowStyle = WindowStyle.None;
+            Background = Brush("#070A0F");
             Foreground = Brushes.White;
 
             Closing += (_, e) =>
@@ -97,12 +100,75 @@ namespace ClubTimerUpdater
                     e.Cancel = true;
             };
 
-            var root = new StackPanel
+            var root = new Grid
             {
-                Margin = new Thickness(28, 24, 28, 24)
+                Background = CreateBackdropBrush() as System.Windows.Media.Brush
+                    ?? Brush("#070A0F")
             };
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(38) });
+            root.RowDefinitions.Add(new RowDefinition
+            {
+                Height = new GridLength(1, GridUnitType.Star)
+            });
 
-            root.Children.Add(new TextBlock
+            var backdropShade = new Border
+            {
+                Background = Brush("#A6080C12")
+            };
+            Grid.SetRowSpan(backdropShade, 2);
+            root.Children.Add(backdropShade);
+
+            var titleBar = new Border
+            {
+                Background = Brush("#D0141B24"),
+                BorderBrush = Brush("#48FFFFFF"),
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                Child = new Grid
+                {
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = "Обновление ClubTimerXbox",
+                            FontSize = 13,
+                            FontWeight = FontWeights.SemiBold,
+                            Foreground = Brushes.White,
+                            VerticalAlignment = VerticalAlignment.Center,
+                            Margin = new Thickness(14, 0, 0, 0)
+                        },
+                        new TextBlock
+                        {
+                            Text = "УСТАНОВКА",
+                            FontSize = 11,
+                            FontWeight = FontWeights.Bold,
+                            Foreground = Brush("#7DD3FC"),
+                            HorizontalAlignment = HorizontalAlignment.Right,
+                            VerticalAlignment = VerticalAlignment.Center,
+                            Margin = new Thickness(0, 0, 14, 0)
+                        }
+                    }
+                }
+            };
+            titleBar.MouseLeftButtonDown += (_, e) =>
+            {
+                if (e.LeftButton != MouseButtonState.Pressed)
+                    return;
+
+                try
+                {
+                    DragMove();
+                }
+                catch (InvalidOperationException)
+                {
+                    // The button may be released during a fast drag.
+                }
+            };
+            Grid.SetRow(titleBar, 0);
+            root.Children.Add(titleBar);
+
+            var content = new StackPanel();
+
+            content.Children.Add(new TextBlock
             {
                 Text = "Идёт обновление программы",
                 FontSize = 28,
@@ -111,44 +177,62 @@ namespace ClubTimerUpdater
                 Margin = new Thickness(0, 0, 0, 10)
             });
 
-            root.Children.Add(new TextBlock
+            content.Children.Add(new TextBlock
             {
                 Text =
                     "Пожалуйста, подождите. Не выключайте компьютер.\n" +
                     "Программа сама откроется после завершения обновления.",
                 FontSize = 15,
-                Foreground = Brush("#D1D5DB"),
-                Margin = new Thickness(0, 0, 0, 20)
+                Foreground = Brush("#D7E1EC"),
+                LineHeight = 22,
+                Margin = new Thickness(0, 0, 0, 22)
             });
 
             _progressBar = new ProgressBar
             {
                 Minimum = 0,
                 Maximum = 100,
-                Height = 30,
+                Height = 24,
                 Value = 0,
-                Margin = new Thickness(0, 0, 0, 14)
+                Foreground = Brush("#38BDF8"),
+                Background = Brush("#B817222E"),
+                BorderBrush = Brush("#66FFFFFF"),
+                BorderThickness = new Thickness(1),
+                Margin = new Thickness(0, 0, 0, 16)
             };
-            root.Children.Add(_progressBar);
+            content.Children.Add(_progressBar);
 
             _statusText = new TextBlock
             {
                 Text = "0% - подготовка обновления",
                 FontSize = 17,
                 FontWeight = FontWeights.Bold,
-                Foreground = Brush("#93A8FF"),
+                Foreground = Brush("#7DD3FC"),
                 Margin = new Thickness(0, 0, 0, 6)
             };
-            root.Children.Add(_statusText);
+            content.Children.Add(_statusText);
 
             _detailsText = new TextBlock
             {
                 Text = "",
                 FontSize = 13,
-                Foreground = Brush("#9CA3AF"),
+                Foreground = Brush("#B8C5D4"),
                 TextWrapping = TextWrapping.Wrap
             };
-            root.Children.Add(_detailsText);
+            content.Children.Add(_detailsText);
+
+            var glassPanel = new Border
+            {
+                Background = Brush("#C018222E"),
+                BorderBrush = Brush("#70FFFFFF"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(28, 26, 28, 26),
+                Margin = new Thickness(34, 30, 34, 32),
+                Child = content
+            };
+            Grid.SetRow(glassPanel, 1);
+            root.Children.Add(glassPanel);
 
             Content = root;
             Loaded += async (_, _) => await RunUpdateAsync();
@@ -470,6 +554,32 @@ namespace ClubTimerUpdater
         private static SolidColorBrush Brush(string hex)
         {
             return new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        }
+
+        private static ImageBrush? CreateBackdropBrush()
+        {
+            try
+            {
+                var image = new BitmapImage();
+                image.BeginInit();
+                image.CacheOption = BitmapCacheOption.OnLoad;
+                image.UriSource = new Uri(
+                    "pack://application:,,,/Assets/Themes/glass-club.png",
+                    UriKind.Absolute);
+                image.EndInit();
+                image.Freeze();
+
+                return new ImageBrush(image)
+                {
+                    Stretch = Stretch.UniformToFill,
+                    AlignmentX = AlignmentX.Center,
+                    AlignmentY = AlignmentY.Center
+                };
+            }
+            catch
+            {
+                return null;
+            }
         }
     }
 

@@ -6,6 +6,10 @@ namespace ClubTimerXbox.Services
     {
         private const string CashCorrectionClubId = "club_1";
         private const string CashCorrectionEmployee = "\u0421\u0442\u0430\u043b\u0431\u0435\u043a";
+        private const string TelecomInstallationId = "cff5545ec1db49fa8c9200dad4a48379";
+        private const string TelecomSecondEmployee = "\u041c\u0438\u0440\u0431\u0435\u043a";
+        private const double TelecomStalbekRecoveredHours = 213.55;
+        private const double TelecomMirbekRecoveredHours = 8.57;
         private const string EmployeeRenameClubId = "club_2";
         private const string RenamedEmployeeId = "emp_b50acc8d89e3452486c3600a32b6188b";
         private const string PreviousEmployeeName = "\u041c\u0438\u0440\u0431\u0435\u043a";
@@ -25,13 +29,39 @@ namespace ClubTimerXbox.Services
 
         public static void Apply()
         {
-            string clubId = PcIdentityService.Current.ClubId;
+            var identity = PcIdentityService.Current;
+            string clubId = identity.ClubId;
 
             if (clubId.Equals(CashCorrectionClubId, StringComparison.OrdinalIgnoreCase))
+            {
                 ApplyCashCorrectionRepair();
+                ApplyTelecomSalaryRepair(identity.InstallationId);
+            }
 
             if (clubId.Equals(EmployeeRenameClubId, StringComparison.OrdinalIgnoreCase))
                 ApplyEmployeeRenameRepair();
+        }
+
+        private static void ApplyTelecomSalaryRepair(string installationId)
+        {
+            if (!installationId.Equals(
+                    TelecomInstallationId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var monthStart = new DateTime(2026, 7, 1);
+
+            AutoSalaryService.SetRecoveredWorkHours(
+                monthStart,
+                CashCorrectionEmployee,
+                TelecomStalbekRecoveredHours);
+
+            AutoSalaryService.SetRecoveredWorkHours(
+                monthStart,
+                TelecomSecondEmployee,
+                TelecomMirbekRecoveredHours);
         }
 
         private static void ApplyCashCorrectionRepair()
