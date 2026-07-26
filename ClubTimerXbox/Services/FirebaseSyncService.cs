@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using ClubTimerXbox.Models;
@@ -23,16 +24,279 @@ namespace ClubTimerXbox.Services
 
         private static string ClubCurrentPath => $"{ClubRootPath}/current";
 
+        private static string ClubOverviewPath => $"{ClubRootPath}/overview";
+
+        private static string ClubLiveStatePath => $"{ClubRootPath}/liveState";
+
         private static string ClubCommandsPath => $"{ClubRootPath}/commands";
 
         private static string ClubMetaPath => $"{ClubRootPath}/meta";
 
         private static string OwnerClubMetaPath => $"owner/clubs/{PcIdentityService.Current.ClubId}";
 
-        public static async Task PushCurrentStateAsync(List<ClubPlace> places)
+        private static IReadOnlyList<ClubPlace> _lastKnownPlaces = Array.Empty<ClubPlace>();
+        private static long _lastLiveStateRevision;
+
+        public static async Task<bool> PushOverviewStateAsync(List<ClubPlace> places)
         {
             if (!FirebaseConnectionService.CanSync)
-                return;
+                return false;
+
+            try
+            {
+                var pcIdentity = PcIdentityService.Current;
+                var snapshot = BuildOverviewSnapshot(places);
+                long nowUnixMs = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+                long revision = NextLiveStateRevision(nowUnixMs);
+                var data = BuildOverviewPayload(
+                    pcIdentity,
+                    snapshot,
+                    nowUnixMs,
+                    revision
+                );
+
+                await PutAsync(ClubOverviewPath, data);
+                await PutAsync(
+                    ClubLiveStatePath,
+                    BuildLiveStatePayload(
+                        pcIdentity,
+                        snapshot,
+                        nowUnixMs,
+                        revision,
+                        signalType: "overview_update",
+                        isOpen: true,
+                        connectionState: "online"
+                    )
+                );
+                await PatchAsync(ClubMetaPath, BuildClubMeta(pcIdentity));
+                await PatchAsync(OwnerClubMetaPath, BuildClubMeta(pcIdentity));
+                _lastKnownPlaces = places.ToList();
+                return true;
+            }
+            catch
+            {
+                // Потеря интернета не должна мешать работе клуба.
+                return false;
+            }
+        }
+
+        public static async Task<bool> PushHeartbeatAsync(List<ClubPlace> places)
+        {
+            if (!FirebaseConnectionService.CanSync)
+                return false;
+
+            try
+            {
+                var pcIdentity = PcIdentityService.Current;
+                var snapshot = BuildOverviewSnapshot(places);
+                long nowUnixMs = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+                long revision = NextLiveStateRevision(nowUnixMs);
+
+                await PutAsync(
+                    ClubLiveStatePath,
+                    BuildLiveStatePayload(
+                        pcIdentity,
+                        snapshot,
+                        nowUnixMs,
+                        revision,
+                        signalType: "heartbeat",
+                        isOpen: true,
+                        connectionState: "online"
+                    )
+                );
+
+                _lastKnownPlaces = places.ToList();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static async Task<bool> PushClosedStateAsync(string employeeName)
+        {
+            if (!FirebaseConnectionService.CanSync)
+                return false;
+
+            try
+            {
+                var pcIdentity = PcIdentityService.Current;
+                var snapshot = BuildOverviewSnapshot(_lastKnownPlaces);
+                long nowUnixMs = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+                long revision = NextLiveStateRevision(nowUnixMs);
+
+                await PutAsync(
+                    ClubLiveStatePath,
+                    BuildLiveStatePayload(
+                        pcIdentity,
+                        snapshot,
+                        nowUnixMs,
+                        revision,
+                        signalType: "club_closed",
+                        isOpen: false,
+                        connectionState: "closed",
+                        employeeName: employeeName
+                    )
+                );
+                await PatchAsync(
+                    ClubOverviewPath,
+                    new Dictionary<string, object?>
+                    {
+                        ["updatedAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        ["updatedAtUnixMs"] = nowUnixMs,
+                        ["lastHeartbeatAtUnixMs"] = nowUnixMs,
+                        ["revision"] = revision,
+                        ["isOpen"] = false,
+                        ["connectionState"] = "closed",
+                        ["currentEmployeeName"] = ""
+                    }
+                );
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static string BuildOverviewSignature(IReadOnlyList<ClubPlace> places)
+        {
+            var latestPayment = PaymentService.Records.LastOrDefault();
+            return string.Join(
+                "|",
+                EmployeeService.CurrentEmployee?.Name ?? "",
+                ShiftAcceptanceService.Current.IsRequired,
+                ShiftAcceptanceService.Current.IsCompleted,
+                PaymentService.Records.Count,
+                latestPayment?.Id.ToString() ?? "",
+                latestPayment?.TotalAmount ?? 0,
+                string.Join(
+                    ";",
+                    places
+                        .OrderBy(place => place.Name, StringComparer.OrdinalIgnoreCase)
+                        .Select(place => $"{place.Name}:{place.IsBusy}")
+                )
+            );
+        }
+
+        private static OverviewSnapshot BuildOverviewSnapshot(
+            IEnumerable<ClubPlace> places)
+        {
+            var placeList = places.ToList();
+            DateTime todayStart = DateTime.Today;
+            int gamesToday = GetPaymentTotal(
+                CashReportSection.Games,
+                CashReportPeriodMode.Day,
+                todayStart
+            );
+
+            return new OverviewSnapshot
+            {
+                EmployeeName = EmployeeService.CurrentEmployee?.Name ?? "",
+                AcceptanceRequired = ShiftAcceptanceService.Current.IsRequired,
+                AcceptanceCompleted = ShiftAcceptanceService.Current.IsCompleted,
+                GamesToday = gamesToday,
+                BusyPlaces = placeList.Count(place => place.IsBusy),
+                FreePlaces = placeList.Count(place => !place.IsBusy),
+                Places = placeList
+            };
+        }
+
+        private static Dictionary<string, object?> BuildOverviewPayload(
+            PcIdentity identity,
+            OverviewSnapshot snapshot,
+            long nowUnixMs,
+            long revision)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["updatedAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                ["updatedAtUnixMs"] = nowUnixMs,
+                ["lastHeartbeatAtUnixMs"] = nowUnixMs,
+                ["revision"] = revision,
+                ["isOpen"] = true,
+                ["connectionState"] = "online",
+                ["club"] = new
+                {
+                    id = identity.ClubId,
+                    name = identity.ClubName,
+                    isActivated = identity.IsActivated,
+                    installationId = identity.InstallationId,
+                    pcName = Environment.MachineName
+                },
+                ["currentEmployeeName"] = snapshot.EmployeeName,
+                ["acceptance"] = new
+                {
+                    isRequired = snapshot.AcceptanceRequired,
+                    isCompleted = snapshot.AcceptanceCompleted
+                },
+                ["cash"] = new
+                {
+                    gamesToday = snapshot.GamesToday
+                },
+                ["busyPlaces"] = snapshot.BusyPlaces,
+                ["freePlaces"] = snapshot.FreePlaces,
+                ["places"] = snapshot.Places.Select(place => new
+                {
+                    name = place.Name,
+                    type = place.Type.ToString(),
+                    isBusy = place.IsBusy
+                }).ToList()
+            };
+        }
+
+        private static Dictionary<string, object?> BuildLiveStatePayload(
+            PcIdentity identity,
+            OverviewSnapshot snapshot,
+            long nowUnixMs,
+            long revision,
+            string signalType,
+            bool isOpen,
+            string connectionState,
+            string? employeeName = null)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["messageType"] = "club_state",
+                ["signalType"] = signalType,
+                ["clubId"] = identity.ClubId,
+                ["clubName"] = identity.ClubName,
+                ["sourceInstallationId"] = identity.InstallationId,
+                ["revision"] = revision,
+                ["updatedAtUnixMs"] = nowUnixMs,
+                ["lastHeartbeatAtUnixMs"] = nowUnixMs,
+                ["isOpen"] = isOpen,
+                ["connectionState"] = connectionState,
+                ["employeeName"] = employeeName ?? snapshot.EmployeeName,
+                ["busyPlaces"] = snapshot.BusyPlaces,
+                ["freePlaces"] = snapshot.FreePlaces,
+                ["gamesToday"] = snapshot.GamesToday,
+                ["acceptanceRequired"] = snapshot.AcceptanceRequired,
+                ["acceptanceCompleted"] = snapshot.AcceptanceCompleted
+            };
+        }
+
+        private static long NextLiveStateRevision(long nowUnixMs)
+        {
+            while (true)
+            {
+                long previous = Interlocked.Read(ref _lastLiveStateRevision);
+                long next = Math.Max(nowUnixMs, previous + 1);
+                if (Interlocked.CompareExchange(
+                        ref _lastLiveStateRevision,
+                        next,
+                        previous) == previous)
+                {
+                    return next;
+                }
+            }
+        }
+
+        public static async Task<bool> PushCurrentStateAsync(List<ClubPlace> places)
+        {
+            if (!FirebaseConnectionService.CanSync)
+                return false;
 
             try
             {
@@ -480,6 +744,7 @@ namespace ClubTimerXbox.Services
                 var data = new
                 {
                     updatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    updatedAtUnixMs = DateTimeOffset.Now.ToUnixTimeMilliseconds(),
                     app = AppVersionService.BuildPayload(),
                     club = new
                     {
@@ -803,10 +1068,12 @@ namespace ClubTimerXbox.Services
                 await PatchAsync(ClubMetaPath, BuildClubMeta(pcIdentity));
                 await PatchAsync(OwnerClubMetaPath, BuildClubMeta(pcIdentity));
                 await PushOwnerEmployeesIfNeededAsync(employees, pcIdentity);
+                return true;
             }
             catch
             {
                 // Если интернет пропал, программа должна продолжать работать.
+                return false;
             }
         }
 
@@ -818,6 +1085,7 @@ namespace ClubTimerXbox.Services
             try
             {
                 var currentPlaces = places ?? Array.Empty<ClubPlace>();
+                _lastKnownPlaces = currentPlaces;
                 await CheckCommandsAsync(ClubCommandsPath, currentPlaces);
             }
             catch
@@ -909,7 +1177,8 @@ namespace ClubTimerXbox.Services
                 appVersion = AppVersionService.Version,
                 updateChannel = AppVersionService.UpdateChannel,
                 app = AppVersionService.BuildPayload(),
-                updatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                updatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                updatedAtUnixMs = DateTimeOffset.Now.ToUnixTimeMilliseconds()
             };
         }
 
@@ -2427,6 +2696,48 @@ namespace ClubTimerXbox.Services
         {
             try
             {
+                if (command.Type == "RefreshOverview")
+                {
+                    bool published = await PushOverviewStateAsync(places.ToList());
+                    if (!published)
+                    {
+                        await MarkCommandError(
+                            commandId,
+                            command,
+                            "ПК не смог выгрузить краткие данные в Firebase."
+                        );
+                        return;
+                    }
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        "Краткие данные клуба обновлены.",
+                        pushCurrentState: false
+                    );
+                    return;
+                }
+
+                if (command.Type == "RefreshCurrentData")
+                {
+                    bool published = await PushCurrentStateAsync(places.ToList());
+                    if (!published)
+                    {
+                        await MarkCommandError(
+                            commandId,
+                            command,
+                            "ПК не смог выгрузить данные в Firebase."
+                        );
+                        return;
+                    }
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        "Данные клуба обновлены.",
+                        pushCurrentState: false
+                    );
+                    return;
+                }
+
                 if (command.Type == "ShowMessage")
                 {
                     MessageBox.Show(
@@ -2441,8 +2752,6 @@ namespace ClubTimerXbox.Services
                 if (command.Type == "RenameClub")
                 {
                     string clubName = ApplyRenameClub(command);
-
-                    await PushCurrentStateAsync(places.ToList());
 
                     await MarkCommandApplied(
                         commandId,
@@ -4580,8 +4889,12 @@ namespace ClubTimerXbox.Services
         private static async Task MarkCommandApplied(
             string commandId,
             FirebaseCommand command,
-            string resultMessage)
+            string resultMessage,
+            bool pushCurrentState = true)
         {
+            if (pushCurrentState)
+                await PushCurrentStateAsync(_lastKnownPlaces.ToList());
+
             command.Status = "applied";
             command.AppliedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             command.ResultMessage = resultMessage;
@@ -4635,14 +4948,9 @@ namespace ClubTimerXbox.Services
         private static async Task PutAsync(string path, object data)
         {
             string url = await FirebaseAuthService.BuildDatabaseUrlAsync(path);
+            url = AppendQuery(url, "print=silent");
 
-            string json = JsonSerializer.Serialize(
-                data,
-                new JsonSerializerOptions
-                {
-                    WriteIndented = true
-                }
-            );
+            string json = JsonSerializer.Serialize(data);
 
             using var content = new StringContent(
                 json,
@@ -4657,6 +4965,7 @@ namespace ClubTimerXbox.Services
         private static async Task PatchAsync(string path, object data)
         {
             string url = await FirebaseAuthService.BuildDatabaseUrlAsync(path);
+            url = AppendQuery(url, "print=silent");
             string json = JsonSerializer.Serialize(data);
 
             using var request = new HttpRequestMessage(
@@ -4673,6 +4982,23 @@ namespace ClubTimerXbox.Services
 
             using var response = await _httpClient.SendAsync(request);
             response.EnsureSuccessStatusCode();
+        }
+
+        private static string AppendQuery(string url, string query)
+        {
+            string separator = url.Contains('?') ? "&" : "?";
+            return url + separator + query.TrimStart('?', '&');
+        }
+
+        private sealed class OverviewSnapshot
+        {
+            public string EmployeeName { get; init; } = "";
+            public bool AcceptanceRequired { get; init; }
+            public bool AcceptanceCompleted { get; init; }
+            public int GamesToday { get; init; }
+            public int BusyPlaces { get; init; }
+            public int FreePlaces { get; init; }
+            public List<ClubPlace> Places { get; init; } = new List<ClubPlace>();
         }
 
         private class FirebaseCommand

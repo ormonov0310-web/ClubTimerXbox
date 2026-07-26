@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using ClubTimerXbox.Services;
@@ -13,8 +14,12 @@ namespace ClubTimerXbox
 
         private readonly DispatcherTimer _firebaseStatePushTimer = new DispatcherTimer();
         private readonly DispatcherTimer _firebaseCommandTimer = new DispatcherTimer();
+        private readonly DispatcherTimer _firebaseOverviewMonitorTimer = new DispatcherTimer();
         private bool _isFirebaseStatePushRunning;
         private bool _isFirebaseCommandCheckRunning;
+        private string _lastFirebaseOverviewSignature = "";
+        private string _pendingFirebaseOverviewSignature = "";
+        private DateTime _pendingFirebaseOverviewChangedAt = DateTime.MinValue;
 
         private void CheckRuntimeShiftAfterStart()
         {
@@ -79,18 +84,26 @@ namespace ClubTimerXbox
         {
             _firebaseStatePushTimer.Stop();
             _firebaseCommandTimer.Stop();
+            _firebaseOverviewMonitorTimer.Stop();
 
-            _firebaseCommandTimer.Interval = TimeSpan.FromSeconds(1);
+            _firebaseCommandTimer.Interval = TimeSpan.FromSeconds(2);
             _firebaseCommandTimer.Tick += async (_, _) => await RunFirebaseCommandCheckAsync();
 
-            _firebaseStatePushTimer.Interval = TimeSpan.FromSeconds(5);
+            _firebaseStatePushTimer.Interval = TimeSpan.FromSeconds(90);
             _firebaseStatePushTimer.Tick += async (_, _) => await RunFirebaseStatePushAsync();
+
+            _firebaseOverviewMonitorTimer.Interval = TimeSpan.FromSeconds(1);
+            _firebaseOverviewMonitorTimer.Tick += (_, _) => MonitorFirebaseOverviewState();
 
             _firebaseCommandTimer.Start();
             _firebaseStatePushTimer.Start();
+            _firebaseOverviewMonitorTimer.Start();
 
             _ = RunFirebaseCommandCheckAsync();
-            _ = RunFirebaseStatePushAsync();
+            string initialSignature = FirebaseSyncService.BuildOverviewSignature(_places);
+            _pendingFirebaseOverviewSignature = initialSignature;
+            _pendingFirebaseOverviewChangedAt = DateTime.UtcNow.AddSeconds(-2);
+            _ = RunFirebaseOverviewPushAsync(initialSignature, includeMaintenance: true);
         }
 
         private async Task RunFirebaseCommandCheckAsync()
@@ -127,9 +140,77 @@ namespace ClubTimerXbox
 
                 var places = _places.ToList();
                 await FirebaseEventService.FlushPendingAsync();
-                await FirebaseSyncService.PushCurrentStateAsync(places);
+                await FirebaseSyncService.PushHeartbeatAsync(places);
                 await AppUpdateService.CheckAndReportAsync(places);
                 await RefreshSettingsUpdateIndicatorAsync(forceRefresh: false);
+            }
+            finally
+            {
+                _isFirebaseStatePushRunning = false;
+            }
+        }
+
+        private void MonitorFirebaseOverviewState()
+        {
+            if (!FirebaseConnectionService.CanConnect)
+                return;
+
+            string signature = FirebaseSyncService.BuildOverviewSignature(_places);
+            if (signature == _lastFirebaseOverviewSignature)
+            {
+                _pendingFirebaseOverviewSignature = "";
+                _pendingFirebaseOverviewChangedAt = DateTime.MinValue;
+                return;
+            }
+
+            if (signature != _pendingFirebaseOverviewSignature)
+            {
+                _pendingFirebaseOverviewSignature = signature;
+                _pendingFirebaseOverviewChangedAt = DateTime.UtcNow;
+                return;
+            }
+
+            if (_isFirebaseStatePushRunning ||
+                DateTime.UtcNow - _pendingFirebaseOverviewChangedAt <
+                    TimeSpan.FromMilliseconds(1500))
+            {
+                return;
+            }
+
+            _ = RunFirebaseOverviewPushAsync(signature, includeMaintenance: false);
+        }
+
+        private async Task RunFirebaseOverviewPushAsync(
+            string signature,
+            bool includeMaintenance)
+        {
+            if (!FirebaseConnectionService.CanConnect || _isFirebaseStatePushRunning)
+                return;
+
+            _isFirebaseStatePushRunning = true;
+
+            try
+            {
+                if (!await FirebaseChannelBindingService.EnsureCurrentBindingAsync())
+                    return;
+
+                var places = _places.ToList();
+                if (includeMaintenance)
+                    await FirebaseEventService.FlushPendingAsync();
+
+                bool published = await FirebaseSyncService.PushOverviewStateAsync(places);
+                if (!published)
+                    return;
+
+                _lastFirebaseOverviewSignature = signature;
+                _pendingFirebaseOverviewSignature = "";
+                _pendingFirebaseOverviewChangedAt = DateTime.MinValue;
+
+                if (includeMaintenance)
+                {
+                    await AppUpdateService.CheckAndReportAsync(places);
+                    await RefreshSettingsUpdateIndicatorAsync(forceRefresh: false);
+                }
             }
             finally
             {
@@ -141,6 +222,17 @@ namespace ClubTimerXbox
         {
             AppRuntimeStateStorageService.SaveClosedNow();
 
+            try
+            {
+                FirebaseSyncService.PushClosedStateAsync(
+                    EmployeeService.CurrentEmployee?.Name ?? "Не выбран"
+                ).Wait(TimeSpan.FromSeconds(3));
+            }
+            catch
+            {
+                // Явное закрытие повторно подтвердит обычное событие клуба.
+            }
+
             FirebaseEventService.PublishClubClosedAndWait(
                 _notificationSessionId,
                 EmployeeService.CurrentEmployee?.Name ?? "Не выбран",
@@ -149,6 +241,7 @@ namespace ClubTimerXbox
 
             _firebaseStatePushTimer.Stop();
             _firebaseCommandTimer.Stop();
+            _firebaseOverviewMonitorTimer.Stop();
 
             OwnerApiServer.Stop();
         }
