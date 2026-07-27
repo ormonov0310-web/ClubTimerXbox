@@ -27,6 +27,9 @@ namespace ClubTimerXbox.Services
         private static readonly Guid CorrectCashShortageReconciliationId =
             Guid.Parse("5db40c93-bfc5-417e-8a12-0030925e611b");
 
+        private static readonly Guid IncorrectlySupersededRawLossId =
+            Guid.Parse("6619ff26-9cbc-43a7-84bc-e60f50286dca");
+
         public static void Apply()
         {
             var identity = PcIdentityService.Current;
@@ -88,6 +91,21 @@ namespace ClubTimerXbox.Services
                 CorrectCashShortageReconciliationId,
                 incorrectAmountText: "1221 \u0441\u043e\u043c",
                 correctedAmountText: "672 \u0441\u043e\u043c");
+
+            bool rawLossReopened =
+                CashReconciliationService.TryReopenKnownSupersededRawDifference(
+                    IncorrectlySupersededRawLossId,
+                    expectedOriginalAmount: 250,
+                    suspectedEmployeeName: CashCorrectionEmployee);
+
+            if (rawLossReopened)
+            {
+                CashReconciliationService.NetOpenMoneyCorrections(
+                    new DateTime(2026, 7, 1),
+                    new DateTime(2026, 8, 1),
+                    "Система",
+                    "Восстановленная сырая потеря сверена с открытым излишком.");
+            }
         }
 
         private static void ApplyEmployeeRenameRepair()

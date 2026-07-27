@@ -20,7 +20,24 @@ namespace ClubTimerXbox.Services
         private static readonly string FilePath =
             Path.Combine(FolderPath, "cash_reconciliation.json");
 
-        private static readonly List<CashReconciliationItem> _items = Load();
+        private static readonly List<CashReconciliationItem> _items;
+
+        static CashReconciliationService()
+        {
+            _items = Load(out bool originMigrated);
+
+            if (!originMigrated)
+                return;
+
+            try
+            {
+                Save();
+            }
+            catch
+            {
+                // The migration will be retried on the next launch.
+            }
+        }
 
         public static IReadOnlyList<CashReconciliationItem> Items => _items;
 
@@ -135,6 +152,53 @@ namespace ClubTimerXbox.Services
             return true;
         }
 
+        public static bool TryReopenKnownSupersededRawDifference(
+            Guid id,
+            int expectedOriginalAmount,
+            string suspectedEmployeeName)
+        {
+            var item = _items.FirstOrDefault(entry => entry.Id == id);
+
+            if (item == null)
+                return false;
+
+            NormalizeItem(item);
+            NormalizeLegacyOrigin(item);
+
+            bool matchesSuspect =
+                item.SuspectedEmployeeName.Equals(
+                    suspectedEmployeeName,
+                    StringComparison.OrdinalIgnoreCase);
+            bool wasClosedByCashlessVerification =
+                item.ResolutionNote.Contains(
+                    "Закрыто новой полной сверкой безнала",
+                    StringComparison.OrdinalIgnoreCase);
+
+            if (item.Origin != CashReconciliationOrigin.BalanceRawDifference ||
+                item.Kind != CashReconciliationKind.CashlessShortage ||
+                item.Status != CashReconciliationStatus.Resolved ||
+                item.OriginalAmount != expectedOriginalAmount ||
+                item.ResolvedAmount != expectedOriginalAmount ||
+                item.FormalizedAmount != 0 ||
+                !matchesSuspect ||
+                !wasClosedByCashlessVerification)
+            {
+                return false;
+            }
+
+            item.Amount = expectedOriginalAmount;
+            item.ResolvedAmount = 0;
+            item.Status = CashReconciliationStatus.Open;
+            item.ResolvedAt = null;
+            item.ResolvedBy = "";
+            item.ResolutionNote = "";
+            AppendNote(
+                item,
+                "Восстановлено после исправления ошибочного закрытия новой сверкой безнала.");
+            Save();
+            return true;
+        }
+
         public static CashReconciliationItem AddCashAcceptanceDifference(
             string checkedByEmployeeName,
             string responsibleEmployeeName,
@@ -148,6 +212,7 @@ namespace ClubTimerXbox.Services
                 return new CashReconciliationItem
                 {
                     Status = CashReconciliationStatus.Resolved,
+                    Origin = CashReconciliationOrigin.CashAcceptance,
                     ExpectedAmount = expectedAmount,
                     ActualAmount = actualAmount
                 };
@@ -160,6 +225,7 @@ namespace ClubTimerXbox.Services
                     ? CashReconciliationKind.CashExtra
                     : CashReconciliationKind.CashShortage,
                 Status = CashReconciliationStatus.Open,
+                Origin = CashReconciliationOrigin.CashAcceptance,
                 Amount = Math.Abs(difference),
                 OriginalAmount = Math.Abs(difference),
                 ExpectedAmount = expectedAmount,
@@ -194,6 +260,7 @@ namespace ClubTimerXbox.Services
                     ? CashReconciliationKind.CashlessExtra
                     : CashReconciliationKind.CashlessShortage,
                 Status = status,
+                Origin = CashReconciliationOrigin.CashlessVerification,
                 Amount = Math.Max(0, amount),
                 OriginalAmount = Math.Max(0, amount),
                 ExpectedAmount = expectedAmount,
@@ -338,6 +405,7 @@ namespace ClubTimerXbox.Services
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
                     item.Kind == CashReconciliationKind.CashlessExtra &&
+                    item.Origin == CashReconciliationOrigin.CashlessVerification &&
                     item.CreatedAt >= fromInclusive &&
                     item.CreatedAt < toExclusive &&
                     item.ExpectedAmount == 0 &&
@@ -376,6 +444,7 @@ namespace ClubTimerXbox.Services
                     ? CashReconciliationKind.CashlessShortage
                     : CashReconciliationKind.CashlessExtra,
                 Status = CashReconciliationStatus.Open,
+                Origin = CashReconciliationOrigin.BalanceRawDifference,
                 Amount = Math.Max(0, amount),
                 OriginalAmount = Math.Max(0, amount),
                 ExpectedAmount = expectedAmount,
@@ -543,6 +612,7 @@ namespace ClubTimerXbox.Services
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
                     item.Kind == extraKind &&
+                    IsPaymentMistakeCandidate(item) &&
                     item.CreatedAt >= fromInclusive &&
                     item.CreatedAt < toExclusive &&
                     IsAutoResolvablePaymentMistakeAmount(item.Amount))
@@ -553,6 +623,7 @@ namespace ClubTimerXbox.Services
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
                     item.Kind == shortageKind &&
+                    IsPaymentMistakeCandidate(item) &&
                     item.CreatedAt >= fromInclusive &&
                     item.CreatedAt < toExclusive &&
                     IsAutoResolvablePaymentMistakeAmount(item.Amount))
@@ -599,6 +670,17 @@ namespace ClubTimerXbox.Services
         private static bool IsAutoResolvablePaymentMistakeAmount(int amount)
         {
             return amount > 0 && amount <= AutoResolveLimit;
+        }
+
+        private static bool IsPaymentMistakeCandidate(CashReconciliationItem item)
+        {
+            if (item.Kind == CashReconciliationKind.CashlessExtra ||
+                item.Kind == CashReconciliationKind.CashlessShortage)
+            {
+                return item.Origin == CashReconciliationOrigin.CashlessVerification;
+            }
+
+            return true;
         }
 
         public static int ConsumeOpenCashExtra(
@@ -666,6 +748,7 @@ namespace ClubTimerXbox.Services
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
                     item.Kind == CashReconciliationKind.CashlessExtra &&
+                    item.Origin == CashReconciliationOrigin.CashlessVerification &&
                     item.CreatedAt >= fromInclusive &&
                     item.CreatedAt < toExclusive &&
                     item.Amount > 0)
@@ -715,6 +798,7 @@ namespace ClubTimerXbox.Services
                 .Where(item =>
                     item.Status == CashReconciliationStatus.Open &&
                     item.Kind == CashReconciliationKind.CashlessShortage &&
+                    item.Origin == CashReconciliationOrigin.CashlessVerification &&
                     item.CreatedAt >= fromInclusive &&
                     item.CreatedAt < toExclusive &&
                     IsAutoResolvablePaymentMistakeAmount(item.Amount))
@@ -825,6 +909,7 @@ namespace ClubTimerXbox.Services
                     item.Status == CashReconciliationStatus.Open &&
                     item.CreatedAt >= fromInclusive &&
                     item.CreatedAt < toExclusive &&
+                    item.Origin == CashReconciliationOrigin.CashlessVerification &&
                     (item.Kind == CashReconciliationKind.CashlessShortage ||
                      item.Kind == CashReconciliationKind.CashlessExtra))
                 .OrderBy(item => item.CreatedAt)
@@ -1232,6 +1317,45 @@ namespace ClubTimerXbox.Services
                 item.OriginalAmount = knownTotal;
         }
 
+        private static bool NormalizeLegacyOrigin(CashReconciliationItem item)
+        {
+            if (item == null ||
+                item.Origin != CashReconciliationOrigin.Unknown)
+            {
+                return false;
+            }
+
+            if (item.Kind == CashReconciliationKind.CashExtra ||
+                item.Kind == CashReconciliationKind.CashShortage)
+            {
+                item.Origin = CashReconciliationOrigin.CashAcceptance;
+                return true;
+            }
+
+            if (item.Kind != CashReconciliationKind.CashlessExtra &&
+                item.Kind != CashReconciliationKind.CashlessShortage)
+            {
+                return false;
+            }
+
+            bool isRawDifference =
+                item.Title.Contains("Сырые потери", StringComparison.OrdinalIgnoreCase) ||
+                item.Title.Contains(
+                    "Излишек после корректировки",
+                    StringComparison.OrdinalIgnoreCase) ||
+                item.Note.Contains(
+                    "Итоговая сырая корректировка",
+                    StringComparison.OrdinalIgnoreCase) ||
+                item.Note.Contains(
+                    "Восстановлен непокрытый остаток",
+                    StringComparison.OrdinalIgnoreCase);
+
+            item.Origin = isRawDifference
+                ? CashReconciliationOrigin.BalanceRawDifference
+                : CashReconciliationOrigin.CashlessVerification;
+            return true;
+        }
+
         private static bool LooksLikeFormalizedShortage(CashReconciliationItem item)
         {
             if (!IsShortageKind(item.Kind))
@@ -1243,8 +1367,10 @@ namespace ClubTimerXbox.Services
                    text.Contains("штраф", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static List<CashReconciliationItem> Load()
+        private static List<CashReconciliationItem> Load(out bool originMigrated)
         {
+            originMigrated = false;
+
             try
             {
                 if (!File.Exists(FilePath))
@@ -1256,7 +1382,10 @@ namespace ClubTimerXbox.Services
                 items ??= new List<CashReconciliationItem>();
 
                 foreach (var item in items)
+                {
                     NormalizeItem(item);
+                    originMigrated |= NormalizeLegacyOrigin(item);
+                }
 
                 return items;
             }

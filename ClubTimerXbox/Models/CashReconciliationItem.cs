@@ -21,6 +21,14 @@ namespace ClubTimerXbox.Models
         Resolved
     }
 
+    public enum CashReconciliationOrigin
+    {
+        Unknown,
+        CashAcceptance,
+        CashlessVerification,
+        BalanceRawDifference
+    }
+
     public class CashReconciliationItem
     {
         public Guid Id { get; set; } = Guid.NewGuid();
@@ -30,6 +38,9 @@ namespace ClubTimerXbox.Models
         public CashReconciliationKind Kind { get; set; } = CashReconciliationKind.Other;
 
         public CashReconciliationStatus Status { get; set; } = CashReconciliationStatus.Open;
+
+        public CashReconciliationOrigin Origin { get; set; } =
+            CashReconciliationOrigin.Unknown;
 
         public int Amount { get; set; }
 

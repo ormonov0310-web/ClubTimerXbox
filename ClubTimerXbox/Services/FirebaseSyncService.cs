@@ -723,6 +723,7 @@ namespace ClubTimerXbox.Services
                         createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                         kind = item.Kind.ToString(),
                         status = item.Status.ToString(),
+                        origin = item.Origin.ToString(),
                         amount = item.Amount,
                         originalAmount = item.OriginalAmount,
                         resolvedAmount = item.ResolvedAmount,
