@@ -762,24 +762,18 @@ namespace ClubTimerXbox
             if (difference < 0)
             {
                 originalCashShortage = Math.Abs(difference);
-                var reconciliation = CashReconciliationService.AddCashAcceptanceDifference(
+                var result = CashReconciliationService.ProcessCashAcceptance(
+                    monthStart,
+                    nextMonthStart,
                     checkedByEmployeeName: checkedBy,
                     responsibleEmployeeName: responsible,
                     expectedAmount: _expectedCashAmount,
                     actualAmount: actualCash,
                     note: "Приёмка налички"
                 );
-                nettedReconciliation = CashReconciliationService.NetOpenMoneyCorrections(
-                    reconciliationCycleStart,
-                    nextMonthStart,
-                    "Система",
-                    "Автозачёт после приёмки налички: встречные суммы нал/безнал закрыты как ошибка типа оплаты."
-                );
-
-                finalCashShortage = reconciliation.Status == CashReconciliationStatus.Resolved
-                    ? 0
-                    : reconciliation.Amount;
-                coveredByCashlessExtra = originalCashShortage - finalCashShortage;
+                nettedReconciliation = result.PairedAmount + result.SettledAmount;
+                finalCashShortage = result.EventRemainingAmount;
+                coveredByCashlessExtra = result.PairedAmount;
             }
             else if (difference > 0)
             {
@@ -798,7 +792,9 @@ namespace ClubTimerXbox
 
                 if (remainingCashExtra > 0)
                 {
-                    var reconciliation = CashReconciliationService.AddCashAcceptanceDifference(
+                    var result = CashReconciliationService.ProcessCashAcceptance(
+                        monthStart,
+                        nextMonthStart,
                         checkedByEmployeeName: checkedBy,
                         responsibleEmployeeName: responsible,
                         expectedAmount: _expectedCashAmount,
@@ -807,17 +803,21 @@ namespace ClubTimerXbox
                             ? $"Приёмка налички. После исправления ошибки ввода осталось лишнее: {remainingCashExtra} сом."
                             : "Приёмка налички"
                     );
-                    nettedReconciliation = CashReconciliationService.NetOpenMoneyCorrections(
-                        reconciliationCycleStart,
-                        nextMonthStart,
-                        "Система",
-                        "Автозачёт после приёмки налички: встречные суммы нал/безнал закрыты как ошибка типа оплаты."
-                    );
-
-                    remainingCashExtra = reconciliation.Status == CashReconciliationStatus.Resolved
-                        ? 0
-                        : reconciliation.Amount;
+                    nettedReconciliation = result.PairedAmount + result.SettledAmount;
+                    remainingCashExtra = result.EventRemainingAmount;
                 }
+            }
+            else
+            {
+                CashReconciliationService.ProcessCashAcceptance(
+                    monthStart,
+                    nextMonthStart,
+                    checkedByEmployeeName: checkedBy,
+                    responsibleEmployeeName: responsible,
+                    expectedAmount: _expectedCashAmount,
+                    actualAmount: actualCash,
+                    note: "Приёмка налички без разницы"
+                );
             }
 
             ShiftAcceptanceService.AcceptCash();

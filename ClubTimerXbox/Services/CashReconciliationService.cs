@@ -20,13 +20,25 @@ namespace ClubTimerXbox.Services
         private static readonly string FilePath =
             Path.Combine(FolderPath, "cash_reconciliation.json");
 
+        private static readonly object Gate = new();
+
         private static readonly List<CashReconciliationItem> _items;
 
         static CashReconciliationService()
         {
             _items = Load(out bool originMigrated);
+            bool constitutionMigrated = false;
+            foreach (var item in _items.Where(item => item.AccountingSchemaVersion <= 0))
+            {
+                item.PostedFormalizedAmount = Math.Max(
+                    item.PostedFormalizedAmount,
+                    item.FormalizedAmount
+                );
+                item.AccountingSchemaVersion = 2;
+                constitutionMigrated = true;
+            }
 
-            if (!originMigrated)
+            if (!originMigrated && !constitutionMigrated)
                 return;
 
             try
@@ -40,6 +52,261 @@ namespace ClubTimerXbox.Services
         }
 
         public static IReadOnlyList<CashReconciliationItem> Items => _items;
+
+        public static CashAccountingResult ProcessCashAcceptance(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string checkedByEmployeeName,
+            string responsibleEmployeeName,
+            int expectedAmount,
+            int actualAmount,
+            string note)
+        {
+            lock (Gate)
+            {
+                var result = CashConstitutionEngine.RecordCashAcceptance(
+                    _items,
+                    fromInclusive,
+                    toExclusive,
+                    DateTime.Now,
+                    checkedByEmployeeName,
+                    responsibleEmployeeName,
+                    expectedAmount,
+                    actualAmount,
+                    note
+                );
+                Save();
+                return result;
+            }
+        }
+
+        public static CashAccountingResult ProcessCashlessVerification(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            int expectedAmount,
+            int actualAmount,
+            string suspectedEmployeeName,
+            string note)
+        {
+            lock (Gate)
+            {
+                var result = CashConstitutionEngine.RecordCashlessVerification(
+                    _items,
+                    fromInclusive,
+                    toExclusive,
+                    DateTime.Now,
+                    expectedAmount,
+                    actualAmount,
+                    suspectedEmployeeName,
+                    note
+                );
+                Save();
+                return result;
+            }
+        }
+
+        public static CashAccountingResult ApplyConstitutionCorrection(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            long checkpointNumber)
+        {
+            lock (Gate)
+            {
+                var result = CashConstitutionEngine.ApplyCorrection(
+                    _items,
+                    fromInclusive,
+                    toExclusive,
+                    DateTime.Now,
+                    checkpointNumber
+                );
+                Save();
+                return result;
+            }
+        }
+
+        public static CashAccountingResult AddConstitutionRawDifference(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            int difference,
+            int expectedAmount,
+            int actualAmount,
+            string responsibleEmployeeName,
+            string suspectedEmployeeName,
+            string note)
+        {
+            lock (Gate)
+            {
+                var result = CashConstitutionEngine.RecordRawDifference(
+                    _items,
+                    fromInclusive,
+                    toExclusive,
+                    DateTime.Now,
+                    difference,
+                    expectedAmount,
+                    actualAmount,
+                    responsibleEmployeeName,
+                    suspectedEmployeeName,
+                    note
+                );
+                Save();
+                return result;
+            }
+        }
+
+        public static CashAccountingResult ApplyConstitutionManualLoss(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string employeeName,
+            int amount)
+        {
+            lock (Gate)
+            {
+                var result = CashConstitutionEngine.ApplyManualLoss(
+                    _items,
+                    fromInclusive,
+                    toExclusive,
+                    DateTime.Now,
+                    employeeName,
+                    amount
+                );
+                Save();
+                return result;
+            }
+        }
+
+        public static CashMonthCloseResult CloseConstitutionMonth(
+            DateTime monthStart,
+            DateTime nextMonthStart,
+            IReadOnlyDictionary<string, double> workedHours)
+        {
+            lock (Gate)
+            {
+                var result = CashConstitutionEngine.CloseMonth(
+                    _items,
+                    monthStart,
+                    nextMonthStart,
+                    DateTime.Now,
+                    workedHours
+                );
+                Save();
+                return result;
+            }
+        }
+
+        public static int GetConstitutionBreakdown(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            lock (Gate)
+            {
+                CashConstitutionEngine.Normalize(_items, fromInclusive, toExclusive);
+                return CashConstitutionEngine.GetBreakdown(
+                    _items,
+                    fromInclusive,
+                    toExclusive
+                );
+            }
+        }
+
+        public static int GetConstitutionRecommendationTotal(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            lock (Gate)
+            {
+                CashConstitutionEngine.Normalize(_items, fromInclusive, toExclusive);
+                return CashConstitutionEngine.GetRecommendationTotal(
+                    _items,
+                    fromInclusive,
+                    toExclusive
+                );
+            }
+        }
+
+        public static int GetConstitutionFormalizedTotal(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            lock (Gate)
+            {
+                return _items
+                    .Where(item =>
+                        item.CreatedAt >= fromInclusive &&
+                        item.CreatedAt < toExclusive &&
+                        (item.Kind == CashReconciliationKind.CashShortage ||
+                         item.Kind == CashReconciliationKind.CashlessShortage))
+                    .Sum(item => Math.Max(0, item.FormalizedAmount));
+            }
+        }
+
+        public static IReadOnlyList<CashAccountingAssignment>
+            GetUnpostedFormalizedAssignments()
+        {
+            lock (Gate)
+            {
+                return _items
+                    .Where(item =>
+                        item.FormalizedAmount > item.PostedFormalizedAmount &&
+                        !string.IsNullOrWhiteSpace(item.ResponsibleEmployeeName))
+                    .OrderBy(item => item.CreatedAt)
+                    .Select(item => new CashAccountingAssignment
+                    {
+                        EmployeeName = item.ResponsibleEmployeeName.Trim(),
+                        Amount = item.FormalizedAmount - item.PostedFormalizedAmount,
+                        ReconciliationId = item.Id,
+                        Reason = string.IsNullOrWhiteSpace(item.ResolutionNote)
+                            ? "Оформленная потеря кассы"
+                            : item.ResolutionNote
+                    })
+                    .ToList();
+            }
+        }
+
+        public static bool TryGetFormalizedPosting(
+            Guid reconciliationId,
+            out string employeeName,
+            out int unpostedAmount,
+            out int targetFormalizedAmount)
+        {
+            lock (Gate)
+            {
+                var item = _items.FirstOrDefault(entry => entry.Id == reconciliationId);
+                if (item == null)
+                {
+                    employeeName = "";
+                    unpostedAmount = 0;
+                    targetFormalizedAmount = 0;
+                    return false;
+                }
+
+                employeeName = item.ResponsibleEmployeeName.Trim();
+                targetFormalizedAmount = Math.Max(0, item.FormalizedAmount);
+                unpostedAmount = Math.Max(
+                    0,
+                    targetFormalizedAmount - item.PostedFormalizedAmount
+                );
+                return unpostedAmount > 0 &&
+                       !string.IsNullOrWhiteSpace(employeeName);
+            }
+        }
+
+        public static void MarkFormalizedPosted(
+            Guid reconciliationId,
+            int targetFormalizedAmount)
+        {
+            lock (Gate)
+            {
+                var item = _items.FirstOrDefault(entry => entry.Id == reconciliationId);
+                if (item == null)
+                    return;
+
+                item.PostedFormalizedAmount = Math.Max(
+                    item.PostedFormalizedAmount,
+                    Math.Min(item.FormalizedAmount, targetFormalizedAmount)
+                );
+                Save();
+            }
+        }
 
         public static int RenameEmployeeReferences(
             string oldEmployeeName,
@@ -308,6 +575,8 @@ namespace ClubTimerXbox.Services
                 return false;
 
             item.SuspectedEmployeeName = nextName;
+            if (string.IsNullOrWhiteSpace(item.ResponsibleEmployeeName))
+                item.ResponsibilityLevel = CashResponsibilityLevel.Suspected;
 
             if (!string.IsNullOrWhiteSpace(note))
                 AppendNote(item, note.Trim());
@@ -1169,8 +1438,25 @@ namespace ClubTimerXbox.Services
 
                 item.Amount = 0;
             }
+            if (IsExtraKind(item.Kind))
+            {
+                foreach (var contribution in item.ExtraContributions)
+                {
+                    contribution.ResolvedAmount += contribution.Amount;
+                    contribution.Amount = 0;
+                }
+            }
 
             item.Status = CashReconciliationStatus.Resolved;
+            item.Stage = CashReconciliationStage.Ready;
+            item.Resolution = resolutionType switch
+            {
+                "PaymentTypeMistake" => CashReconciliationResolution.PairedTender,
+                "RealShortage" => CashReconciliationResolution.FormalizedLoss,
+                "ConfirmedExtra" => CashReconciliationResolution.OwnerBaseline,
+                _ => CashReconciliationResolution.Legacy
+            };
+            item.ClosedAtCheckpointNumber = DateTime.UtcNow.Ticks;
             item.ResolvedAt = DateTime.Now;
             item.ResolvedBy = string.IsNullOrWhiteSpace(resolvedBy)
                 ? "Владелец"
@@ -1405,7 +1691,9 @@ namespace ClubTimerXbox.Services
             };
 
             string json = JsonSerializer.Serialize(_items, options);
-            File.WriteAllText(FilePath, json);
+            string temporaryPath = FilePath + ".tmp";
+            File.WriteAllText(temporaryPath, json);
+            File.Move(temporaryPath, FilePath, true);
         }
     }
 }

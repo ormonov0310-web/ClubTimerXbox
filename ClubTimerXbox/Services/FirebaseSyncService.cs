@@ -503,57 +503,33 @@ namespace ClubTimerXbox.Services
                     : 0;
                 DateTime reconciliationCycleStart = CashBalanceCheckpointService
                     .GetCurrentCycleStart(monthStart, nextMonthStart);
-                int openCycleShortages = CashReconciliationService.GetOpenShortageTotal(
-                    reconciliationCycleStart,
-                    nextMonthStart
-                );
-                int openCycleExtras = CashReconciliationService.GetOpenExtraTotal(
-                    reconciliationCycleStart,
-                    nextMonthStart
-                );
-                int openCycleNetShortage = Math.Max(0, openCycleShortages - openCycleExtras);
-                int openCycleNetExtra = Math.Max(0, openCycleExtras - openCycleShortages);
+                int constitutionBreakdown = CashReconciliationService
+                    .GetConstitutionBreakdown(monthStart, nextMonthStart);
+                int constitutionRecommendations = CashReconciliationService
+                    .GetConstitutionRecommendationTotal(monthStart, nextMonthStart);
                 var cycleFormalizedMoneyLossesByEmployee = EmployeeLossService
                     .GetCappedUnpaidMoneyTotalsByEmployee(
-                        reconciliationCycleStart,
+                        monthStart,
                         nextMonthStart,
                         null
                     );
                 int cycleFormalizedMoneyLosses = cycleFormalizedMoneyLossesByEmployee
                     .Values
                     .Sum();
-                bool hasCurrentMoneyDifference =
-                    moneyActualBalanceMonth.HasValue &&
-                    (moneyShortageMonth > 0 || moneyExtraMonth > 0);
-                int accountabilityShortage = hasCurrentMoneyDifference
-                    ? moneyShortageMonth
-                    : Math.Max(
-                        moneyShortageMonth,
-                        cycleFormalizedMoneyLosses + openCycleNetShortage
-                    );
-                int accountabilityFormalized = Math.Min(
-                    accountabilityShortage,
-                    cycleFormalizedMoneyLosses
-                );
-                int accountabilityPending = hasCurrentMoneyDifference
-                    ? Math.Max(0, accountabilityShortage - accountabilityFormalized)
-                    : Math.Max(
-                        openCycleNetShortage,
-                        Math.Max(0, accountabilityShortage - accountabilityFormalized)
-                    );
-                int accountabilityExtra = hasCurrentMoneyDifference
-                    ? moneyExtraMonth
-                    : Math.Max(moneyExtraMonth, openCycleNetExtra);
+                int accountabilityShortage = Math.Max(0, -constitutionBreakdown);
+                int accountabilityExtra = Math.Max(0, constitutionBreakdown);
+                int accountabilityFormalized = cycleFormalizedMoneyLosses;
+                int accountabilityPending = constitutionRecommendations;
                 string accountabilityResponsible = CashReconciliationService
                     .GetSuggestedResponsibleForOpenShortages(
-                        reconciliationCycleStart,
+                        monthStart,
                         nextMonthStart
                     );
                 if (string.IsNullOrWhiteSpace(accountabilityResponsible))
                 {
                     string historicalResponsible = CashReconciliationService
                         .GetSuggestedResponsibleForShortageHistory(
-                            reconciliationCycleStart,
+                            monthStart,
                             nextMonthStart
                         );
                     if (cycleFormalizedMoneyLossesByEmployee.TryGetValue(
@@ -566,7 +542,7 @@ namespace ClubTimerXbox.Services
                 }
                 string accountabilitySuspect = string.IsNullOrWhiteSpace(accountabilityResponsible)
                     ? CashReconciliationService.GetSuggestedSuspectForOpenShortages(
-                        reconciliationCycleStart,
+                        monthStart,
                         nextMonthStart
                     )
                     : "";
@@ -575,7 +551,7 @@ namespace ClubTimerXbox.Services
                 {
                     accountabilitySuspect = CashReconciliationService
                         .GetSuggestedSuspectForShortageHistory(
-                            reconciliationCycleStart,
+                            monthStart,
                             nextMonthStart
                         );
                 }
@@ -720,10 +696,17 @@ namespace ClubTimerXbox.Services
                     .Select(item => new
                     {
                         id = item.Id.ToString(),
+                        accountingSchemaVersion = item.AccountingSchemaVersion,
                         createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                         kind = item.Kind.ToString(),
                         status = item.Status.ToString(),
                         origin = item.Origin.ToString(),
+                        stage = item.Stage.ToString(),
+                        responsibilityLevel = item.ResponsibilityLevel.ToString(),
+                        resolution = item.Resolution.ToString(),
+                        investigationId = item.InvestigationId.ToString(),
+                        checkpointNumber = item.CheckpointNumber,
+                        closedAtCheckpointNumber = item.ClosedAtCheckpointNumber,
                         amount = item.Amount,
                         originalAmount = item.OriginalAmount,
                         resolvedAmount = item.ResolvedAmount,
@@ -3672,30 +3655,57 @@ namespace ClubTimerXbox.Services
                 command.Description
             );
 
+            if (command.ResolutionType == "ConfirmedExtra" &&
+                (item.Kind == CashReconciliationKind.CashExtra ||
+                 item.Kind == CashReconciliationKind.CashlessExtra))
+            {
+                var monthStart = ResolveReconciliationMonth(command, item);
+                var nextMonthStart = monthStart.AddMonths(1);
+                int? actualCash = CalculateActualCashBalanceByPeriod(
+                    monthStart,
+                    nextMonthStart
+                );
+                int? actualCashless = CalculateActualCashlessBalanceByPeriod(
+                    monthStart,
+                    nextMonthStart
+                );
+
+                if (actualCash.HasValue)
+                {
+                    CashBalanceCheckpointService.AddCurrentMonthCheckpoint(
+                        actualCash.Value,
+                        $"Излишек {actionAmount} сом принят владельцем в новый остаток."
+                    );
+                }
+                if (actualCashless.HasValue)
+                {
+                    CashlessService.SetAmountForToday(
+                        actualCashless.Value,
+                        $"Излишек {actionAmount} сом принят владельцем в новый остаток.",
+                        actualCashless.Value
+                    );
+                }
+            }
+
             if (command.ResolutionType == "RealShortage" &&
                 actionAmount > 0 &&
                 item.Kind == CashReconciliationKind.CashShortage)
             {
-                string description =
-                    $"Сверка налички закрыта владельцем как реальная недостача.\n" +
-                    $"Должно быть: {item.ExpectedAmount} сом\n" +
-                    $"Фактически: {item.ActualAmount} сом\n" +
-                    $"Недостача: {actionAmount} сом";
-
-                CashService.AddShortage(
-                    checkedByEmployeeName: item.CheckedByEmployeeName,
-                    responsibleEmployeeName: item.ResponsibleEmployeeName,
-                    title: "Недостача наличных",
-                    description: description,
-                    amount: actionAmount
-                );
-
-                EmployeeLossService.AddCashShortage(
-                    responsibleEmployeeName: item.ResponsibleEmployeeName,
-                    checkedByEmployeeName: item.CheckedByEmployeeName,
-                    description: description,
-                    amount: actionAmount,
-                    isFixed: true
+                CashPenaltyPostingService.Post(
+                    new[]
+                    {
+                        new CashAccountingAssignment
+                        {
+                            EmployeeName = item.ResponsibleEmployeeName,
+                            Amount = actionAmount,
+                            ReconciliationId = item.Id,
+                            Reason =
+                                $"Владелец подтвердил недостачу наличных. " +
+                                $"Должно быть {item.ExpectedAmount} сом, " +
+                                $"фактически {item.ActualAmount} сом."
+                        }
+                    },
+                    "Сверка налички закрыта владельцем как реальная недостача."
                 );
             }
 
@@ -3712,6 +3722,10 @@ namespace ClubTimerXbox.Services
                     nextMonthStart,
                     item.ExpectedAmount,
                     item.ActualAmount
+                );
+                CashReconciliationService.MarkFormalizedPosted(
+                    item.Id,
+                    item.FormalizedAmount
                 );
             }
 
@@ -3764,99 +3778,20 @@ namespace ClubTimerXbox.Services
                     : "Тип: фиксированная денежная потеря.\nЭта запись не уменьшается автоматической балансировкой кассы.");
             var (monthStart, nextMonthStart) = ParseCommandMonth(command.MonthKey);
             DateTime reconciliationFrom = monthStart;
-            bool isCurrentMonth = monthStart.Year == DateTime.Today.Year &&
-                                  monthStart.Month == DateTime.Today.Month;
-            if (isCurrentMonth)
-            {
-                reconciliationFrom = CashBalanceCheckpointService
-                    .GetCurrentCycleStart(monthStart, nextMonthStart);
-            }
 
             if (lossKind == "money")
             {
-                CashReconciliationService.NetOpenMoneyCorrections(
+                var result = CashReconciliationService.ApplyConstitutionManualLoss(
                     reconciliationFrom,
                     nextMonthStart,
-                    "Система",
-                    "Встречные суммы текущего цикла зачтены перед ручным оформлением потери."
+                    employee.Name,
+                    command.Amount
                 );
-                int openShortageTotal = CashReconciliationService.GetOpenShortageTotal(
-                    reconciliationFrom,
-                    nextMonthStart
+                CashPenaltyPostingService.Post(
+                    result.Assignments,
+                    $"{title}. {fullDescription}"
                 );
-                int openExtraTotal = CashReconciliationService.GetOpenExtraTotal(
-                    reconciliationFrom,
-                    nextMonthStart
-                );
-                int availableShortage = Math.Max(0, openShortageTotal - openExtraTotal);
-
-                if (isCurrentMonth)
-                {
-                    int? moneyShortage = CalculateMoneyShortageCapForReconciliation(
-                        monthStart,
-                        nextMonthStart
-                    );
-                    int cycleMoneyLosses = EmployeeLossService
-                        .GetCappedUnpaidMoneyTotalsByEmployee(
-                            reconciliationFrom,
-                            nextMonthStart,
-                            null
-                        )
-                        .Values
-                        .Sum();
-                    int uncoveredBalanceShortage = moneyShortage.HasValue
-                        ? Math.Max(0, moneyShortage.Value - cycleMoneyLosses)
-                        : 0;
-
-                    if (uncoveredBalanceShortage > 0)
-                    {
-                        int missingOpenAmount = Math.Max(
-                            0,
-                            uncoveredBalanceShortage - availableShortage
-                        );
-
-                        if (missingOpenAmount > 0)
-                        {
-                            var balance = CashBalanceSummaryService.Build(
-                                monthStart,
-                                nextMonthStart
-                            );
-                            CashReconciliationService.AddBalanceRawDifference(
-                                expectedAmount: balance.ProgramCashlessBalance ?? balance.ExpectedCashlessBalance,
-                                actualAmount: balance.ActualCashlessBalance ?? 0,
-                                amount: missingOpenAmount,
-                                isShortage: true,
-                                note:
-                                    $"Восстановлен непокрытый остаток для ручного оформления: {missingOpenAmount} сом. " +
-                                    $"Выбран сотрудник {employee.Name}.",
-                                responsibleEmployeeName: employee.Name
-                            );
-                            availableShortage += missingOpenAmount;
-                        }
-
-                        availableShortage = Math.Min(
-                            availableShortage,
-                            uncoveredBalanceShortage
-                        );
-                    }
-                }
-
-                if (availableShortage <= 0)
-                    throw new Exception("Нет открытой недостачи в разборе кассы. Используйте штраф за нарушение.");
-
-                if (command.Amount > availableShortage)
-                    throw new Exception($"Нельзя оформить за потери больше открытой недостачи: {availableShortage} сом.");
-            }
-
-            if (lossKind == "money")
-            {
-                CashService.AddShortage(
-                    checkedByEmployeeName: "Владелец",
-                    responsibleEmployeeName: employee.Name,
-                    title: title,
-                    description: fullDescription,
-                    amount: command.Amount
-                );
+                return;
             }
 
             EmployeeLossService.AddLoss(
@@ -3879,16 +3814,6 @@ namespace ClubTimerXbox.Services
                     nextMonthStart,
                     command.Amount,
                     $"Оформлено ручным штрафом за нарушение на {employee.Name}: {command.Amount} сом."
-                );
-            }
-            else
-            {
-                CashReconciliationService.FormalizeOpenShortagesForPeriod(
-                    reconciliationFrom,
-                    nextMonthStart,
-                    command.Amount,
-                    "Владелец",
-                    $"Оформлено ручным денежным штрафом на {employee.Name}: {command.Amount} сом."
                 );
             }
         }
@@ -3945,12 +3870,24 @@ namespace ClubTimerXbox.Services
             if (cashlessSuspectFrom < reconciliationCycleStart)
                 cashlessSuspectFrom = reconciliationCycleStart;
             int difference = actualCashless - expectedCashlessBalance;
-
-            CashReconciliationService.SupersedeOpenCashlessVerifications(
-                reconciliationCycleStart,
-                nextMonthStart,
-                "Закрыто новой полной сверкой безнала. Актуальная разница записана отдельной карточкой."
-            );
+            int shortage = Math.Max(0, -difference);
+            string suspectedEmployee = shortage > 0
+                ? FindCashlessShortageSuspect(
+                    shortage,
+                    cashlessSuspectFrom,
+                    DateTime.Now
+                )
+                : "";
+            var notes = new List<string>
+            {
+                $"Поступило безнала по программе: {expectedCashlessIncome} сом.",
+                $"Расходы безнала: {cashlessExpenses} сом.",
+                $"Ожидаемый остаток безнала: {expectedCashlessBalance} сом.",
+                $"Фактический остаток: {actualCashless} сом.",
+                $"Разница: {difference:+#;-#;0} сом."
+            };
+            if (!string.IsNullOrWhiteSpace(suspectedEmployee))
+                notes.Add($"Рекомендация системы: проверить безнал-операции сотрудника {suspectedEmployee}.");
 
             CashlessService.SetAmountForToday(
                 amount: actualCashless,
@@ -3960,140 +3897,27 @@ namespace ClubTimerXbox.Services
                 expectedAmount: expectedCashlessBalance
             );
 
-            if (difference == 0)
-            {
-                CashReconciliationService.ResolveStaleCashlessZeroBaselineArtifacts(
-                    reconciliationCycleStart,
-                    nextMonthStart,
-                    expectedCashlessBalance,
-                    actualCashless
-                );
-
-                return "Остаток безнала сошелся.";
-            }
-
-            if (difference > 0)
-            {
-                var cashlessExtra = CashReconciliationService.AddCashlessVerification(
-                    expectedAmount: expectedCashlessBalance,
-                    actualAmount: actualCashless,
-                    amount: difference,
-                    status: CashReconciliationStatus.Open,
-                    note: $"Фактический остаток безнала больше программы на {difference} сом. Оставлено как резерв для ошибок типа оплаты."
-                );
-                int netted = CashReconciliationService.NetOpenMoneyCorrections(
-                    reconciliationCycleStart,
-                    nextMonthStart,
-                    "Система",
-                    "Общий зачёт после сверки безнала."
-                );
-
-                if (cashlessExtra.Status == CashReconciliationStatus.Resolved)
-                    return $"Остаток безнала больше программы на {difference} сом. Общий зачёт после сверки закрыл разбор кассы на {netted} сом.";
-
-                if (netted > 0)
-                    return $"Остаток безнала больше программы на {difference} сом. Общий зачёт закрыл {netted} сом. Остаток излишка: {cashlessExtra.Amount} сом.";
-
-                return $"Остаток безнала больше программы на {difference} сом. Излишек оставлен как резерв.";
-            }
-
-            int shortage = Math.Abs(difference);
-            string suspectedEmployee = FindCashlessShortageSuspect(
-                shortage,
-                cashlessSuspectFrom,
-                DateTime.Now
-            );
-            var notes = new List<string>
-            {
-                $"Поступило безнала по программе: {expectedCashlessIncome} сом.",
-                $"Расходы безнала: {cashlessExpenses} сом.",
-                $"Ожидаемый остаток безнала: {expectedCashlessBalance} сом.",
-                $"Фактический остаток: {actualCashless} сом.",
-                $"Недостача остатка безнала: {shortage} сом."
-            };
-            if (!string.IsNullOrWhiteSpace(suspectedEmployee))
-                notes.Add($"Рекомендация системы: проверить безнал-операции сотрудника {suspectedEmployee}.");
-
-            var reconciliation = CashReconciliationService.AddCashlessVerification(
-                expectedAmount: expectedCashlessBalance,
-                actualAmount: actualCashless,
-                amount: shortage,
-                status: CashReconciliationStatus.Open,
-                note: string.Join("\n", notes),
-                suspectedEmployeeName: suspectedEmployee
-            );
-            int nettedShortage = CashReconciliationService.NetOpenMoneyCorrections(
-                reconciliationCycleStart,
-                nextMonthStart,
-                "Система",
-                "Общий зачёт после сверки безнала."
-            );
-
-            if (reconciliation.Status == CashReconciliationStatus.Resolved)
-            {
-                notes.Add($"Общий зачёт после сверки закрыл разбор кассы на {nettedShortage} сом.");
-                return string.Join(" ", notes);
-            }
-
-            if (nettedShortage > 0)
-                notes.Add($"Общий зачёт закрыл встречные излишки и недостачи на {nettedShortage} сом. Активный остаток недостачи: {reconciliation.Amount} сом.");
-
-            int? moneyShortageCap = CalculateMoneyShortageCapForReconciliation(
+            var result = CashReconciliationService.ProcessCashlessVerification(
                 monthStart,
-                nextMonthStart
+                nextMonthStart,
+                expectedCashlessBalance,
+                actualCashless,
+                suspectedEmployee,
+                string.Join("\n", notes)
             );
-            int rawExistingMoneyLosses = EmployeeLossService
-                .GetCappedUnpaidMoneyTotalsByEmployee(
-                    reconciliationCycleStart,
-                    nextMonthStart,
-                    null
-                )
-                .Values
-                .Sum();
-            int otherOpenShortages = Math.Max(
-                0,
-                CashReconciliationService.GetOpenShortageTotal(
-                    reconciliationCycleStart,
-                    nextMonthStart
-                ) - reconciliation.Amount
-            );
-            int allowedNewMoneyShortage = moneyShortageCap.HasValue
-                ? Math.Max(
-                    0,
-                    moneyShortageCap.Value -
-                    rawExistingMoneyLosses -
-                    otherOpenShortages
-                )
-                : reconciliation.Amount;
-            int finalShortage = Math.Min(reconciliation.Amount, allowedNewMoneyShortage);
-
-            if (finalShortage <= 0)
-            {
-                CashReconciliationService.Resolve(
-                    reconciliation.Id,
-                    "Система",
-                    "PaymentTypeMistake",
-                    "Общая касса нал+безнал уже покрыта существующими денежными удержаниями. Новый штраф не создан."
-                );
-                notes.Add("Общая денежная недостача уже покрыта существующими удержаниями. Новый штраф не создан.");
-                return string.Join(" ", notes);
-            }
-
-            CashReconciliationService.UpdateOpenAmount(
-                reconciliation.Id,
-                finalShortage,
-                finalShortage == shortage
-                    ? "Оставлено активной карточкой в разделе Разница кассы."
-                    : $"После общего сопоставления нал+безнал активная сумма уменьшена до {finalShortage} сом."
+            PersistCashAssignments(
+                result.Assignments,
+                "Автоматически оформлено связанной сверкой безнала."
             );
 
-            if (moneyShortageCap.HasValue)
-            {
-                notes.Add($"Общая денежная недостача кассы: {moneyShortageCap.Value} сом.");
-                notes.Add($"Уже было денежных удержаний: {rawExistingMoneyLosses} сом.");
-            }
-
-            notes.Add($"Активная карточка на {finalShortage} сом добавлена в Разница кассы. Владелец может закрыть её или оформить как потери.");
+            if (result.PairedAmount > 0)
+                notes.Add($"Связанной парой нал/безнал закрыто: {result.PairedAmount} сом.");
+            if (result.SettledAmount > 0)
+                notes.Add($"Свободным излишком закрыто по приоритету: {result.SettledAmount} сом.");
+            if (result.Assignments.Count > 0)
+                notes.Add($"Автоматически оформлено подтверждённых потерь: {result.Assignments.Sum(item => item.Amount)} сом.");
+            notes.Add($"Разбор после сверки: {result.Breakdown:+#;-#;0} сом.");
+            notes.Add($"Рекомендации: {result.RecommendationTotal} сом.");
             return string.Join(" ", notes);
         }
 
@@ -4238,130 +4062,70 @@ namespace ClubTimerXbox.Services
             int totalDifference = actualCash.HasValue
                 ? actualCash.Value + actualCashless - expectedCash - expectedCashless
                 : actualCashless - expectedCashless;
-            var existingMoneyLossesByEmployee = EmployeeLossService
-                .GetCappedUnpaidMoneyTotalsByEmployee(
-                    reconciliationCycleStart,
-                    nextMonthStart,
-                    null
-                );
-            int rawExistingMoneyLosses = existingMoneyLossesByEmployee
-                .Values
-                .Sum();
-            int finalRawDifference = totalDifference < 0
-                ? -Math.Max(0, Math.Abs(totalDifference) - rawExistingMoneyLosses)
-                : totalDifference;
             string note = string.IsNullOrWhiteSpace(command.Description)
                 ? "Баланс безнала владельцем"
                 : command.Description;
-
-            int netted = CashReconciliationService.NetOpenMoneyCorrections(
-                reconciliationCycleStart,
-                nextMonthStart,
-                "Система",
-                "Открытые излишки и недостачи взаимно зачтены перед итоговой корректировкой."
+            int cashlessDifference = actualCashless - expectedCashless;
+            string suggestedSuspect = cashlessDifference < 0
+                ? FindCashlessShortageSuspect(
+                    Math.Abs(cashlessDifference),
+                    reconciliationCycleStart,
+                    DateTime.Now
+                )
+                : "";
+            var verificationResult = CashReconciliationService
+                .ProcessCashlessVerification(
+                    monthStart,
+                    nextMonthStart,
+                    expectedCashless,
+                    actualCashless,
+                    suggestedSuspect,
+                    "Связанная сверка безнала внутри итоговой корректировки."
+                );
+            PersistCashAssignments(
+                verificationResult.Assignments,
+                "Автоматически оформлено связанной сверкой внутри корректировки."
             );
-            int autoFormalizedShortage = 0;
-            var autoFormalizedAssignments = new List<string>();
-            if (finalRawDifference < 0)
-            {
-                int remainingToFormalize = Math.Abs(finalRawDifference);
-                var responsibleShortages = CashReconciliationService
-                    .GetOpenResponsibleShortageTotals(
-                        reconciliationCycleStart,
-                        nextMonthStart
-                    );
 
-                foreach (var responsibleShortage in responsibleShortages)
-                {
-                    if (remainingToFormalize <= 0)
-                        break;
+            long checkpointNumber = DateTime.UtcNow.Ticks;
+            var correctionResult = CashReconciliationService
+                .ApplyConstitutionCorrection(
+                    monthStart,
+                    nextMonthStart,
+                    checkpointNumber
+                );
+            PersistCashAssignments(
+                correctionResult.Assignments,
+                "Оформлено итоговой корректировкой по Конституции кассы."
+            );
 
-                    int requestedAmount = Math.Min(
-                        responsibleShortage.Amount,
-                        remainingToFormalize
-                    );
-                    int formalizedAmount = CashReconciliationService
-                        .FormalizeOpenShortagesForEmployee(
-                            reconciliationCycleStart,
-                            nextMonthStart,
-                            responsibleShortage.EmployeeName,
-                            requestedAmount,
-                            "Система",
-                            $"После общей сверки подтверждена недостача {requestedAmount} сом. " +
-                            $"Оформлено на {responsibleShortage.EmployeeName} только из его подтверждённых карточек."
-                        );
-
-                    if (formalizedAmount <= 0)
-                        continue;
-
-                    string description =
-                        $"Общая сверка подтвердила денежную недостачу {formalizedAmount} сом.\n" +
-                        $"Наличные факт: {(actualCash.HasValue ? actualCash.Value.ToString() : "нет приёмки")} сом.\n" +
-                        $"Безнал факт: {actualCashless} сом.";
-
-                    CashService.AddShortage(
-                        checkedByEmployeeName: "Система",
-                        responsibleEmployeeName: responsibleShortage.EmployeeName,
-                        title: "Недостача после сверки кассы",
-                        description: description,
-                        amount: formalizedAmount
-                    );
-
-                    EmployeeLossService.AddLoss(
-                        responsibleEmployeeName: responsibleShortage.EmployeeName,
-                        checkedByEmployeeName: "Система",
-                        lossType: "Недостача кассы",
-                        title: "Недостача кассы",
-                        description:
-                            $"Автоматически оформлено после общей сверки кассы: {formalizedAmount} сом.",
-                        amount: formalizedAmount,
-                        note: "Оформлено только из подтверждённой карточки ответственного сотрудника.",
-                        lossKind: "money",
-                        isFixed: true
-                    );
-
-                    autoFormalizedShortage += formalizedAmount;
-                    remainingToFormalize -= formalizedAmount;
-                    autoFormalizedAssignments.Add(
-                        $"{responsibleShortage.EmployeeName}: {formalizedAmount} сом"
-                    );
-                }
-
-                finalRawDifference += autoFormalizedShortage;
-            }
+            int existingMoneyLosses =
+                CashReconciliationService.GetConstitutionFormalizedTotal(
+                    reconciliationCycleStart,
+                    nextMonthStart
+                );
+            int representedCycleDifference =
+                CashReconciliationService.GetConstitutionBreakdown(
+                    reconciliationCycleStart,
+                    nextMonthStart
+                );
+            int missingDifference = CashConstitutionEngine
+                .CalculateUnrepresentedDifference(
+                    totalDifference,
+                    existingMoneyLosses,
+                    representedCycleDifference
+                );
 
             string suggestedResponsible =
                 CashReconciliationService.GetSuggestedResponsibleForOpenShortages(
-                    reconciliationCycleStart,
+                    monthStart,
                     nextMonthStart
                 );
-            string suggestedSuspect =
-                CashReconciliationService.GetSuggestedSuspectForOpenShortages(
-                    reconciliationCycleStart,
-                    nextMonthStart
-                );
-            if (string.IsNullOrWhiteSpace(suggestedResponsible) &&
-                string.IsNullOrWhiteSpace(suggestedSuspect))
-            {
-                string historicalResponsible = CashReconciliationService
-                    .GetSuggestedResponsibleForShortageHistory(
-                        reconciliationCycleStart,
-                        nextMonthStart
-                    );
-                if (existingMoneyLossesByEmployee.TryGetValue(
-                        historicalResponsible,
-                        out int historicalFormalizedAmount) &&
-                    historicalFormalizedAmount > 0)
-                {
-                    suggestedSuspect = historicalResponsible;
-                }
-            }
-            if (string.IsNullOrWhiteSpace(suggestedResponsible) &&
-                string.IsNullOrWhiteSpace(suggestedSuspect))
+            if (string.IsNullOrWhiteSpace(suggestedSuspect))
             {
                 suggestedSuspect = CashReconciliationService
-                    .GetSuggestedSuspectForShortageHistory(
-                        reconciliationCycleStart,
+                    .GetSuggestedSuspectForOpenShortages(
+                        monthStart,
                         nextMonthStart
                     );
             }
@@ -4373,15 +4137,27 @@ namespace ClubTimerXbox.Services
                     ? ShiftAcceptanceService.Current.ResponsibleEmployeeName.Trim()
                     : ShiftAcceptanceService.Current.DisplayResponsibleEmployeeName.Trim();
             }
-            string rawRecommendation = !string.IsNullOrWhiteSpace(suggestedResponsible)
-                ? suggestedResponsible
-                : suggestedSuspect;
 
-            int closed = CashReconciliationService.CloseOpenItemsForBalance(
-                reconciliationCycleStart,
+            var rawResult = CashReconciliationService.AddConstitutionRawDifference(
+                monthStart,
                 nextMonthStart,
-                "Владелец",
-                $"Баланс зафиксирован: безнал {actualCashless} сом. Текущий цикл закрыт перед новой итоговой корректировкой."
+                missingDifference,
+                expectedCashless,
+                actualCashless,
+                suggestedResponsible,
+                string.IsNullOrWhiteSpace(suggestedResponsible)
+                    ? suggestedSuspect
+                    : "",
+                $"Не представленная карточками разница итоговой корректировки: {missingDifference:+#;-#;0} сом."
+            );
+            var finalCorrection = CashReconciliationService.ApplyConstitutionCorrection(
+                monthStart,
+                nextMonthStart,
+                checkpointNumber
+            );
+            PersistCashAssignments(
+                finalCorrection.Assignments,
+                "Оформлено после переноса остатка итоговой корректировки."
             );
 
             CashlessService.SetAmountForToday(
@@ -4397,62 +4173,41 @@ namespace ClubTimerXbox.Services
                     note
                 );
             }
-
-            if (finalRawDifference != 0)
-            {
-                string cashFactText = actualCash.HasValue
-                    ? $"{actualCash.Value} сом"
-                    : "нет приёмки";
-                string rawNote =
-                    "Итоговая сырая корректировка после баланса.\n" +
-                    $"Наличные по программе: {expectedCash} сом\n" +
-                    $"Наличные факт: {cashFactText}\n" +
-                    $"Коррекция программы по наличке: {cashDifference:+#;-#;0} сом\n" +
-                    $"Безнал по программе: {expectedCashless} сом\n" +
-                    $"Безнал факт: {actualCashless} сом\n" +
-                    $"Общая денежная разница: {totalDifference:+#;-#;0} сом\n" +
-                    $"Уже есть денежных удержаний: {rawExistingMoneyLosses} сом\n" +
-                    $"Итог после учета удержаний: {(finalRawDifference < 0 ? "сырые потери" : "излишек")} {Math.Abs(finalRawDifference)} сом";
-
-                if (finalRawDifference < 0 && !string.IsNullOrWhiteSpace(rawRecommendation))
-                    rawNote += $"\nРекомендация системы: проверить сотрудника {rawRecommendation}.";
-
-                CashReconciliationService.AddBalanceRawDifference(
-                    expectedAmount: expectedCashless,
-                    actualAmount: actualCashless,
-                    amount: Math.Abs(finalRawDifference),
-                    isShortage: finalRawDifference < 0,
-                    note: rawNote,
-                    responsibleEmployeeName: finalRawDifference < 0
-                        ? suggestedResponsible
-                        : "",
-                    suspectedEmployeeName: finalRawDifference < 0 &&
-                        string.IsNullOrWhiteSpace(suggestedResponsible)
-                            ? suggestedSuspect
-                            : ""
+            int finalBreakdown = CashReconciliationService.GetConstitutionBreakdown(
+                monthStart,
+                nextMonthStart
+            );
+            int finalRecommendations =
+                CashReconciliationService.GetConstitutionRecommendationTotal(
+                    monthStart,
+                    nextMonthStart
                 );
-            }
+            int formalized = verificationResult.Assignments.Sum(item => item.Amount) +
+                             correctionResult.Assignments.Sum(item => item.Amount) +
+                             finalCorrection.Assignments.Sum(item => item.Amount);
+            int settled = verificationResult.PairedAmount +
+                          verificationResult.SettledAmount +
+                          correctionResult.SettledAmount +
+                          rawResult.SettledAmount +
+                          finalCorrection.SettledAmount;
+            string cashFact = actualCash.HasValue
+                ? $"{actualCash.Value} сом"
+                : "нет приёмки";
 
-            string cashPart = actualCash.HasValue
-                ? $" Наличные зафиксированы: {actualCash.Value} сом."
-                : " Наличные не зафиксированы: в этом месяце нет приёмки.";
-            string formalizedPart = autoFormalizedAssignments.Count > 0
-                ? $" Автоматически оформлено: {string.Join(", ", autoFormalizedAssignments)}."
-                : "";
-            string rawPart = finalRawDifference == 0
-                ? " Сырых потерь и излишков после коррекции нет."
-                : finalRawDifference < 0
-                    ? $" В сырые потери перенесено {Math.Abs(finalRawDifference)} сом." +
-                      (!string.IsNullOrWhiteSpace(rawRecommendation)
-                          ? $" Рекомендация: {rawRecommendation}."
-                          : "")
-                    : $" В излишек перенесено {finalRawDifference} сом.";
+            return
+                $"Корректировка завершена. Наличные факт: {cashFact}. " +
+                $"Безнал факт: {actualCashless} сом. " +
+                $"Связано и взаимно зачтено: {settled} сом. " +
+                $"Оформлено потерь: {formalized} сом. " +
+                $"Разбор: {finalBreakdown:+#;-#;0} сом. " +
+                $"Рекомендации: {finalRecommendations} сом.";
+        }
 
-            string nettedPart = netted > 0
-                ? $" Взаимно зачтено старых разборов: {netted} сом."
-                : "";
-
-            return $"Баланс безнала зафиксирован: {actualCashless} сом.{cashPart}{nettedPart}{formalizedPart}{rawPart} Закрыто старых открытых сверок: {closed}.";
+        private static void PersistCashAssignments(
+            IEnumerable<CashAccountingAssignment> assignments,
+            string source)
+        {
+            CashPenaltyPostingService.Post(assignments, source);
         }
 
         private static int ForgiveExistingCashShortagesWithCashlessExtra(

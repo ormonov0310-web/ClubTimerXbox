@@ -45,6 +45,8 @@ namespace ClubTimerXbox
             }
 
             KnownDataRepairService.Apply();
+            CashPenaltyPostingService.Recover();
+            CashMonthCloseService.Start();
 
             var loginWindow = new LoginWindow();
 
