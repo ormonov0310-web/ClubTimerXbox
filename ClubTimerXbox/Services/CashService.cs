@@ -785,6 +785,30 @@ namespace ClubTimerXbox.Services
             return true;
         }
 
+        public static bool TryDeleteKnownShortage(
+            Guid id,
+            int expectedAmount,
+            string responsibleEmployeeName)
+        {
+            var record = _records.FirstOrDefault(item => item.Id == id);
+
+            if (record == null)
+                return false;
+
+            if (record.Category != "Недостачи" ||
+                record.Amount != expectedAmount ||
+                !record.RelatedEmployeeName.Equals(
+                    responsibleEmployeeName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            _records.Remove(record);
+            Save();
+            return true;
+        }
+
         public static int RenameExpenseCategoryByPeriod(
             DateTime fromInclusive,
             DateTime toExclusive,

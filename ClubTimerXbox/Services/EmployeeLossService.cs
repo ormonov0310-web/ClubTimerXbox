@@ -421,6 +421,32 @@ namespace ClubTimerXbox.Services
             return true;
         }
 
+        public static bool TryDeleteKnownFixedMoneyLoss(
+            Guid id,
+            int expectedAmount,
+            string responsibleEmployeeName)
+        {
+            var item = Items.FirstOrDefault(loss => loss.Id == id);
+
+            if (item == null)
+                return false;
+
+            if (!item.IsFixed ||
+                item.IsPaid ||
+                !IsMoneyLoss(item) ||
+                item.Amount != expectedAmount ||
+                !item.ResponsibleEmployeeName.Equals(
+                    responsibleEmployeeName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            Items.Remove(item);
+            Save();
+            return true;
+        }
+
         public static EmployeeLossItem AddProductShortage(
             string responsibleEmployeeName,
             string checkedByEmployeeName,

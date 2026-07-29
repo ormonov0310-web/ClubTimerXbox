@@ -36,11 +36,23 @@ namespace ClubTimerXbox.Services
         private static readonly Guid TelecomMirroredShortageId =
             Guid.Parse("10949a13-94a0-4bbb-8f68-b02e37fd8564");
 
-        private static readonly Guid[] TelecomMirroredLossIds =
+        private static readonly TelecomMirroredLoss[] TelecomMirroredLosses =
         {
-            Guid.Parse("03388413-e9d6-40b0-b1cc-1373ba1225a0"),
-            Guid.Parse("7d455234-e8b9-4f8e-8910-5ac2ebe7b2de"),
-            Guid.Parse("bf30727e-e21f-477c-a127-15813069f090")
+            new(
+                Guid.Parse("eedcbaf4-0a61-487f-a98f-48e318045dd7"),
+                Guid.Parse("bf30727e-e21f-477c-a127-15813069f090"),
+                TelecomSecondEmployee,
+                371),
+            new(
+                Guid.Parse("b1432746-3d5a-41d1-b4ca-3eeb18f43d92"),
+                Guid.Parse("7d455234-e8b9-4f8e-8910-5ac2ebe7b2de"),
+                CashCorrectionEmployee,
+                1490),
+            new(
+                Guid.Parse("ee7fd0d4-0976-49c9-878f-f9dc18fe60d7"),
+                Guid.Parse("03388413-e9d6-40b0-b1cc-1373ba1225a0"),
+                "\u0422\u0435\u0441\u0442",
+                9)
         };
 
         public static void Apply()
@@ -100,9 +112,25 @@ namespace ClubTimerXbox.Services
             if (!repaired)
                 return;
 
-            foreach (Guid lossId in TelecomMirroredLossIds)
-                EmployeeLossService.Delete(lossId);
+            foreach (var loss in TelecomMirroredLosses)
+            {
+                EmployeeLossService.TryDeleteKnownFixedMoneyLoss(
+                    loss.EmployeeLossId,
+                    loss.Amount,
+                    loss.EmployeeName);
+
+                CashService.TryDeleteKnownShortage(
+                    loss.CashRecordId,
+                    loss.Amount,
+                    loss.EmployeeName);
+            }
         }
+
+        private sealed record TelecomMirroredLoss(
+            Guid EmployeeLossId,
+            Guid CashRecordId,
+            string EmployeeName,
+            int Amount);
 
         private static void ApplyCashCorrectionRepair()
         {
