@@ -105,6 +105,24 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        public static bool HasCurrentCashlessVerification(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            int expectedAmount,
+            int actualAmount)
+        {
+            lock (Gate)
+            {
+                return CashConstitutionEngine.HasCurrentCashlessVerification(
+                    _items,
+                    fromInclusive,
+                    toExclusive,
+                    expectedAmount,
+                    actualAmount
+                );
+            }
+        }
+
         public static CashAccountingResult ApplyConstitutionCorrection(
             DateTime fromInclusive,
             DateTime toExclusive,
@@ -417,6 +435,64 @@ namespace ClubTimerXbox.Services
                 StringComparison.Ordinal);
             Save();
             return true;
+        }
+
+        public static bool TryRepairKnownMirroredCorrection(
+            Guid extraId,
+            Guid shortageId,
+            int expectedAmount)
+        {
+            lock (Gate)
+            {
+                var extra = _items.FirstOrDefault(item => item.Id == extraId);
+                var shortage = _items.FirstOrDefault(item => item.Id == shortageId);
+
+                if (extra == null ||
+                    shortage == null ||
+                    extra.Kind != CashReconciliationKind.CashlessExtra ||
+                    extra.Origin != CashReconciliationOrigin.BalanceRawDifference ||
+                    extra.OriginalAmount != expectedAmount ||
+                    shortage.Kind != CashReconciliationKind.CashlessShortage ||
+                    shortage.Origin != CashReconciliationOrigin.CashlessVerification ||
+                    shortage.OriginalAmount != expectedAmount ||
+                    extra.ExpectedAmount != shortage.ExpectedAmount ||
+                    extra.ActualAmount != shortage.ActualAmount)
+                {
+                    return false;
+                }
+
+                bool alreadyRepaired =
+                    shortage.FormalizedAmount == 0 &&
+                    shortage.Resolution == CashReconciliationResolution.InputCorrection &&
+                    extra.Resolution == CashReconciliationResolution.InputCorrection;
+
+                if (alreadyRepaired)
+                    return true;
+
+                if (shortage.FormalizedAmount != expectedAmount)
+                    return false;
+
+                shortage.Amount = 0;
+                shortage.ResolvedAmount = expectedAmount;
+                shortage.FormalizedAmount = 0;
+                shortage.PostedFormalizedAmount = 0;
+                shortage.Status = CashReconciliationStatus.Resolved;
+                shortage.Resolution = CashReconciliationResolution.InputCorrection;
+                shortage.ResolutionNote =
+                    "Технический дубль повторной сверки отменён восстановлением данных.";
+                shortage.ResolvedBy = "Система";
+
+                extra.Amount = 0;
+                extra.ResolvedAmount = expectedAmount;
+                extra.Status = CashReconciliationStatus.Resolved;
+                extra.Resolution = CashReconciliationResolution.InputCorrection;
+                extra.ResolutionNote =
+                    "Зеркальный технический излишек отменён восстановлением данных.";
+                extra.ResolvedBy = "Система";
+
+                Save();
+                return true;
+            }
         }
 
         public static bool TryReopenKnownSupersededRawDifference(

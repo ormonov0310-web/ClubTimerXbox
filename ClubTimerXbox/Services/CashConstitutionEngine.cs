@@ -559,6 +559,37 @@ namespace ClubTimerXbox.Services
             return targetOpenBreakdown - representedCycleDifference;
         }
 
+        public static bool HasCurrentCashlessVerification(
+            IEnumerable<CashReconciliationItem> items,
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            int expectedAmount,
+            int actualAmount)
+        {
+            var latestVerification = items
+                .Where(item =>
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    item.Origin == CashReconciliationOrigin.CashlessVerification &&
+                    (item.Kind == CashReconciliationKind.CashlessShortage ||
+                     item.Kind == CashReconciliationKind.CashlessExtra) &&
+                    item.ExpectedAmount == expectedAmount &&
+                    item.ActualAmount == actualAmount)
+                .OrderByDescending(item => item.CreatedAt)
+                .ThenByDescending(item => item.Id)
+                .FirstOrDefault();
+
+            if (latestVerification == null)
+                return false;
+
+            return !items.Any(item =>
+                item.CreatedAt > latestVerification.CreatedAt &&
+                item.CreatedAt < toExclusive &&
+                item.Origin == CashReconciliationOrigin.CashAcceptance &&
+                (item.Kind == CashReconciliationKind.CashShortage ||
+                 item.Kind == CashReconciliationKind.CashExtra));
+        }
+
         public static void Normalize(
             IList<CashReconciliationItem> items,
             DateTime fromInclusive,

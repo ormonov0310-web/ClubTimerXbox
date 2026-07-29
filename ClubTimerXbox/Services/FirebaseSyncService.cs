@@ -4073,8 +4073,16 @@ namespace ClubTimerXbox.Services
                     DateTime.Now
                 )
                 : "";
-            var verificationResult = CashReconciliationService
-                .ProcessCashlessVerification(
+            bool cashlessAlreadyVerified = CashReconciliationService
+                .HasCurrentCashlessVerification(
+                    reconciliationCycleStart,
+                    nextMonthStart,
+                    expectedCashless,
+                    actualCashless
+                );
+            var verificationResult = cashlessAlreadyVerified
+                ? new CashAccountingResult()
+                : CashReconciliationService.ProcessCashlessVerification(
                     monthStart,
                     nextMonthStart,
                     expectedCashless,

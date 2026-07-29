@@ -30,6 +30,19 @@ namespace ClubTimerXbox.Services
         private static readonly Guid IncorrectlySupersededRawLossId =
             Guid.Parse("6619ff26-9cbc-43a7-84bc-e60f50286dca");
 
+        private static readonly Guid TelecomMirroredExtraId =
+            Guid.Parse("24b1c861-d968-4b02-8737-83358eaf9ea9");
+
+        private static readonly Guid TelecomMirroredShortageId =
+            Guid.Parse("10949a13-94a0-4bbb-8f68-b02e37fd8564");
+
+        private static readonly Guid[] TelecomMirroredLossIds =
+        {
+            Guid.Parse("03388413-e9d6-40b0-b1cc-1373ba1225a0"),
+            Guid.Parse("7d455234-e8b9-4f8e-8910-5ac2ebe7b2de"),
+            Guid.Parse("bf30727e-e21f-477c-a127-15813069f090")
+        };
+
         public static void Apply()
         {
             var identity = PcIdentityService.Current;
@@ -39,6 +52,7 @@ namespace ClubTimerXbox.Services
             {
                 ApplyCashCorrectionRepair();
                 ApplyTelecomSalaryRepair(identity.InstallationId);
+                ApplyTelecomMirroredCorrectionRepair(identity.InstallationId);
             }
 
             if (clubId.Equals(EmployeeRenameClubId, StringComparison.OrdinalIgnoreCase))
@@ -65,6 +79,29 @@ namespace ClubTimerXbox.Services
                 monthStart,
                 TelecomSecondEmployee,
                 TelecomMirbekRecoveredHours);
+        }
+
+        private static void ApplyTelecomMirroredCorrectionRepair(
+            string installationId)
+        {
+            if (!installationId.Equals(
+                    TelecomInstallationId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            bool repaired = CashReconciliationService
+                .TryRepairKnownMirroredCorrection(
+                    TelecomMirroredExtraId,
+                    TelecomMirroredShortageId,
+                    expectedAmount: 1870);
+
+            if (!repaired)
+                return;
+
+            foreach (Guid lossId in TelecomMirroredLossIds)
+                EmployeeLossService.Delete(lossId);
         }
 
         private static void ApplyCashCorrectionRepair()

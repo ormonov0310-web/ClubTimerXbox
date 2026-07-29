@@ -23,6 +23,8 @@ internal sealed class CashConstitutionTestSuite
         Test("В клубе остаётся одна активная карта излишка", OnlyOneOpenExtraCard);
         Test("Одновременно разрешены несколько карт недостачи", MultipleShortageCards);
         Test("Повторная корректировка идемпотентна", RepeatedCorrectionIsIdempotent);
+        Test("Повторная сверка безнала не создаёт дубль", RepeatedCashlessVerificationIsRecognized);
+        Test("Новая приёмка открывает новый цикл сверки", NewCashAcceptanceRequiresNewCashlessVerification);
         Test("Неизвестная потеря переживает повторную корректировку", UnknownLossSurvivesRepeatedCorrection);
         Test("Корректировка создаёт только не представленную карточками сумму", CorrectionCreatesOnlyMissingDifference);
         Test("Ручной штраф меньше потери уменьшает карту", ManualLossPartiallyConsumesShortage);
@@ -203,6 +205,73 @@ internal sealed class CashConstitutionTestSuite
         Equal(-13, second.Breakdown, "Повторная корректировка");
         Equal(id, Open(items).Single(IsShortage).Id, "ID выжившей карты");
         Equal(0, first.Assignments.Count + second.Assignments.Count, "Штрафы");
+    }
+
+    private void RepeatedCashlessVerificationIsRecognized()
+    {
+        var items = NewLedger();
+        CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now,
+            22792,
+            20922,
+            "",
+            "Первая сверка"
+        );
+
+        bool alreadyVerified = CashConstitutionEngine.HasCurrentCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            22792,
+            20922
+        );
+
+        Assert(alreadyVerified, "Повторная сверка должна использовать существующее расследование.");
+        Equal(
+            1,
+            items.Count(item =>
+                item.Origin == CashReconciliationOrigin.CashlessVerification),
+            "Количество сверок безнала"
+        );
+    }
+
+    private void NewCashAcceptanceRequiresNewCashlessVerification()
+    {
+        var items = NewLedger();
+        CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now,
+            22792,
+            20922,
+            "",
+            "Первая сверка"
+        );
+        CashConstitutionEngine.RecordCashAcceptance(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(1),
+            "Новый",
+            "Старый",
+            500,
+            490,
+            "Новая приёмка"
+        );
+
+        bool alreadyVerified = CashConstitutionEngine.HasCurrentCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            22792,
+            20922
+        );
+
+        Assert(!alreadyVerified, "После новой приёмки нужна новая сверка безнала.");
     }
 
     private void CorrectionCreatesOnlyMissingDifference()
