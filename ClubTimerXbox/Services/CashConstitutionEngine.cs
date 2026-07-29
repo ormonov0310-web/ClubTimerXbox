@@ -7,6 +7,8 @@ namespace ClubTimerXbox.Services
 {
     public sealed class CashAccountingAssignment
     {
+        public Guid AllocationId { get; init; }
+
         public string EmployeeName { get; init; } = "";
 
         public int Amount { get; init; }
@@ -64,6 +66,7 @@ namespace ClubTimerXbox.Services
             string note)
         {
             Normalize(items, fromInclusive, toExclusive);
+            Guid investigationId = Guid.NewGuid();
 
             int difference = actualAmount - expectedAmount;
             int eventAmount = Math.Abs(difference);
@@ -105,7 +108,8 @@ namespace ClubTimerXbox.Services
                         expectedAmount,
                         actualAmount,
                         checkedByEmployeeName,
-                        note
+                        note,
+                        investigationId
                     );
                 }
             }
@@ -131,12 +135,13 @@ namespace ClubTimerXbox.Services
                     checkedByEmployeeName,
                     responsibleEmployeeName,
                     "",
-                    note
+                    note,
+                    investigationId
                 );
             }
 
             int settled = SettleEligibleExtra(items, fromInclusive, toExclusive, now);
-            return BuildResult(
+            var result = BuildResult(
                 items,
                 fromInclusive,
                 toExclusive,
@@ -147,6 +152,17 @@ namespace ClubTimerXbox.Services
                 settled,
                 Array.Empty<CashAccountingAssignment>()
             );
+            AddTechnicalEvent(
+                items,
+                now,
+                CashReconciliationOrigin.CashAcceptance,
+                investigationId,
+                Array.Empty<Guid>(),
+                expectedAmount,
+                actualAmount,
+                note
+            );
+            return result;
         }
 
         public static CashAccountingResult RecordCashlessVerification(
@@ -157,9 +173,53 @@ namespace ClubTimerXbox.Services
             int expectedAmount,
             int actualAmount,
             string suspectedEmployeeName,
-            string note)
+            string note,
+            string operationId = "")
         {
             Normalize(items, fromInclusive, toExclusive);
+            if (HasAppliedOperation(items, operationId))
+            {
+                return BuildResult(
+                    items,
+                    fromInclusive,
+                    toExclusive,
+                    null,
+                    0,
+                    0,
+                    0,
+                    0,
+                    Array.Empty<CashAccountingAssignment>()
+                );
+            }
+
+            if (HasCurrentCashlessVerification(
+                    items,
+                    fromInclusive,
+                    toExclusive,
+                    expectedAmount,
+                    actualAmount))
+            {
+                return BuildResult(
+                    items,
+                    fromInclusive,
+                    toExclusive,
+                    null,
+                    0,
+                    0,
+                    0,
+                    0,
+                    Array.Empty<CashAccountingAssignment>()
+                );
+            }
+
+            var linkedInvestigationIds = GetPendingCashInvestigationIds(
+                items,
+                fromInclusive,
+                toExclusive
+            );
+            Guid investigationId = linkedInvestigationIds.Count == 1
+                ? linkedInvestigationIds[0]
+                : Guid.NewGuid();
 
             int difference = actualAmount - expectedAmount;
             int eventAmount = Math.Abs(difference);
@@ -222,7 +282,8 @@ namespace ClubTimerXbox.Services
                     expectedAmount,
                     actualAmount,
                     "Владелец",
-                    note
+                    note,
+                    investigationId
                 );
             }
             else if (availableShortage > 0)
@@ -242,14 +303,15 @@ namespace ClubTimerXbox.Services
                     "Владелец",
                     "",
                     suspectedEmployeeName,
-                    note
+                    note,
+                    investigationId
                 );
             }
 
             int settled = SettleEligibleExtra(items, fromInclusive, toExclusive, now);
             var assignments = FormalizeReadyConfirmed(items, fromInclusive, toExclusive, now);
 
-            return BuildResult(
+            var result = BuildResult(
                 items,
                 fromInclusive,
                 toExclusive,
@@ -260,6 +322,18 @@ namespace ClubTimerXbox.Services
                 settled,
                 assignments
             );
+            AddTechnicalEvent(
+                items,
+                now,
+                CashReconciliationOrigin.CashlessVerification,
+                investigationId,
+                linkedInvestigationIds,
+                expectedAmount,
+                actualAmount,
+                note,
+                operationId
+            );
+            return result;
         }
 
         public static CashAccountingResult ApplyCorrection(
@@ -267,17 +341,92 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive,
             DateTime now,
-            long checkpointNumber)
+            long checkpointNumber,
+            string operationId = "",
+            int? actualCashAtCheckpoint = null,
+            int? actualCashlessAtCheckpoint = null)
         {
             Normalize(items, fromInclusive, toExclusive);
+            if (HasAppliedOperation(items, operationId))
+            {
+                return BuildResult(
+                    items,
+                    fromInclusive,
+                    toExclusive,
+                    null,
+                    0,
+                    0,
+                    0,
+                    0,
+                    Array.Empty<CashAccountingAssignment>()
+                );
+            }
+
+            MarkAwaitingShortagesReady(
+                items,
+                fromInclusive,
+                toExclusive,
+                CashReconciliationKind.CashShortage
+            );
+            MarkAwaitingShortagesReady(
+                items,
+                fromInclusive,
+                toExclusive,
+                CashReconciliationKind.CashlessShortage
+            );
+            MarkAwaitingExtraContributionsReady(
+                items,
+                fromInclusive,
+                toExclusive,
+                CashReconciliationKind.CashExtra
+            );
+            MarkAwaitingExtraContributionsReady(
+                items,
+                fromInclusive,
+                toExclusive,
+                CashReconciliationKind.CashlessExtra
+            );
 
             int settled = SettleEligibleExtra(items, fromInclusive, toExclusive, now);
             var assignments = FormalizeReadyConfirmed(items, fromInclusive, toExclusive, now)
                 .Concat(FormalizeReadySuspected(items, fromInclusive, toExclusive, now))
                 .ToList();
 
-            foreach (var item in CurrentOpen(items, fromInclusive, toExclusive))
-                item.CheckpointNumber = checkpointNumber;
+            if (checkpointNumber > 0)
+            {
+                foreach (var item in CurrentOpen(items, fromInclusive, toExclusive))
+                {
+                    item.CheckpointNumber = checkpointNumber;
+                    item.AmountAtCheckpoint = item.Amount;
+                }
+
+                int checkpointBreakdown = GetBreakdown(
+                    items,
+                    fromInclusive,
+                    toExclusive
+                );
+                items.Add(new CashReconciliationItem
+                {
+                    AccountingSchemaVersion = 3,
+                    Id = Guid.NewGuid(),
+                    InvestigationId = Guid.NewGuid(),
+                    IsTechnicalEvent = true,
+                    OperationId = operationId.Trim(),
+                    CreatedAt = now,
+                    Kind = CashReconciliationKind.Other,
+                    Origin = CashReconciliationOrigin.CorrectionCheckpoint,
+                    Status = CashReconciliationStatus.Resolved,
+                    Stage = CashReconciliationStage.Ready,
+                    Resolution = CashReconciliationResolution.InputCorrection,
+                    CheckpointNumber = checkpointNumber,
+                    AmountAtCheckpoint = checkpointBreakdown,
+                    ExpectedAmount = actualCashAtCheckpoint ?? -1,
+                    ActualAmount = actualCashlessAtCheckpoint ?? -1,
+                    ResolvedAt = now,
+                    ResolvedBy = "Система",
+                    ResolutionNote = "Снимок разбора итоговой корректировки."
+                });
+            }
 
             return BuildResult(
                 items,
@@ -369,25 +518,49 @@ namespace ClubTimerXbox.Services
             DateTime toExclusive,
             DateTime now,
             string employeeName,
-            int amount)
+            int amount,
+            string operationId = "")
         {
             Normalize(items, fromInclusive, toExclusive);
+            if (HasAppliedOperation(items, operationId))
+            {
+                return BuildResult(
+                    items,
+                    fromInclusive,
+                    toExclusive,
+                    null,
+                    0,
+                    0,
+                    0,
+                    0,
+                    Array.Empty<CashAccountingAssignment>()
+                );
+            }
 
             int remaining = Math.Max(0, amount);
             var assignments = new List<CashAccountingAssignment>();
 
             foreach (var shortage in CurrentOpen(items, fromInclusive, toExclusive)
                 .Where(IsShortage)
-                .OrderBy(item => item.CreatedAt)
+                .OrderBy(ManualLossPriority)
+                .ThenBy(item => item.CreatedAt)
                 .ThenBy(item => item.Id))
             {
                 if (remaining <= 0)
                     break;
 
                 int used = Math.Min(shortage.Amount, remaining);
-                Formalize(shortage, used, employeeName, now, "Оформлено владельцем.");
+                var allocation = Formalize(
+                    shortage,
+                    used,
+                    employeeName,
+                    now,
+                    CashLossAllocationSource.OwnerManual,
+                    "Оформлено владельцем."
+                );
                 assignments.Add(new CashAccountingAssignment
                 {
+                    AllocationId = allocation?.Id ?? Guid.Empty,
                     EmployeeName = employeeName,
                     Amount = used,
                     ReconciliationId = shortage.Id,
@@ -413,11 +586,12 @@ namespace ClubTimerXbox.Services
                     "",
                     "Ручной штраф назначен сверх открытых потерь."
                 );
-                Formalize(
+                var allocation = Formalize(
                     syntheticShortage,
                     remaining,
                     employeeName,
                     now,
+                    CashLossAllocationSource.OwnerManual,
                     "Оформлено владельцем сверх открытых потерь."
                 );
                 AddExtraContribution(
@@ -426,7 +600,7 @@ namespace ClubTimerXbox.Services
                     toExclusive,
                     now,
                     CashReconciliationKind.CashExtra,
-                    CashReconciliationOrigin.BalanceRawDifference,
+                    CashReconciliationOrigin.OwnerPenaltyOverage,
                     CashReconciliationStage.Ready,
                     remaining,
                     0,
@@ -436,6 +610,7 @@ namespace ClubTimerXbox.Services
                 );
                 assignments.Add(new CashAccountingAssignment
                 {
+                    AllocationId = allocation?.Id ?? Guid.Empty,
                     EmployeeName = employeeName,
                     Amount = remaining,
                     ReconciliationId = syntheticShortage.Id,
@@ -443,7 +618,7 @@ namespace ClubTimerXbox.Services
                 });
             }
 
-            return BuildResult(
+            var result = BuildResult(
                 items,
                 fromInclusive,
                 toExclusive,
@@ -454,6 +629,18 @@ namespace ClubTimerXbox.Services
                 0,
                 assignments
             );
+            AddTechnicalEvent(
+                items,
+                now,
+                CashReconciliationOrigin.OwnerManualPenalty,
+                Guid.NewGuid(),
+                Array.Empty<Guid>(),
+                0,
+                amount,
+                $"Ручной штраф за потери: {employeeName.Trim()}, {amount} сом.",
+                operationId
+            );
+            return result;
         }
 
         public static CashMonthCloseResult CloseMonth(
@@ -464,6 +651,31 @@ namespace ClubTimerXbox.Services
             IReadOnlyDictionary<string, double> workedHours)
         {
             Normalize(items, monthStart, nextMonthStart);
+            string operationId = $"month-close:{monthStart:yyyy-MM}";
+            var existingMarker = items.FirstOrDefault(item =>
+                item.IsTechnicalEvent &&
+                item.Origin == CashReconciliationOrigin.MonthClose &&
+                item.OperationId.Equals(operationId, StringComparison.Ordinal));
+            if (existingMarker != null)
+            {
+                return new CashMonthCloseResult
+                {
+                    ClosingBreakdown = existingMarker.ExpectedAmount,
+                    ArchivedExtra = existingMarker.ActualAmount,
+                    Assignments = (existingMarker.LossAllocations ??
+                        new List<CashLossAllocation>())
+                        .Select(allocation => new CashAccountingAssignment
+                        {
+                            AllocationId = allocation.Id,
+                            EmployeeName = allocation.EmployeeName,
+                            Amount = allocation.Amount,
+                            ReconciliationId = existingMarker.Id,
+                            Reason = allocation.Reason
+                        })
+                        .ToList()
+                };
+            }
+
             SettleAllAtMonthClose(items, monthStart, nextMonthStart, now);
 
             int breakdown = GetBreakdown(items, monthStart, nextMonthStart);
@@ -513,11 +725,56 @@ namespace ClubTimerXbox.Services
                 SyncExtra(item);
             }
 
+            var marker = new CashReconciliationItem
+            {
+                AccountingSchemaVersion = 3,
+                Id = Guid.NewGuid(),
+                InvestigationId = Guid.NewGuid(),
+                IsTechnicalEvent = true,
+                OperationId = operationId,
+                CreatedAt = now,
+                Kind = CashReconciliationKind.Other,
+                Origin = CashReconciliationOrigin.MonthClose,
+                Status = CashReconciliationStatus.Resolved,
+                Stage = CashReconciliationStage.Ready,
+                Resolution = CashReconciliationResolution.MonthClosed,
+                ExpectedAmount = breakdown,
+                ActualAmount = archivedExtra,
+                ResolvedAt = now,
+                ResolvedBy = "Система",
+                ResolutionNote = "Неизменяемый акт закрытия месяца.",
+                LossAllocations = assignments
+                    .Select(assignment => new CashLossAllocation
+                    {
+                        Id = assignment.AllocationId == Guid.Empty
+                            ? Guid.NewGuid()
+                            : assignment.AllocationId,
+                        CreatedAt = now,
+                        EmployeeName = assignment.EmployeeName,
+                        Amount = assignment.Amount,
+                        PostedAmount = assignment.Amount,
+                        Source = CashLossAllocationSource.MonthClose,
+                        Reason = assignment.Reason
+                    })
+                    .ToList()
+            };
+            items.Add(marker);
+            var persistedAssignments = marker.LossAllocations
+                .Select(allocation => new CashAccountingAssignment
+                {
+                    AllocationId = allocation.Id,
+                    EmployeeName = allocation.EmployeeName,
+                    Amount = allocation.Amount,
+                    ReconciliationId = marker.Id,
+                    Reason = allocation.Reason
+                })
+                .ToList();
+
             return new CashMonthCloseResult
             {
                 ClosingBreakdown = breakdown,
                 ArchivedExtra = archivedExtra,
-                Assignments = assignments
+                Assignments = persistedAssignments
             };
         }
 
@@ -551,12 +808,59 @@ namespace ClubTimerXbox.Services
         public static int CalculateUnrepresentedDifference(
             int observedDifference,
             int alreadyFormalizedLosses,
-            int representedCycleDifference)
+            int representedCycleDifference,
+            int checkpointBreakdown = 0)
         {
             int targetOpenBreakdown =
-                observedDifference + Math.Max(0, alreadyFormalizedLosses);
+                checkpointBreakdown +
+                observedDifference +
+                Math.Max(0, alreadyFormalizedLosses);
 
             return targetOpenBreakdown - representedCycleDifference;
+        }
+
+        public static int GetLatestCheckpointBreakdown(
+            IEnumerable<CashReconciliationItem> items,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            var marker = items
+                .Where(item =>
+                    item.IsTechnicalEvent &&
+                    item.Origin == CashReconciliationOrigin.CorrectionCheckpoint &&
+                    item.CheckpointNumber > 0 &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive)
+                .OrderByDescending(item => item.CheckpointNumber)
+                .ThenByDescending(item => item.CreatedAt)
+                .ThenByDescending(item => item.Id)
+                .FirstOrDefault();
+            if (marker != null)
+                return marker.AmountAtCheckpoint;
+
+            long checkpointNumber = items
+                .Where(item =>
+                    !item.IsTechnicalEvent &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive)
+                .Select(item => item.CheckpointNumber)
+                .DefaultIfEmpty(0)
+                .Max();
+            if (checkpointNumber <= 0)
+                return 0;
+
+            return items
+                .Where(item =>
+                    !item.IsTechnicalEvent &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    item.CheckpointNumber == checkpointNumber)
+                .Sum(item =>
+                    IsExtra(item)
+                        ? Math.Max(0, item.AmountAtCheckpoint)
+                        : IsShortage(item)
+                            ? -Math.Max(0, item.AmountAtCheckpoint)
+                            : 0);
         }
 
         public static bool HasCurrentCashlessVerification(
@@ -571,7 +875,8 @@ namespace ClubTimerXbox.Services
                     item.CreatedAt >= fromInclusive &&
                     item.CreatedAt < toExclusive &&
                     item.Origin == CashReconciliationOrigin.CashlessVerification &&
-                    (item.Kind == CashReconciliationKind.CashlessShortage ||
+                    (item.IsTechnicalEvent ||
+                     item.Kind == CashReconciliationKind.CashlessShortage ||
                      item.Kind == CashReconciliationKind.CashlessExtra) &&
                     item.ExpectedAmount == expectedAmount &&
                     item.ActualAmount == actualAmount)
@@ -586,8 +891,22 @@ namespace ClubTimerXbox.Services
                 item.CreatedAt > latestVerification.CreatedAt &&
                 item.CreatedAt < toExclusive &&
                 item.Origin == CashReconciliationOrigin.CashAcceptance &&
-                (item.Kind == CashReconciliationKind.CashShortage ||
+                (item.IsTechnicalEvent ||
+                 item.Kind == CashReconciliationKind.CashShortage ||
                  item.Kind == CashReconciliationKind.CashExtra));
+        }
+
+        public static bool HasAppliedOperation(
+            IEnumerable<CashReconciliationItem> items,
+            string operationId)
+        {
+            operationId = operationId.Trim();
+            return !string.IsNullOrWhiteSpace(operationId) &&
+                   items.Any(item =>
+                       item.IsTechnicalEvent &&
+                       item.OperationId.Equals(
+                           operationId,
+                           StringComparison.Ordinal));
         }
 
         public static void Normalize(
@@ -607,8 +926,43 @@ namespace ClubTimerXbox.Services
                 }
 
                 item.ExtraContributions ??= new List<CashExtraContribution>();
+                item.LossAllocations ??= new List<CashLossAllocation>();
+                item.LinkedInvestigationIds ??= new List<Guid>();
                 if (item.InvestigationId == Guid.Empty)
                     item.InvestigationId = item.Id == Guid.Empty ? Guid.NewGuid() : item.Id;
+
+                if (item.AccountingSchemaVersion < 3)
+                {
+                    if (item.CheckpointNumber > 0 &&
+                        item.AmountAtCheckpoint == 0 &&
+                        item.Status == CashReconciliationStatus.Open &&
+                        item.Amount > 0)
+                    {
+                        item.AmountAtCheckpoint = item.Amount;
+                    }
+
+                    if (item.FormalizedAmount > 0 &&
+                        item.LossAllocations.Count == 0 &&
+                        !string.IsNullOrWhiteSpace(item.ResponsibleEmployeeName))
+                    {
+                        item.LossAllocations.Add(new CashLossAllocation
+                        {
+                            CreatedAt = item.ResolvedAt ?? item.CreatedAt,
+                            EmployeeName = item.ResponsibleEmployeeName.Trim(),
+                            Amount = item.FormalizedAmount,
+                            PostedAmount = Math.Min(
+                                item.FormalizedAmount,
+                                Math.Max(0, item.PostedFormalizedAmount)
+                            ),
+                            Source = CashLossAllocationSource.Legacy,
+                            Reason = string.IsNullOrWhiteSpace(item.ResolutionNote)
+                                ? "Историческая оформленная потеря"
+                                : item.ResolutionNote
+                        });
+                    }
+
+                    item.AccountingSchemaVersion = 3;
+                }
 
                 if (item.ResponsibilityLevel == CashResponsibilityLevel.Unknown)
                 {
@@ -644,6 +998,88 @@ namespace ClubTimerXbox.Services
             MergeOpenExtras(items, fromInclusive, toExclusive);
         }
 
+        private static List<Guid> GetPendingCashInvestigationIds(
+            IEnumerable<CashReconciliationItem> items,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            DateTime latestVerificationAt = items
+                .Where(item =>
+                    item.IsTechnicalEvent &&
+                    item.Origin == CashReconciliationOrigin.CashlessVerification &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive)
+                .Select(item => item.CreatedAt)
+                .DefaultIfEmpty(fromInclusive)
+                .Max();
+
+            var ids = items
+                .Where(item =>
+                    item.IsTechnicalEvent &&
+                    item.Origin == CashReconciliationOrigin.CashAcceptance &&
+                    item.CreatedAt > latestVerificationAt &&
+                    item.CreatedAt < toExclusive)
+                .Select(item => item.InvestigationId)
+                .Concat(CurrentOpen(items, fromInclusive, toExclusive)
+                    .Where(item =>
+                        item.Kind == CashReconciliationKind.CashShortage &&
+                        item.Stage == CashReconciliationStage.AwaitingCashlessVerification)
+                    .Select(item => item.InvestigationId))
+                .Concat(CurrentOpen(items, fromInclusive, toExclusive)
+                    .Where(IsExtra)
+                    .SelectMany(item => item.ExtraContributions)
+                    .Where(item =>
+                        item.Kind == CashReconciliationKind.CashExtra &&
+                        item.Stage == CashReconciliationStage.AwaitingCashlessVerification &&
+                        item.Amount > 0)
+                    .Select(item => item.InvestigationId))
+                .Where(id => id != Guid.Empty)
+                .Distinct()
+                .ToList();
+
+            return ids;
+        }
+
+        private static void AddTechnicalEvent(
+            ICollection<CashReconciliationItem> items,
+            DateTime now,
+            CashReconciliationOrigin origin,
+            Guid investigationId,
+            IEnumerable<Guid> linkedInvestigationIds,
+            int expectedAmount,
+            int actualAmount,
+            string note,
+            string operationId = "")
+        {
+            items.Add(new CashReconciliationItem
+            {
+                AccountingSchemaVersion = 3,
+                Id = Guid.NewGuid(),
+                InvestigationId = investigationId,
+                LinkedInvestigationIds = linkedInvestigationIds
+                    .Where(id => id != Guid.Empty)
+                    .Distinct()
+                    .ToList(),
+                IsTechnicalEvent = true,
+                CreatedAt = now,
+                Kind = CashReconciliationKind.Other,
+                Origin = origin,
+                Status = CashReconciliationStatus.Resolved,
+                Stage = CashReconciliationStage.Ready,
+                Resolution = CashReconciliationResolution.InputCorrection,
+                ExpectedAmount = expectedAmount,
+                ActualAmount = actualAmount,
+                CheckedByEmployeeName = origin == CashReconciliationOrigin.CashAcceptance
+                    ? "Сотрудник"
+                    : "Владелец",
+                Note = note.Trim(),
+                OperationId = operationId.Trim(),
+                ResolvedAt = now,
+                ResolvedBy = "Система",
+                ResolutionNote = "Технический журнал идемпотентности кассы."
+            });
+        }
+
         private static CashReconciliationItem AddShortage(
             IList<CashReconciliationItem> items,
             DateTime now,
@@ -657,13 +1093,14 @@ namespace ClubTimerXbox.Services
             string checkedBy,
             string responsible,
             string suspected,
-            string note)
+            string note,
+            Guid? investigationId = null)
         {
             var item = new CashReconciliationItem
             {
-                AccountingSchemaVersion = 2,
+                AccountingSchemaVersion = 3,
                 Id = Guid.NewGuid(),
-                InvestigationId = Guid.NewGuid(),
+                InvestigationId = investigationId ?? Guid.NewGuid(),
                 CreatedAt = now,
                 Kind = kind,
                 Origin = origin,
@@ -699,7 +1136,8 @@ namespace ClubTimerXbox.Services
             int expectedAmount,
             int actualAmount,
             string checkedBy,
-            string note)
+            string note,
+            Guid? investigationId = null)
         {
             var pool = CurrentOpen(items, fromInclusive, toExclusive)
                 .FirstOrDefault(IsExtra);
@@ -708,9 +1146,9 @@ namespace ClubTimerXbox.Services
             {
                 pool = new CashReconciliationItem
                 {
-                    AccountingSchemaVersion = 2,
+                    AccountingSchemaVersion = 3,
                     Id = Guid.NewGuid(),
-                    InvestigationId = Guid.NewGuid(),
+                    InvestigationId = investigationId ?? Guid.NewGuid(),
                     CreatedAt = now,
                     Kind = kind,
                     Origin = origin,
@@ -735,7 +1173,7 @@ namespace ClubTimerXbox.Services
             pool.ExtraContributions.Add(new CashExtraContribution
             {
                 Id = Guid.NewGuid(),
-                InvestigationId = Guid.NewGuid(),
+                InvestigationId = investigationId ?? Guid.NewGuid(),
                 CreatedAt = now,
                 Kind = kind,
                 Origin = origin,
@@ -866,10 +1304,8 @@ namespace ClubTimerXbox.Services
             var shortages = CurrentOpen(items, fromInclusive, toExclusive)
                 .Where(item =>
                     IsShortage(item) &&
-                    item.Stage == CashReconciliationStage.Ready &&
-                    item.ResponsibilityLevel != CashResponsibilityLevel.Confirmed)
-                .OrderBy(item =>
-                    item.ResponsibilityLevel == CashResponsibilityLevel.Unknown ? 0 : 1)
+                    item.Stage == CashReconciliationStage.Ready)
+                .OrderBy(ExtraSettlementPriority)
                 .ThenBy(item => item.CreatedAt)
                 .ThenBy(item => item.Id)
                 .ToList();
@@ -879,7 +1315,8 @@ namespace ClubTimerXbox.Services
                 foreach (var contribution in pool.ExtraContributions
                     .Where(item =>
                         item.Stage == CashReconciliationStage.Ready &&
-                        item.Amount > 0)
+                        item.Amount > 0 &&
+                        CanExtraSettleShortage(item, shortage))
                     .OrderBy(item => item.CreatedAt)
                     .ThenBy(item => item.Id))
                 {
@@ -990,6 +1427,7 @@ namespace ClubTimerXbox.Services
                 now,
                 CashResponsibilityLevel.Confirmed,
                 item => item.ResponsibleEmployeeName,
+                CashLossAllocationSource.AutomaticVerification,
                 "Подтверждённая потеря после связанной сверки."
             );
         }
@@ -1007,6 +1445,7 @@ namespace ClubTimerXbox.Services
                 now,
                 CashResponsibilityLevel.Suspected,
                 item => item.SuspectedEmployeeName,
+                CashLossAllocationSource.AutomaticCorrection,
                 "Рекомендация оформлена итоговой корректировкой."
             );
         }
@@ -1018,6 +1457,7 @@ namespace ClubTimerXbox.Services
             DateTime now,
             CashResponsibilityLevel level,
             Func<CashReconciliationItem, string> employeeSelector,
+            CashLossAllocationSource source,
             string reason)
         {
             var result = new List<CashAccountingAssignment>();
@@ -1036,9 +1476,17 @@ namespace ClubTimerXbox.Services
                     continue;
 
                 int amount = item.Amount;
-                Formalize(item, amount, employee, now, reason);
+                var allocation = Formalize(
+                    item,
+                    amount,
+                    employee,
+                    now,
+                    source,
+                    reason
+                );
                 result.Add(new CashAccountingAssignment
                 {
+                    AllocationId = allocation?.Id ?? Guid.Empty,
                     EmployeeName = employee,
                     Amount = amount,
                     ReconciliationId = item.Id,
@@ -1049,24 +1497,67 @@ namespace ClubTimerXbox.Services
             return result;
         }
 
-        private static void Formalize(
+        private static CashLossAllocation? Formalize(
             CashReconciliationItem item,
             int amount,
             string employeeName,
             DateTime now,
+            CashLossAllocationSource source,
             string note)
         {
             amount = Math.Max(0, Math.Min(item.Amount, amount));
             if (amount == 0)
-                return;
+                return null;
 
             item.Amount -= amount;
             item.FormalizedAmount += amount;
-            item.ResponsibleEmployeeName = employeeName.Trim();
-            item.ResponsibilityLevel = CashResponsibilityLevel.Confirmed;
+            item.LossAllocations ??= new List<CashLossAllocation>();
+            var allocation = new CashLossAllocation
+            {
+                CreatedAt = now,
+                EmployeeName = employeeName.Trim(),
+                Amount = amount,
+                Source = source,
+                Reason = note
+            };
+            item.LossAllocations.Add(allocation);
 
             if (item.Amount == 0)
                 Resolve(item, now, CashReconciliationResolution.FormalizedLoss, note);
+
+            return allocation;
+        }
+
+        private static int ExtraSettlementPriority(CashReconciliationItem item)
+        {
+            return item.ResponsibilityLevel switch
+            {
+                CashResponsibilityLevel.Unknown => 0,
+                CashResponsibilityLevel.Suspected => 1,
+                CashResponsibilityLevel.Confirmed => 2,
+                _ => 3
+            };
+        }
+
+        private static int ManualLossPriority(CashReconciliationItem item)
+        {
+            return item.ResponsibilityLevel switch
+            {
+                CashResponsibilityLevel.Confirmed => 0,
+                CashResponsibilityLevel.Suspected => 1,
+                CashResponsibilityLevel.Unknown => 2,
+                _ => 3
+            };
+        }
+
+        private static bool CanExtraSettleShortage(
+            CashExtraContribution contribution,
+            CashReconciliationItem shortage)
+        {
+            if (shortage.ResponsibilityLevel != CashResponsibilityLevel.Confirmed)
+                return true;
+
+            return contribution.CreatedAt >= shortage.CreatedAt;
         }
 
         private static List<CashAccountingAssignment> DistributeByHours(

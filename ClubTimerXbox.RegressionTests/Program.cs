@@ -1,5 +1,6 @@
 using ClubTimerXbox.Models;
 using ClubTimerXbox.Services;
+using System.Text.Json;
 
 var suite = new CashConstitutionTestSuite();
 suite.Run();
@@ -20,23 +21,45 @@ internal sealed class CashConstitutionTestSuite
         Test("Остаток связанного излишка пополняет общую карту", PairedExtraRemainderJoinsPool);
         Test("Свободный излишек сначала закрывает неизвестную потерю", ExtraSettlesUnknownFirst);
         Test("После неизвестной потери излишек закрывает подозреваемую", ExtraSettlesSuspectedSecond);
+        Test("Новый излишек закрывает старую известную потерю последней", NewExtraSettlesOlderConfirmedLast);
+        Test("Внутри одного типа излишек закрывает старые карты раньше новых", ExtraUsesOldestWithinType);
         Test("В клубе остаётся одна активная карта излишка", OnlyOneOpenExtraCard);
         Test("Одновременно разрешены несколько карт недостачи", MultipleShortageCards);
         Test("Повторная корректировка идемпотентна", RepeatedCorrectionIsIdempotent);
         Test("Повторная сверка безнала не создаёт дубль", RepeatedCashlessVerificationIsRecognized);
+        Test("Нулевая сверка также защищена от повторного выполнения", RepeatedZeroVerificationIsRecognized);
         Test("Новая приёмка открывает новый цикл сверки", NewCashAcceptanceRequiresNewCashlessVerification);
+        Test("Нулевая приёмка тоже открывает новый цикл сверки", ZeroAcceptanceRequiresNewVerification);
         Test("Неизвестная потеря переживает повторную корректировку", UnknownLossSurvivesRepeatedCorrection);
         Test("Корректировка создаёт только не представленную карточками сумму", CorrectionCreatesOnlyMissingDifference);
         Test("Ручной штраф меньше потери уменьшает карту", ManualLossPartiallyConsumesShortage);
+        Test("Частичный штраф не меняет статус и сотрудника остатка", PartialLossKeepsRemainingResponsibility);
+        Test("Частичные штрафы разным сотрудникам не перезаписываются", PartialLossAllocationsRemainSeparate);
+        Test("Ручной штраф расходует известные, подозреваемые и неизвестные по порядку", ManualLossUsesConstitutionPriority);
+        Test("Повтор ID ручного штрафа не выполняет его второй раз", ManualLossOperationIdIsIdempotent);
         Test("Ручной штраф ровно по потере закрывает карту", ManualLossExactlyClosesShortage);
         Test("Ручной штраф сверх потери создаёт излишек", ManualLossOverageCreatesExtra);
+        Test("Сверхштраф создаёт вклад излишка с отдельным источником", ManualLossOverageHasDedicatedOrigin);
         Test("Свободный ручной штраф хранит равную проводку потери и излишка", FreeManualLossIsBalanced);
+        Test("Реальная цепочка 1811 оставляет только 42 излишка", RealPartialPenaltyThenLaterExtra);
+        Test("Сверка оформляет только известный остаток после приоритетов", VerificationFormalizesOnlyConfirmedRemainder);
         Test("Положительный остаток месяца архивируется", PositiveMonthClose);
         Test("Минус месяца распределяется 99 к 1 по часам", NegativeMonthCloseDistribution);
         Test("Закрытие месяца распределяет только чистый минус", MonthCloseDistributesNetShortage);
         Test("Месяц без рабочих часов не теряет отрицательный остаток", MonthCloseWithoutHoursIsDeferred);
+        Test("Повтор закрытия месяца после перезапуска возвращает тот же результат", MonthCloseSurvivesRestart);
         Test("Закрытые карты не воскресают после контрольной точки", ClosedCardsNeverReturn);
+        Test("Контрольная точка учитывает выживший разбор без зеркальной карты", CheckpointBaselinePreventsMirroredDifference);
+        Test("Нулевая контрольная точка заменяет предыдущий ненулевой снимок", ZeroCheckpointReplacesPreviousBaseline);
+        Test("Перезапуск сохраняет частичные назначения и статус остатка", RestartPreservesPartialAllocations);
         Test("Случайные последовательности сохраняют инварианты", RandomizedInvariantTest);
+
+        Test("Корректировка оформляет ожидающую подозреваемую недостачу", CorrectionFormalizesAwaitingSuspected);
+        Test("Корректировка сохраняет ожидающую неизвестную недостачу", CorrectionKeepsAwaitingUnknown);
+        Test("Старые закрытые карты мигрируют без повторного открытия", LegacyClosedCardMigrationIsStable);
+        Test("Контрольная точка не отражает старую недостачу в излишек", NegativeCheckpointDoesNotMirror);
+        Test("Предварительный этап корректировки не ставит контрольную точку", PreliminaryCorrectionHasNoCheckpoint);
+        Test("Финальная точка команды сохраняется один раз вместе с фактами", CorrectionCommitIsIdempotent);
 
         Console.WriteLine();
         Console.WriteLine($"PASS: {_passed} сценариев Конституции кассы.");
@@ -143,6 +166,64 @@ internal sealed class CashConstitutionTestSuite
         Equal(0, result.Breakdown, "После оформления");
     }
 
+    private void NewExtraSettlesOlderConfirmedLast()
+    {
+        var items = NewLedger();
+        AddReadyShortage(
+            items,
+            100,
+            CashResponsibilityLevel.Confirmed,
+            Now.AddHours(-1),
+            responsible: "Ответственный"
+        );
+
+        var result = CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now,
+            1000,
+            1100,
+            "",
+            "Новый излишек"
+        );
+
+        Equal(0, result.Breakdown, "Разбор");
+        Equal(0, result.Assignments.Count, "Штрафы");
+        Equal(0, Open(items).Count, "Активные карты");
+    }
+
+    private void ExtraUsesOldestWithinType()
+    {
+        var items = NewLedger();
+        Guid oldId = AddReadyShortage(
+            items,
+            70,
+            CashResponsibilityLevel.Unknown,
+            Now.AddHours(-2)
+        );
+        Guid newId = AddReadyShortage(
+            items,
+            70,
+            CashResponsibilityLevel.Unknown,
+            Now.AddHours(-1)
+        );
+
+        CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now,
+            1000,
+            1100,
+            "",
+            "Излишек 100"
+        );
+
+        Equal(0, Open(items).Count(item => item.Id == oldId), "Старая карта");
+        Equal(40, Open(items).Single(item => item.Id == newId).Amount, "Новая карта");
+    }
+
     private void OnlyOneOpenExtraCard()
     {
         var items = NewLedger();
@@ -230,12 +311,26 @@ internal sealed class CashConstitutionTestSuite
         );
 
         Assert(alreadyVerified, "Повторная сверка должна использовать существующее расследование.");
+        int countBeforeRepeat = items.Count;
+        var repeated = CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddSeconds(1),
+            22792,
+            20922,
+            "",
+            "Повторная сверка"
+        );
         Equal(
             1,
             items.Count(item =>
+                item.IsTechnicalEvent &&
                 item.Origin == CashReconciliationOrigin.CashlessVerification),
-            "Количество сверок безнала"
+            "Количество событий сверки безнала"
         );
+        Equal(countBeforeRepeat, items.Count, "Количество записей после повтора");
+        Equal(0, repeated.Assignments.Count, "Повторные штрафы");
     }
 
     private void NewCashAcceptanceRequiresNewCashlessVerification()
@@ -272,6 +367,251 @@ internal sealed class CashConstitutionTestSuite
         );
 
         Assert(!alreadyVerified, "После новой приёмки нужна новая сверка безнала.");
+    }
+
+    private void RepeatedZeroVerificationIsRecognized()
+    {
+        var items = NewLedger();
+        CashConstitutionEngine.RecordCashlessVerification(
+            items, MonthStart, NextMonthStart, Now, 1000, 1000, "", "Ноль");
+        int countBeforeRepeat = items.Count;
+
+        CashConstitutionEngine.RecordCashlessVerification(
+            items, MonthStart, NextMonthStart, Now.AddSeconds(1), 1000, 1000, "", "Повтор");
+
+        Equal(countBeforeRepeat, items.Count, "Количество событий");
+        Equal(
+            1,
+            items.Count(item =>
+                item.IsTechnicalEvent &&
+                item.Origin == CashReconciliationOrigin.CashlessVerification),
+            "Журнал сверки"
+        );
+    }
+
+    private void ZeroAcceptanceRequiresNewVerification()
+    {
+        var items = NewLedger();
+        CashConstitutionEngine.RecordCashlessVerification(
+            items, MonthStart, NextMonthStart, Now, 1000, 1000, "", "Сверка");
+        CashConstitutionEngine.RecordCashAcceptance(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(1),
+            "Новый",
+            "Старый",
+            1000,
+            1000,
+            "Нулевая приёмка"
+        );
+
+        Assert(
+            !CashConstitutionEngine.HasCurrentCashlessVerification(
+                items, MonthStart, NextMonthStart, 1000, 1000),
+            "Даже нулевая новая приёмка требует новой сверки."
+        );
+    }
+
+    private void CorrectionFormalizesAwaitingSuspected()
+    {
+        var items = NewLedger();
+        CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now,
+            expectedAmount: 100,
+            actualAmount: 90,
+            suspectedEmployeeName: "Админ 1",
+            note: "Проверка"
+        );
+
+        var result = CashConstitutionEngine.ApplyCorrection(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(1),
+            checkpointNumber: 10
+        );
+
+        Equal(10, result.Assignments.Sum(item => item.Amount), "Оформленная сумма");
+        Equal("Админ 1", result.Assignments.Single().EmployeeName, "Сотрудник");
+        Equal(0, Open(items).Count(IsShortage), "Открытые недостачи");
+    }
+
+    private void CorrectionKeepsAwaitingUnknown()
+    {
+        var items = NewLedger();
+        CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now,
+            expectedAmount: 100,
+            actualAmount: 90,
+            suspectedEmployeeName: "",
+            note: "Проверка"
+        );
+
+        var result = CashConstitutionEngine.ApplyCorrection(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(1),
+            checkpointNumber: 11
+        );
+
+        Equal(0, result.Assignments.Sum(item => item.Amount), "Оформленная сумма");
+        var shortage = Open(items).Single(IsShortage);
+        Equal(10, shortage.Amount, "Остаток");
+        Equal(CashResponsibilityLevel.Unknown, shortage.ResponsibilityLevel, "Тип");
+        Equal(CashReconciliationStage.Ready, shortage.Stage, "Стадия");
+    }
+
+    private void LegacyClosedCardMigrationIsStable()
+    {
+        Guid cardId = Guid.NewGuid();
+        var items = new List<CashReconciliationItem>
+        {
+            new()
+            {
+                AccountingSchemaVersion = 2,
+                Id = cardId,
+                InvestigationId = cardId,
+                CreatedAt = Now,
+                Kind = CashReconciliationKind.CashShortage,
+                Origin = CashReconciliationOrigin.CashAcceptance,
+                Status = CashReconciliationStatus.Resolved,
+                Stage = CashReconciliationStage.Ready,
+                ResponsibilityLevel = CashResponsibilityLevel.Confirmed,
+                Amount = 0,
+                OriginalAmount = 100,
+                FormalizedAmount = 100,
+                PostedFormalizedAmount = 100,
+                ResponsibleEmployeeName = "Старый сотрудник",
+                Resolution = CashReconciliationResolution.FormalizedLoss,
+                ResolvedAt = Now.AddMinutes(1)
+            }
+        };
+
+        CashConstitutionEngine.Normalize(items, MonthStart, NextMonthStart);
+        CashConstitutionEngine.Normalize(items, MonthStart, NextMonthStart);
+
+        var card = items.Single(item => item.Id == cardId);
+        Equal(3, card.AccountingSchemaVersion, "Версия схемы");
+        Equal(CashReconciliationStatus.Resolved, card.Status, "Статус");
+        Equal(0, card.Amount, "Остаток");
+        Equal(1, card.LossAllocations.Count, "Исторические назначения");
+        Equal(100, card.LossAllocations.Single().Amount, "Сумма назначения");
+        Equal(100, card.LossAllocations.Single().PostedAmount, "Проведённая сумма");
+        Equal(0, Open(items).Count, "Открытые карты");
+    }
+
+    private void NegativeCheckpointDoesNotMirror()
+    {
+        var items = NewLedger();
+        AddReadyShortage(items, 100, CashResponsibilityLevel.Unknown, Now);
+        CashConstitutionEngine.ApplyCorrection(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(1),
+            checkpointNumber: 20
+        );
+
+        Equal(
+            -100,
+            CashConstitutionEngine.GetLatestCheckpointBreakdown(
+                items,
+                MonthStart,
+                NextMonthStart),
+            "Разбор на контрольной точке"
+        );
+        int missing = CashConstitutionEngine.CalculateUnrepresentedDifference(
+            observedDifference: 100,
+            alreadyFormalizedLosses: 0,
+            representedCycleDifference: 0,
+            checkpointBreakdown: -100
+        );
+        Equal(0, missing, "Зеркальная карта");
+    }
+
+    private void PreliminaryCorrectionHasNoCheckpoint()
+    {
+        var items = NewLedger();
+        AddReadyShortage(
+            items,
+            25,
+            CashResponsibilityLevel.Unknown,
+            Now
+        );
+
+        CashConstitutionEngine.ApplyCorrection(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(1),
+            checkpointNumber: 0
+        );
+
+        Equal(
+            0,
+            items.Count(item =>
+                item.IsTechnicalEvent &&
+                item.Origin == CashReconciliationOrigin.CorrectionCheckpoint),
+            "Контрольные точки"
+        );
+        Equal(
+            0,
+            CashConstitutionEngine.GetLatestCheckpointBreakdown(
+                items,
+                MonthStart,
+                NextMonthStart),
+            "Снимок разбора"
+        );
+    }
+
+    private void CorrectionCommitIsIdempotent()
+    {
+        var items = NewLedger();
+        AddReadyShortage(
+            items,
+            25,
+            CashResponsibilityLevel.Unknown,
+            Now
+        );
+        const string operationId = "correction-command-1";
+
+        CashConstitutionEngine.ApplyCorrection(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(1),
+            checkpointNumber: 30,
+            operationId: operationId,
+            actualCashAtCheckpoint: 100,
+            actualCashlessAtCheckpoint: 200
+        );
+        CashConstitutionEngine.ApplyCorrection(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(2),
+            checkpointNumber: 31,
+            operationId: operationId,
+            actualCashAtCheckpoint: 999,
+            actualCashlessAtCheckpoint: 999
+        );
+
+        var marker = items.Single(item =>
+            item.IsTechnicalEvent &&
+            item.Origin == CashReconciliationOrigin.CorrectionCheckpoint &&
+            item.OperationId == operationId);
+        Equal(30L, marker.CheckpointNumber, "Номер контрольной точки");
+        Equal(100, marker.ExpectedAmount, "Факт наличных");
+        Equal(200, marker.ActualAmount, "Факт безнала");
+        Equal(-25, marker.AmountAtCheckpoint, "Разбор");
     }
 
     private void CorrectionCreatesOnlyMissingDifference()
@@ -326,6 +666,131 @@ internal sealed class CashConstitutionTestSuite
         Equal(40, result.Assignments.Sum(item => item.Amount), "Штраф");
     }
 
+    private void PartialLossKeepsRemainingResponsibility()
+    {
+        var items = NewLedger();
+        Guid id = AddReadyShortage(
+            items,
+            100,
+            CashResponsibilityLevel.Suspected,
+            Now,
+            suspect: "Админ 1"
+        );
+
+        CashConstitutionEngine.ApplyManualLoss(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(1),
+            "Админ 2",
+            40
+        );
+
+        var remaining = Open(items).Single(item => item.Id == id);
+        Equal(60, remaining.Amount, "Остаток");
+        Equal(CashResponsibilityLevel.Suspected, remaining.ResponsibilityLevel, "Тип");
+        Equal("Админ 1", remaining.SuspectedEmployeeName, "Подозреваемый");
+        Equal("", remaining.ResponsibleEmployeeName, "Ответственный");
+    }
+
+    private void PartialLossAllocationsRemainSeparate()
+    {
+        var items = NewLedger();
+        Guid id = AddReadyShortage(
+            items,
+            1000,
+            CashResponsibilityLevel.Suspected,
+            Now,
+            suspect: "Исходный подозреваемый"
+        );
+
+        CashConstitutionEngine.ApplyManualLoss(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(1), "Сталбек", 300);
+        CashConstitutionEngine.ApplyManualLoss(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(2), "Мирбек", 200);
+
+        var card = items.Single(item => item.Id == id);
+        Equal(500, card.Amount, "Остаток");
+        Equal(CashResponsibilityLevel.Suspected, card.ResponsibilityLevel, "Тип остатка");
+        Equal("Исходный подозреваемый", card.SuspectedEmployeeName, "Подозреваемый");
+        Equal(2, card.LossAllocations.Count, "Назначения");
+        Equal(300, card.LossAllocations.Single(item => item.EmployeeName == "Сталбек").Amount, "Сталбек");
+        Equal(200, card.LossAllocations.Single(item => item.EmployeeName == "Мирбек").Amount, "Мирбек");
+    }
+
+    private void ManualLossUsesConstitutionPriority()
+    {
+        var items = NewLedger();
+        Guid confirmedId = AddReadyShortage(
+            items,
+            100,
+            CashResponsibilityLevel.Confirmed,
+            Now,
+            responsible: "Админ 1"
+        );
+        Guid suspectedId = AddReadyShortage(
+            items,
+            100,
+            CashResponsibilityLevel.Suspected,
+            Now.AddMinutes(1),
+            suspect: "Админ 1"
+        );
+        Guid unknownId = AddReadyShortage(
+            items,
+            100,
+            CashResponsibilityLevel.Unknown,
+            Now.AddMinutes(2)
+        );
+
+        CashConstitutionEngine.ApplyManualLoss(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(3), "Админ 1", 150);
+
+        Equal(0, Open(items).Count(item => item.Id == confirmedId), "Известная карта");
+        Equal(50, Open(items).Single(item => item.Id == suspectedId).Amount, "Подозрение");
+        Equal(100, Open(items).Single(item => item.Id == unknownId).Amount, "Неизвестная");
+
+        CashConstitutionEngine.ApplyManualLoss(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(4), "Админ 2", 100);
+
+        Equal(0, Open(items).Count(item => item.Id == suspectedId), "Подозрение после второго штрафа");
+        Equal(50, Open(items).Single(item => item.Id == unknownId).Amount, "Итог неизвестной");
+        Equal(CashResponsibilityLevel.Unknown, items.Single(item => item.Id == unknownId).ResponsibilityLevel, "Тип остатка");
+    }
+
+    private void ManualLossOperationIdIsIdempotent()
+    {
+        var items = NewLedger();
+        AddReadyShortage(items, 100, CashResponsibilityLevel.Unknown, Now);
+
+        var first = CashConstitutionEngine.ApplyManualLoss(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(1),
+            "Админ",
+            40,
+            "command-105103"
+        );
+        var repeated = CashConstitutionEngine.ApplyManualLoss(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(2),
+            "Админ",
+            40,
+            "command-105103"
+        );
+
+        Equal(40, first.Assignments.Sum(item => item.Amount), "Первое назначение");
+        Equal(0, repeated.Assignments.Count, "Повторные назначения");
+        Equal(60, Open(items).Single(IsShortage).Amount, "Остаток");
+        Equal(
+            1,
+            items.SelectMany(item => item.LossAllocations).Count(),
+            "Количество назначений"
+        );
+    }
+
     private void ManualLossExactlyClosesShortage()
     {
         var items = NewLedger();
@@ -349,6 +814,110 @@ internal sealed class CashConstitutionTestSuite
         Equal(25, result.Breakdown, "Новый излишек");
         Equal(25, Open(items).Single(IsExtra).Amount, "Карта излишка");
         Equal(125, result.Assignments.Sum(item => item.Amount), "Полный штраф");
+    }
+
+    private void ManualLossOverageHasDedicatedOrigin()
+    {
+        var items = NewLedger();
+        AddReadyShortage(items, 100, CashResponsibilityLevel.Unknown, Now);
+
+        CashConstitutionEngine.ApplyManualLoss(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(1), "Выбранный", 130);
+
+        var contribution = Open(items)
+            .Single(IsExtra)
+            .ExtraContributions
+            .Single(item => item.Amount > 0);
+        Equal(CashReconciliationOrigin.OwnerPenaltyOverage, contribution.Origin, "Источник");
+        Equal(30, contribution.Amount, "Излишек");
+    }
+
+    private void RealPartialPenaltyThenLaterExtra()
+    {
+        var items = NewLedger();
+        Guid shortageId = AddReadyShortage(
+            items,
+            1811,
+            CashResponsibilityLevel.Suspected,
+            Now.AddHours(-2),
+            suspect: "Мирбек"
+        );
+
+        CashConstitutionEngine.RecordRawDifference(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddHours(-1),
+            353,
+            0,
+            353,
+            "",
+            "",
+            "Ранее найденные излишки"
+        );
+        CashConstitutionEngine.ApplyManualLoss(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(-30), "Сталбек", 300);
+        CashConstitutionEngine.ApplyManualLoss(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(-20), "Мирбек", 200);
+
+        var beforeVerification = items.Single(item => item.Id == shortageId);
+        Equal(958, beforeVerification.Amount, "Остаток до сверки");
+        Equal(CashResponsibilityLevel.Suspected, beforeVerification.ResponsibilityLevel, "Тип до сверки");
+
+        var result = CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now,
+            1000,
+            2000,
+            "",
+            "Новый излишек 1000"
+        );
+
+        Equal(42, result.Breakdown, "Итоговый излишек");
+        Equal(0, result.Assignments.Count, "Новые штрафы");
+        Equal(0, Open(items).Count(IsShortage), "Открытые недостачи");
+        Equal(42, Open(items).Single(IsExtra).Amount, "Остаток карты излишка");
+        Equal(300, beforeVerification.LossAllocations.Single(item => item.EmployeeName == "Сталбек").Amount, "Сталбек");
+        Equal(200, beforeVerification.LossAllocations.Single(item => item.EmployeeName == "Мирбек").Amount, "Мирбек");
+    }
+
+    private void VerificationFormalizesOnlyConfirmedRemainder()
+    {
+        var items = NewLedger();
+        AddReadyShortage(items, 50, CashResponsibilityLevel.Unknown, Now.AddHours(-3));
+        AddReadyShortage(
+            items,
+            50,
+            CashResponsibilityLevel.Suspected,
+            Now.AddHours(-2),
+            suspect: "Подозреваемый"
+        );
+        AddReadyShortage(
+            items,
+            100,
+            CashResponsibilityLevel.Confirmed,
+            Now.AddHours(-1),
+            responsible: "Ответственный"
+        );
+
+        var result = CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now,
+            1000,
+            1120,
+            "",
+            "Излишек 120"
+        );
+
+        Equal(120, result.SettledAmount, "Зачтено");
+        Equal(1, result.Assignments.Count, "Оформления");
+        Equal("Ответственный", result.Assignments[0].EmployeeName, "Сотрудник");
+        Equal(80, result.Assignments[0].Amount, "Остаток известной карты");
+        Equal(0, result.Breakdown, "Разбор");
     }
 
     private void FreeManualLossIsBalanced()
@@ -450,6 +1019,45 @@ internal sealed class CashConstitutionTestSuite
         Equal(70, Open(items).Single(IsShortage).Amount, "Сохранённая сумма");
     }
 
+    private void MonthCloseSurvivesRestart()
+    {
+        var items = NewLedger();
+        AddReadyShortage(items, 100, CashResponsibilityLevel.Unknown, Now);
+
+        var hours = new Dictionary<string, double>
+        {
+            ["Работник 1"] = 3,
+            ["Работник 2"] = 1
+        };
+        DateTime closeAt = NextMonthStart.AddMinutes(-2);
+        var first = CashConstitutionEngine.CloseMonth(
+            items, MonthStart, NextMonthStart, closeAt, hours);
+
+        string json = JsonSerializer.Serialize(items);
+        var restored = JsonSerializer.Deserialize<List<CashReconciliationItem>>(json)
+            ?? throw new InvalidOperationException("Не удалось восстановить журнал.");
+        var second = CashConstitutionEngine.CloseMonth(
+            restored, MonthStart, NextMonthStart, closeAt.AddSeconds(30), hours);
+
+        Equal(-100, second.ClosingBreakdown, "Итог месяца");
+        Equal(100, second.Assignments.Sum(item => item.Amount), "Сумма назначений");
+        Assert(
+            first.Assignments.Select(item => item.AllocationId).OrderBy(id => id)
+                .SequenceEqual(
+                    second.Assignments.Select(item => item.AllocationId).OrderBy(id => id)),
+            "После перезапуска изменились идентификаторы назначений."
+        );
+        var marker = restored.Single(item =>
+            item.IsTechnicalEvent &&
+            item.Origin == CashReconciliationOrigin.MonthClose);
+        Equal(
+            marker.LossAllocations.Sum(item => item.Amount),
+            marker.LossAllocations.Sum(item => item.PostedAmount),
+            "Месячный акт не должен попадать в обычное восстановление проводок"
+        );
+        Equal(0, Open(restored).Count, "Открытые карты");
+    }
+
     private void ClosedCardsNeverReturn()
     {
         var items = NewLedger();
@@ -464,6 +1072,90 @@ internal sealed class CashConstitutionTestSuite
         Equal(50, first.Assignments.Sum(item => item.Amount), "Первое оформление");
         Equal(0, second.Assignments.Sum(item => item.Amount), "Повторное оформление");
         Equal(0, Open(items).Count, "Нет воскресших карт");
+    }
+
+    private void CheckpointBaselinePreventsMirroredDifference()
+    {
+        var items = NewLedger();
+        AddReadyExtra(items, 100, Now);
+        CashConstitutionEngine.ApplyCorrection(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(1),
+            105103
+        );
+
+        Equal(
+            100,
+            CashConstitutionEngine.GetLatestCheckpointBreakdown(
+                items, MonthStart, NextMonthStart),
+            "Разбор на контрольной точке"
+        );
+
+        int missing = CashConstitutionEngine.CalculateUnrepresentedDifference(
+            observedDifference: -100,
+            alreadyFormalizedLosses: 0,
+            representedCycleDifference: 0,
+            checkpointBreakdown: 100
+        );
+        Equal(0, missing, "Зеркальная карта");
+    }
+
+    private void ZeroCheckpointReplacesPreviousBaseline()
+    {
+        var items = NewLedger();
+        AddReadyExtra(items, 100, Now);
+        CashConstitutionEngine.ApplyCorrection(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(1), 1);
+
+        CashConstitutionEngine.RecordRawDifference(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(2),
+            -100,
+            100,
+            0,
+            "",
+            "Подозреваемый",
+            "Новая недостача"
+        );
+        CashConstitutionEngine.ApplyCorrection(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(3), 2);
+
+        Equal(
+            0,
+            CashConstitutionEngine.GetLatestCheckpointBreakdown(
+                items, MonthStart, NextMonthStart),
+            "Новый снимок"
+        );
+    }
+
+    private void RestartPreservesPartialAllocations()
+    {
+        var items = NewLedger();
+        Guid id = AddReadyShortage(
+            items,
+            100,
+            CashResponsibilityLevel.Suspected,
+            Now,
+            suspect: "Админ 1"
+        );
+        CashConstitutionEngine.ApplyManualLoss(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(1), "Админ 2", 40);
+
+        string json = JsonSerializer.Serialize(items);
+        var restored = JsonSerializer.Deserialize<List<CashReconciliationItem>>(json)
+            ?? throw new InvalidOperationException("Не удалось восстановить журнал.");
+        CashConstitutionEngine.Normalize(restored, MonthStart, NextMonthStart);
+
+        var card = restored.Single(item => item.Id == id);
+        Equal(60, card.Amount, "Остаток");
+        Equal(CashResponsibilityLevel.Suspected, card.ResponsibilityLevel, "Тип");
+        Equal("Админ 1", card.SuspectedEmployeeName, "Подозреваемый");
+        Equal(1, card.LossAllocations.Count, "Назначения");
+        Equal("Админ 2", card.LossAllocations[0].EmployeeName, "Получатель штрафа");
     }
 
     private void RandomizedInvariantTest()
@@ -519,6 +1211,25 @@ internal sealed class CashConstitutionTestSuite
         Equal(0, items.Count(item => item.Amount < 0), "Отрицательная активная сумма");
         Equal(0, items.Count(item => item.ResolvedAmount < 0), "Отрицательная закрытая сумма");
         Equal(0, items.Count(item => item.FormalizedAmount < 0), "Отрицательный штраф");
+        Equal(
+            0,
+            items.Count(item =>
+                (item.LossAllocations ?? new List<CashLossAllocation>())
+                    .Sum(allocation => Math.Max(0, allocation.Amount)) !=
+                Math.Max(0, item.FormalizedAmount) &&
+                item.AccountingSchemaVersion >= 3 &&
+                item.Resolution != CashReconciliationResolution.MonthClosed),
+            "Сумма назначений не равна оформленной сумме"
+        );
+        Equal(
+            items.SelectMany(item => item.LossAllocations ?? new List<CashLossAllocation>())
+                .Count(),
+            items.SelectMany(item => item.LossAllocations ?? new List<CashLossAllocation>())
+                .Select(item => item.Id)
+                .Distinct()
+                .Count(),
+            "Уникальные ID назначений"
+        );
         Equal(0, items.Count(item =>
             item.Status == CashReconciliationStatus.Resolved && item.Amount != 0),
             "Закрытая карта с активной суммой");

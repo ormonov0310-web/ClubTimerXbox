@@ -71,6 +71,26 @@ namespace ClubTimerXbox.Services
             SetAmountForDate(DateTime.Today, amount, note, expectedAmount);
         }
 
+        public static void SetAmountForTodayIfNotNewerThan(
+            DateTime committedAt,
+            int amount,
+            string note,
+            int? expectedAmount)
+        {
+            var current = _records.FirstOrDefault(item =>
+                item.Date.Date == DateTime.Today);
+            if (current != null &&
+                (current.UpdatedAt > committedAt ||
+                 (current.Amount == Math.Max(0, amount) &&
+                  current.ExpectedAmount == expectedAmount &&
+                  string.Equals(current.Note, note, StringComparison.Ordinal))))
+            {
+                return;
+            }
+
+            SetAmountForToday(amount, note, expectedAmount);
+        }
+
         public static int GetExpectedCashForToday()
         {
             int totalCash = CashService.GetCashIncomeTotalByPeriod(

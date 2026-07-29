@@ -132,9 +132,13 @@ namespace ClubTimerXbox
             int maxAdvance = Math.Min(remaining, availableCash);
 
             _cashLimitText.Text =
-                $"В кассе наличными: {currentCash.Value} сом\n" +
-                $"Оставляем на сдачу: {CashReserveAmount} сом\n" +
-                $"Можно взять сейчас: {maxAdvance} сом";
+                $"Наличные для аванса: " +
+                $"{EmployeeCashPrivacyService.GetAvailableCashBand(currentCash.Value, CashReserveAmount)}\n" +
+                (maxAdvance >= remaining && remaining > 0
+                    ? "Можно получить всю оставшуюся зарплату."
+                    : maxAdvance > 0
+                        ? "Сейчас доступна частичная выдача."
+                        : "Сейчас аванс наличными недоступен.");
 
             _cashLimitText.Foreground = maxAdvance > 0
                 ? new SolidColorBrush(Color.FromRgb(203, 213, 225))
@@ -206,10 +210,7 @@ namespace ClubTimerXbox
             if (availableCash <= 0)
             {
                 MessageBox.Show(
-                    $"В кассе мало налички для аванса.\n\n" +
-                    $"Сейчас в кассе: {currentCash.Value} сом\n" +
-                    $"Нужно оставить на сдачу: {CashReserveAmount} сом\n\n" +
-                    $"Доступно для аванса: 0 сом.",
+                    "Сейчас аванс наличными недоступен.",
                     "Взять аванс",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
@@ -233,10 +234,8 @@ namespace ClubTimerXbox
             if (amount > availableCash)
             {
                 MessageBox.Show(
-                    $"В кассе недостаточно свободной налички.\n\n" +
-                    $"Сейчас в кассе: {currentCash.Value} сом\n" +
-                    $"Нужно оставить на сдачу: {CashReserveAmount} сом\n" +
-                    $"Можно взять не больше: {availableCash} сом.",
+                    "Указанная сумма сейчас недоступна.\n\n" +
+                    "Введите меньшую сумму.",
                     "Взять аванс",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);

@@ -24,10 +24,22 @@ namespace ClubTimerXbox.Services
 
         public static CashBalanceCheckpointItem AddCurrentMonthCheckpoint(
             int cashAmount,
-            string note)
+            string note,
+            string operationId = "")
         {
             if (cashAmount < 0)
                 cashAmount = 0;
+
+            operationId = operationId.Trim();
+            if (!string.IsNullOrWhiteSpace(operationId))
+            {
+                var existing = _items.FirstOrDefault(item =>
+                    item.OperationId.Equals(
+                        operationId,
+                        StringComparison.Ordinal));
+                if (existing != null)
+                    return existing;
+            }
 
             var item = new CashBalanceCheckpointItem
             {
@@ -35,6 +47,7 @@ namespace ClubTimerXbox.Services
                 CreatedAt = DateTime.Now,
                 MonthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1),
                 CashAmount = cashAmount,
+                OperationId = operationId,
                 Note = note.Trim()
             };
 
@@ -113,7 +126,7 @@ namespace ClubTimerXbox.Services
             };
 
             string json = JsonSerializer.Serialize(_items, options);
-            File.WriteAllText(FilePath, json);
+            AtomicFileStorageService.WriteAllText(FilePath, json);
         }
     }
 }

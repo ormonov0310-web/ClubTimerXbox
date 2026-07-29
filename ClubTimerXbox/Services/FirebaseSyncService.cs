@@ -676,16 +676,6 @@ namespace ClubTimerXbox.Services
                     shortagesMonth
                 );
 
-                if (actualCashlessBalanceMonth.HasValue)
-                {
-                    CashReconciliationService.ResolveStaleCashlessZeroBaselineArtifacts(
-                        monthStart,
-                        nextMonthStart,
-                        expectedCashlessBalanceMonth,
-                        actualCashlessBalanceMonth.Value
-                    );
-                }
-
                 var cashReconciliation = CashReconciliationService
                     .GetRecentItems()
                     .Select(item =>
@@ -706,6 +696,7 @@ namespace ClubTimerXbox.Services
                         resolution = item.Resolution.ToString(),
                         investigationId = item.InvestigationId.ToString(),
                         checkpointNumber = item.CheckpointNumber,
+                        amountAtCheckpoint = item.AmountAtCheckpoint,
                         closedAtCheckpointNumber = item.ClosedAtCheckpointNumber,
                         amount = item.Amount,
                         originalAmount = item.OriginalAmount,
@@ -721,7 +712,20 @@ namespace ClubTimerXbox.Services
                         note = item.Note,
                         resolvedAt = item.ResolvedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
                         resolvedBy = item.ResolvedBy,
-                        resolutionNote = item.ResolutionNote
+                        resolutionNote = item.ResolutionNote,
+                        lossAllocations = (item.LossAllocations ??
+                            new List<CashLossAllocation>())
+                            .Select(allocation => new
+                            {
+                                id = allocation.Id.ToString(),
+                                createdAt = allocation.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                                employeeName = allocation.EmployeeName,
+                                amount = allocation.Amount,
+                                postedAmount = allocation.PostedAmount,
+                                source = allocation.Source.ToString(),
+                                reason = allocation.Reason
+                            })
+                            .ToList()
                     })
                     .ToList();
 
@@ -2680,6 +2684,18 @@ namespace ClubTimerXbox.Services
         {
             try
             {
+                if (FirebaseCommandLedgerService.TryGet(
+                        commandId,
+                        out FirebaseAppliedCommand appliedCommand))
+                {
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        appliedCommand.ResultMessage
+                    );
+                    return;
+                }
+
                 if (command.Type == "RefreshOverview")
                 {
                     bool published = await PushOverviewStateAsync(places.ToList());
@@ -2930,7 +2946,7 @@ namespace ClubTimerXbox.Services
 
                 if (command.Type == "AddManualEmployeeMoneyLoss")
                 {
-                    ApplyAddManualEmployeeMoneyLoss(command);
+                    ApplyAddManualEmployeeMoneyLoss(commandId, command);
 
                     await MarkCommandApplied(
                         commandId,
@@ -2956,7 +2972,7 @@ namespace ClubTimerXbox.Services
 
                 if (command.Type == "VerifyCashlessActual")
                 {
-                    string message = ApplyVerifyCashlessActual(command);
+                    string message = ApplyVerifyCashlessActual(commandId, command);
 
                     await MarkCommandApplied(
                         commandId,
@@ -2969,7 +2985,7 @@ namespace ClubTimerXbox.Services
 
                 if (command.Type == "BalanceCashlessActual")
                 {
-                    string message = ApplyBalanceCashlessActual(command);
+                    string message = ApplyBalanceCashlessActual(commandId, command);
 
                     await MarkCommandApplied(
                         commandId,
@@ -3169,6 +3185,9 @@ namespace ClubTimerXbox.Services
             }
             catch (Exception ex)
             {
+                if (FirebaseCommandLedgerService.TryGet(commandId, out _))
+                    return;
+
                 await MarkCommandError(
                     commandId,
                     command,
@@ -3742,7 +3761,9 @@ namespace ClubTimerXbox.Services
             return new DateTime(item.CreatedAt.Year, item.CreatedAt.Month, 1);
         }
 
-        private static void ApplyAddManualEmployeeMoneyLoss(FirebaseCommand command)
+        private static void ApplyAddManualEmployeeMoneyLoss(
+            string commandId,
+            FirebaseCommand command)
         {
             string employeeName = command.EmployeeName.Trim();
 
@@ -3785,7 +3806,8 @@ namespace ClubTimerXbox.Services
                     reconciliationFrom,
                     nextMonthStart,
                     employee.Name,
-                    command.Amount
+                    command.Amount,
+                    commandId
                 );
                 CashPenaltyPostingService.Post(
                     result.Assignments,
@@ -3834,7 +3856,9 @@ namespace ClubTimerXbox.Services
             }
         }
 
-        private static string ApplyVerifyCashlessActual(FirebaseCommand command)
+        private static string ApplyVerifyCashlessActual(
+            string commandId,
+            FirebaseCommand command)
         {
             if (command.Amount < 0)
                 throw new Exception("amount не может быть меньше 0.");
@@ -3903,7 +3927,8 @@ namespace ClubTimerXbox.Services
                 expectedCashlessBalance,
                 actualCashless,
                 suspectedEmployee,
-                string.Join("\n", notes)
+                string.Join("\n", notes),
+                commandId
             );
             PersistCashAssignments(
                 result.Assignments,
@@ -4031,10 +4056,31 @@ namespace ClubTimerXbox.Services
             );
         }
 
-        private static string ApplyBalanceCashlessActual(FirebaseCommand command)
+        private static string ApplyBalanceCashlessActual(
+            string commandId,
+            FirebaseCommand command)
         {
             if (command.Amount < 0)
                 throw new Exception("amount не может быть меньше 0.");
+
+            string note = string.IsNullOrWhiteSpace(command.Description)
+                ? "Баланс безнала владельцем"
+                : command.Description;
+            if (CashReconciliationService.TryGetConstitutionCorrectionCommit(
+                    commandId,
+                    out DateTime committedAt,
+                    out int? committedCash,
+                    out int committedCashless))
+            {
+                CompleteCommittedCashCorrection(
+                    commandId,
+                    committedAt,
+                    committedCash,
+                    committedCashless,
+                    note
+                );
+                return "Корректировка уже была применена ранее.";
+            }
 
             var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
             var nextMonthStart = monthStart.AddMonths(1);
@@ -4056,15 +4102,17 @@ namespace ClubTimerXbox.Services
                 actualCashless
             );
             int expectedCashless = calculatedExpectedCashless;
+            int checkpointBreakdown =
+                CashReconciliationService.GetLatestConstitutionCheckpointBreakdown(
+                    monthStart,
+                    nextMonthStart
+                );
             int cashDifference = actualCash.HasValue
                 ? actualCash.Value - expectedCash
                 : 0;
             int totalDifference = actualCash.HasValue
                 ? actualCash.Value + actualCashless - expectedCash - expectedCashless
                 : actualCashless - expectedCashless;
-            string note = string.IsNullOrWhiteSpace(command.Description)
-                ? "Баланс безнала владельцем"
-                : command.Description;
             int cashlessDifference = actualCashless - expectedCashless;
             string suggestedSuspect = cashlessDifference < 0
                 ? FindCashlessShortageSuspect(
@@ -4088,7 +4136,8 @@ namespace ClubTimerXbox.Services
                     expectedCashless,
                     actualCashless,
                     suggestedSuspect,
-                    "Связанная сверка безнала внутри итоговой корректировки."
+                    "Связанная сверка безнала внутри итоговой корректировки.",
+                    $"{commandId}:verification"
                 );
             PersistCashAssignments(
                 verificationResult.Assignments,
@@ -4100,7 +4149,7 @@ namespace ClubTimerXbox.Services
                 .ApplyConstitutionCorrection(
                     monthStart,
                     nextMonthStart,
-                    checkpointNumber
+                    checkpointNumber: 0
                 );
             PersistCashAssignments(
                 correctionResult.Assignments,
@@ -4114,14 +4163,15 @@ namespace ClubTimerXbox.Services
                 );
             int representedCycleDifference =
                 CashReconciliationService.GetConstitutionBreakdown(
-                    reconciliationCycleStart,
+                    monthStart,
                     nextMonthStart
                 );
             int missingDifference = CashConstitutionEngine
                 .CalculateUnrepresentedDifference(
                     totalDifference,
                     existingMoneyLosses,
-                    representedCycleDifference
+                    representedCycleDifference,
+                    checkpointBreakdown
                 );
 
             string suggestedResponsible =
@@ -4161,26 +4211,23 @@ namespace ClubTimerXbox.Services
             var finalCorrection = CashReconciliationService.ApplyConstitutionCorrection(
                 monthStart,
                 nextMonthStart,
-                checkpointNumber
+                checkpointNumber,
+                commandId,
+                actualCash,
+                actualCashless
             );
             PersistCashAssignments(
                 finalCorrection.Assignments,
                 "Оформлено после переноса остатка итоговой корректировки."
             );
 
-            CashlessService.SetAmountForToday(
-                amount: actualCashless,
-                note: note,
-                expectedAmount: actualCashless
+            CompleteCommittedCashCorrection(
+                commandId,
+                DateTime.Now,
+                actualCash,
+                actualCashless,
+                note
             );
-
-            if (actualCash.HasValue)
-            {
-                CashBalanceCheckpointService.AddCurrentMonthCheckpoint(
-                    actualCash.Value,
-                    note
-                );
-            }
             int finalBreakdown = CashReconciliationService.GetConstitutionBreakdown(
                 monthStart,
                 nextMonthStart
@@ -4201,7 +4248,6 @@ namespace ClubTimerXbox.Services
             string cashFact = actualCash.HasValue
                 ? $"{actualCash.Value} сом"
                 : "нет приёмки";
-
             return
                 $"Корректировка завершена. Наличные факт: {cashFact}. " +
                 $"Безнал факт: {actualCashless} сом. " +
@@ -4209,6 +4255,30 @@ namespace ClubTimerXbox.Services
                 $"Оформлено потерь: {formalized} сом. " +
                 $"Разбор: {finalBreakdown:+#;-#;0} сом. " +
                 $"Рекомендации: {finalRecommendations} сом.";
+        }
+
+        private static void CompleteCommittedCashCorrection(
+            string commandId,
+            DateTime committedAt,
+            int? actualCash,
+            int actualCashless,
+            string note)
+        {
+            CashPenaltyPostingService.Recover();
+            CashlessService.SetAmountForTodayIfNotNewerThan(
+                committedAt,
+                actualCashless,
+                note,
+                actualCashless
+            );
+            if (actualCash.HasValue)
+            {
+                CashBalanceCheckpointService.AddCurrentMonthCheckpoint(
+                    actualCash.Value,
+                    note,
+                    commandId
+                );
+            }
         }
 
         private static void PersistCashAssignments(
@@ -4656,6 +4726,12 @@ namespace ClubTimerXbox.Services
             string resultMessage,
             bool pushCurrentState = true)
         {
+            FirebaseCommandLedgerService.MarkApplied(
+                commandId,
+                command.Type,
+                resultMessage
+            );
+
             if (pushCurrentState)
                 await PushCurrentStateAsync(_lastKnownPlaces.ToList());
 

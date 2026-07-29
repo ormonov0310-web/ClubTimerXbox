@@ -28,14 +28,52 @@ namespace ClubTimerXbox.Services
         {
             _items = Load(out bool originMigrated);
             bool constitutionMigrated = false;
-            foreach (var item in _items.Where(item => item.AccountingSchemaVersion <= 0))
+            foreach (var item in _items)
             {
-                item.PostedFormalizedAmount = Math.Max(
-                    item.PostedFormalizedAmount,
-                    item.FormalizedAmount
-                );
-                item.AccountingSchemaVersion = 2;
-                constitutionMigrated = true;
+                if (item.AccountingSchemaVersion <= 0)
+                {
+                    item.PostedFormalizedAmount = Math.Max(
+                        item.PostedFormalizedAmount,
+                        item.FormalizedAmount
+                    );
+                    item.AccountingSchemaVersion = 2;
+                    constitutionMigrated = true;
+                }
+
+                item.LossAllocations ??= new List<CashLossAllocation>();
+                if (item.AccountingSchemaVersion < 3)
+                {
+                    if (item.CheckpointNumber > 0 &&
+                        item.AmountAtCheckpoint == 0 &&
+                        item.Status == CashReconciliationStatus.Open &&
+                        item.Amount > 0)
+                    {
+                        item.AmountAtCheckpoint = item.Amount;
+                    }
+
+                    if (item.FormalizedAmount > 0 &&
+                        item.LossAllocations.Count == 0 &&
+                        !string.IsNullOrWhiteSpace(item.ResponsibleEmployeeName))
+                    {
+                        item.LossAllocations.Add(new CashLossAllocation
+                        {
+                            CreatedAt = item.ResolvedAt ?? item.CreatedAt,
+                            EmployeeName = item.ResponsibleEmployeeName.Trim(),
+                            Amount = item.FormalizedAmount,
+                            PostedAmount = Math.Min(
+                                item.FormalizedAmount,
+                                Math.Max(0, item.PostedFormalizedAmount)
+                            ),
+                            Source = CashLossAllocationSource.Legacy,
+                            Reason = string.IsNullOrWhiteSpace(item.ResolutionNote)
+                                ? "Историческая оформленная потеря"
+                                : item.ResolutionNote
+                        });
+                    }
+
+                    item.AccountingSchemaVersion = 3;
+                    constitutionMigrated = true;
+                }
             }
 
             if (!originMigrated && !constitutionMigrated)
@@ -86,7 +124,8 @@ namespace ClubTimerXbox.Services
             int expectedAmount,
             int actualAmount,
             string suspectedEmployeeName,
-            string note)
+            string note,
+            string operationId = "")
         {
             lock (Gate)
             {
@@ -98,7 +137,8 @@ namespace ClubTimerXbox.Services
                     expectedAmount,
                     actualAmount,
                     suspectedEmployeeName,
-                    note
+                    note,
+                    operationId
                 );
                 Save();
                 return result;
@@ -126,7 +166,10 @@ namespace ClubTimerXbox.Services
         public static CashAccountingResult ApplyConstitutionCorrection(
             DateTime fromInclusive,
             DateTime toExclusive,
-            long checkpointNumber)
+            long checkpointNumber,
+            string operationId = "",
+            int? actualCashAtCheckpoint = null,
+            int? actualCashlessAtCheckpoint = null)
         {
             lock (Gate)
             {
@@ -135,7 +178,10 @@ namespace ClubTimerXbox.Services
                     fromInclusive,
                     toExclusive,
                     DateTime.Now,
-                    checkpointNumber
+                    checkpointNumber,
+                    operationId,
+                    actualCashAtCheckpoint,
+                    actualCashlessAtCheckpoint
                 );
                 Save();
                 return result;
@@ -175,7 +221,8 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive,
             string employeeName,
-            int amount)
+            int amount,
+            string operationId = "")
         {
             lock (Gate)
             {
@@ -185,10 +232,54 @@ namespace ClubTimerXbox.Services
                     toExclusive,
                     DateTime.Now,
                     employeeName,
-                    amount
+                    amount,
+                    operationId
                 );
                 Save();
                 return result;
+            }
+        }
+
+        public static bool TryGetConstitutionCorrectionCommit(
+            string operationId,
+            out DateTime committedAt,
+            out int? actualCash,
+            out int actualCashless)
+        {
+            lock (Gate)
+            {
+                if (string.IsNullOrWhiteSpace(operationId))
+                {
+                    committedAt = default;
+                    actualCash = null;
+                    actualCashless = 0;
+                    return false;
+                }
+
+                var marker = _items
+                    .Where(item =>
+                        item.IsTechnicalEvent &&
+                        item.Origin == CashReconciliationOrigin.CorrectionCheckpoint &&
+                        item.OperationId.Equals(
+                            operationId.Trim(),
+                            StringComparison.Ordinal))
+                    .OrderByDescending(item => item.CreatedAt)
+                    .ThenByDescending(item => item.Id)
+                    .FirstOrDefault();
+                if (marker == null)
+                {
+                    committedAt = default;
+                    actualCash = null;
+                    actualCashless = 0;
+                    return false;
+                }
+
+                committedAt = marker.CreatedAt;
+                actualCash = marker.ExpectedAmount >= 0
+                    ? marker.ExpectedAmount
+                    : null;
+                actualCashless = Math.Max(0, marker.ActualAmount);
+                return true;
             }
         }
 
@@ -248,12 +339,27 @@ namespace ClubTimerXbox.Services
             lock (Gate)
             {
                 return _items
-                    .Where(item =>
-                        item.CreatedAt >= fromInclusive &&
-                        item.CreatedAt < toExclusive &&
-                        (item.Kind == CashReconciliationKind.CashShortage ||
-                         item.Kind == CashReconciliationKind.CashlessShortage))
-                    .Sum(item => Math.Max(0, item.FormalizedAmount));
+                    .Where(item => !item.IsTechnicalEvent)
+                    .SelectMany(item =>
+                        (item.LossAllocations ?? new List<CashLossAllocation>())
+                        .Where(allocation =>
+                            allocation.CreatedAt >= fromInclusive &&
+                            allocation.CreatedAt < toExclusive))
+                    .Sum(allocation => Math.Max(0, allocation.Amount));
+            }
+        }
+
+        public static int GetLatestConstitutionCheckpointBreakdown(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            lock (Gate)
+            {
+                return CashConstitutionEngine.GetLatestCheckpointBreakdown(
+                    _items,
+                    fromInclusive,
+                    toExclusive
+                );
             }
         }
 
@@ -263,20 +369,60 @@ namespace ClubTimerXbox.Services
             lock (Gate)
             {
                 return _items
-                    .Where(item =>
-                        item.FormalizedAmount > item.PostedFormalizedAmount &&
-                        !string.IsNullOrWhiteSpace(item.ResponsibleEmployeeName))
-                    .OrderBy(item => item.CreatedAt)
-                    .Select(item => new CashAccountingAssignment
+                    .SelectMany(item =>
+                        (item.LossAllocations ?? new List<CashLossAllocation>())
+                        .Where(allocation =>
+                            allocation.Amount > allocation.PostedAmount &&
+                            !string.IsNullOrWhiteSpace(allocation.EmployeeName))
+                        .Select(allocation => new
+                        {
+                            Item = item,
+                            Allocation = allocation
+                        }))
+                    .OrderBy(entry => entry.Allocation.CreatedAt)
+                    .ThenBy(entry => entry.Allocation.Id)
+                    .Select(entry => new CashAccountingAssignment
                     {
-                        EmployeeName = item.ResponsibleEmployeeName.Trim(),
-                        Amount = item.FormalizedAmount - item.PostedFormalizedAmount,
-                        ReconciliationId = item.Id,
-                        Reason = string.IsNullOrWhiteSpace(item.ResolutionNote)
+                        AllocationId = entry.Allocation.Id,
+                        EmployeeName = entry.Allocation.EmployeeName.Trim(),
+                        Amount = entry.Allocation.Amount - entry.Allocation.PostedAmount,
+                        ReconciliationId = entry.Item.Id,
+                        Reason = string.IsNullOrWhiteSpace(entry.Allocation.Reason)
                             ? "Оформленная потеря кассы"
-                            : item.ResolutionNote
+                            : entry.Allocation.Reason
                     })
                     .ToList();
+            }
+        }
+
+        public static bool TryGetFormalizedPosting(
+            Guid reconciliationId,
+            Guid allocationId,
+            out string employeeName,
+            out int unpostedAmount,
+            out int targetAllocationAmount)
+        {
+            lock (Gate)
+            {
+                var item = _items.FirstOrDefault(entry => entry.Id == reconciliationId);
+                var allocation = item?.LossAllocations?.FirstOrDefault(entry =>
+                    entry.Id == allocationId);
+                if (allocation == null)
+                {
+                    employeeName = "";
+                    unpostedAmount = 0;
+                    targetAllocationAmount = 0;
+                    return false;
+                }
+
+                employeeName = allocation.EmployeeName.Trim();
+                targetAllocationAmount = Math.Max(0, allocation.Amount);
+                unpostedAmount = Math.Max(
+                    0,
+                    targetAllocationAmount - allocation.PostedAmount
+                );
+                return unpostedAmount > 0 &&
+                       !string.IsNullOrWhiteSpace(employeeName);
             }
         }
 
@@ -326,6 +472,31 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        public static void MarkFormalizedPosted(
+            Guid reconciliationId,
+            Guid allocationId,
+            int targetAllocationAmount)
+        {
+            lock (Gate)
+            {
+                var item = _items.FirstOrDefault(entry => entry.Id == reconciliationId);
+                var allocation = item?.LossAllocations?.FirstOrDefault(entry =>
+                    entry.Id == allocationId);
+                if (item == null || allocation == null)
+                    return;
+
+                allocation.PostedAmount = Math.Max(
+                    allocation.PostedAmount,
+                    Math.Min(allocation.Amount, targetAllocationAmount)
+                );
+                item.PostedFormalizedAmount = Math.Min(
+                    item.FormalizedAmount,
+                    item.LossAllocations.Sum(entry => Math.Max(0, entry.PostedAmount))
+                );
+                Save();
+            }
+        }
+
         public static int RenameEmployeeReferences(
             string oldEmployeeName,
             string newEmployeeName)
@@ -357,6 +528,20 @@ namespace ClubTimerXbox.Services
                         oldEmployeeName))
                 {
                     item.SuspectedEmployeeName = newEmployeeName;
+                    itemChanged = true;
+                }
+
+                foreach (var allocation in item.LossAllocations ??
+                         new List<CashLossAllocation>())
+                {
+                    if (!EmployeeReferenceRenameService.Matches(
+                            allocation.EmployeeName,
+                            oldEmployeeName))
+                    {
+                        continue;
+                    }
+
+                    allocation.EmployeeName = newEmployeeName;
                     itemChanged = true;
                 }
 
@@ -1154,6 +1339,7 @@ namespace ClubTimerXbox.Services
         public static List<CashReconciliationItem> GetRecentItems(int count = 100)
         {
             return _items
+                .Where(item => !item.IsTechnicalEvent)
                 .OrderByDescending(item => item.CreatedAt)
                 .Take(count)
                 .ToList();

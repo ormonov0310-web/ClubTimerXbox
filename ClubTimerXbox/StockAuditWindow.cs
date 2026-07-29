@@ -739,11 +739,7 @@ namespace ClubTimerXbox
             }
 
             int difference = actualCash - _expectedCashAmount;
-            int originalCashShortage = 0;
-            int coveredByCashlessExtra = 0;
-            int finalCashShortage = 0;
             int correctedInputMistake = 0;
-            int nettedReconciliation = 0;
             int remainingCashExtra = Math.Max(0, difference);
             var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
             var nextMonthStart = monthStart.AddMonths(1);
@@ -761,8 +757,7 @@ namespace ClubTimerXbox
 
             if (difference < 0)
             {
-                originalCashShortage = Math.Abs(difference);
-                var result = CashReconciliationService.ProcessCashAcceptance(
+                CashReconciliationService.ProcessCashAcceptance(
                     monthStart,
                     nextMonthStart,
                     checkedByEmployeeName: checkedBy,
@@ -771,9 +766,6 @@ namespace ClubTimerXbox
                     actualAmount: actualCash,
                     note: "Приёмка налички"
                 );
-                nettedReconciliation = result.PairedAmount + result.SettledAmount;
-                finalCashShortage = result.EventRemainingAmount;
-                coveredByCashlessExtra = result.PairedAmount;
             }
             else if (difference > 0)
             {
@@ -803,7 +795,6 @@ namespace ClubTimerXbox
                             ? $"Приёмка налички. После исправления ошибки ввода осталось лишнее: {remainingCashExtra} сом."
                             : "Приёмка налички"
                     );
-                    nettedReconciliation = result.PairedAmount + result.SettledAmount;
                     remainingCashExtra = result.EventRemainingAmount;
                 }
             }
@@ -825,38 +816,8 @@ namespace ClubTimerXbox
             string message =
                 "Наличка принята.\n\n" +
                 $"Передача: {responsible} → {checkedBy}\n" +
-                $"Должно быть: {_expectedCashAmount} сом\n" +
-                $"Фактически: {actualCash} сом\n";
-
-            if (difference < 0)
-            {
-                message += $"Недостача: {originalCashShortage} сом\n";
-
-                if (coveredByCashlessExtra > 0)
-                    message += $"Зачтено излишком безнала: {coveredByCashlessExtra} сом\n";
-                else if (nettedReconciliation > 0)
-                    message += $"Автозачёт разборов: {nettedReconciliation} сом\n";
-
-                if (finalCashShortage > 0)
-                    message += $"Активная разница: {finalCashShortage} сом\nОткройте на телефоне Разница кассы, чтобы закрыть её или оформить как потери.";
-                else
-                    message += "Недостача закрыта излишком безнала как ошибка типа оплаты.";
-            }
-            else if (difference > 0)
-            {
-                if (correctedInputMistake > 0)
-                    message += $"Исправлена ошибка ввода прошлой приёмки: {correctedInputMistake} сом\n";
-
-                if (nettedReconciliation > 0)
-                    message += $"Автозачёт разборов: {nettedReconciliation} сом\n";
-
-                if (remainingCashExtra > 0)
-                    message += $"Излишек: {remainingCashExtra} сом\nРазница отправлена владельцу на разбор.";
-                else
-                    message += "Излишка нет: плюс ушёл на закрытие ошибки ввода прошлой приёмки.";
-            }
-            else
-                message += "Разница: 0.";
+                $"{EmployeeCashPrivacyService.GetAcceptanceResult(difference)}.\n\n" +
+                "Подробности отправлены владельцу.";
 
             MessageBox.Show(message, "Приёмка налички");
 

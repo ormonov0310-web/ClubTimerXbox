@@ -21,17 +21,30 @@ namespace ClubTimerXbox.Services
             foreach (var assignment in assignments.Where(item =>
                 item.ReconciliationId != Guid.Empty))
             {
-                if (!CashReconciliationService.TryGetFormalizedPosting(
+                bool hasAllocation = assignment.AllocationId != Guid.Empty;
+                string employeeName;
+                int amount;
+                int targetFormalizedAmount;
+                bool found = hasAllocation
+                    ? CashReconciliationService.TryGetFormalizedPosting(
                         assignment.ReconciliationId,
-                        out string employeeName,
-                        out int amount,
-                        out int targetFormalizedAmount))
+                        assignment.AllocationId,
+                        out employeeName,
+                        out amount,
+                        out targetFormalizedAmount)
+                    : CashReconciliationService.TryGetFormalizedPosting(
+                        assignment.ReconciliationId,
+                        out employeeName,
+                        out amount,
+                        out targetFormalizedAmount);
+                if (!found)
                 {
                     continue;
                 }
 
-                string marker =
-                    $"[cash-reconciliation:{assignment.ReconciliationId:N}:{targetFormalizedAmount}]";
+                string marker = hasAllocation
+                    ? $"[cash-allocation:{assignment.AllocationId:N}]"
+                    : $"[cash-reconciliation:{assignment.ReconciliationId:N}:{targetFormalizedAmount}]";
                 string description =
                     $"{source}\n" +
                     $"Сотрудник: {employeeName}\n" +
@@ -69,10 +82,21 @@ namespace ClubTimerXbox.Services
                     );
                 }
 
-                CashReconciliationService.MarkFormalizedPosted(
-                    assignment.ReconciliationId,
-                    targetFormalizedAmount
-                );
+                if (hasAllocation)
+                {
+                    CashReconciliationService.MarkFormalizedPosted(
+                        assignment.ReconciliationId,
+                        assignment.AllocationId,
+                        targetFormalizedAmount
+                    );
+                }
+                else
+                {
+                    CashReconciliationService.MarkFormalizedPosted(
+                        assignment.ReconciliationId,
+                        targetFormalizedAmount
+                    );
+                }
             }
         }
     }

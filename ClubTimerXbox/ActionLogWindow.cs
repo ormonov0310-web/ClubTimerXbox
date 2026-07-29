@@ -700,26 +700,24 @@ namespace ClubTimerXbox
                 $"Дата: {item.CreatedAt:dd.MM.yyyy HH:mm}\n" +
                 $"Передача: {item.ResponsibleEmployeeName} → {item.CheckedByEmployeeName}\n" +
                 $"Проверил: {item.CheckedByEmployeeName}\n" +
-                $"Ответственный: {item.ResponsibleEmployeeName}\n" +
-                $"Должно быть: {item.ExpectedCashAmount} сом\n" +
-                $"Фактически: {item.ActualCashAmount} сом";
+                $"Ответственный: {item.ResponsibleEmployeeName}";
 
             panel.Children.Add(CreateMutedText(text));
 
             if (item.Difference < 0)
             {
                 panel.Children.Add(CreateAccentText(
-                    $"Недостача наличных: {Math.Abs(item.Difference)} сом",
+                    "Есть недостача наличных",
                     true
                 ));
             }
             else if (item.Difference > 0)
             {
-                panel.Children.Add(CreateInfoAccentText($"Излишек наличных: {item.Difference} сом"));
+                panel.Children.Add(CreateInfoAccentText("Есть излишек наличных"));
             }
             else
             {
-                panel.Children.Add(CreateGoodAccentText("Разница: 0"));
+                panel.Children.Add(CreateGoodAccentText("Расхождений нет"));
             }
 
             return CreateCard(panel, Color.FromRgb(24, 32, 43));

@@ -206,7 +206,7 @@ namespace ClubTimerXbox.Services
 
             string json = JsonSerializer.Serialize(Items, options);
 
-            File.WriteAllText(FilePath, json);
+            AtomicFileStorageService.WriteAllText(FilePath, json);
         }
     }
 }

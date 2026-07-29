@@ -26,7 +26,11 @@ namespace ClubTimerXbox.Models
         Unknown,
         CashAcceptance,
         CashlessVerification,
-        BalanceRawDifference
+        BalanceRawDifference,
+        OwnerPenaltyOverage,
+        OwnerManualPenalty,
+        CorrectionCheckpoint,
+        MonthClose
     }
 
     public enum CashReconciliationStage
@@ -53,6 +57,33 @@ namespace ClubTimerXbox.Models
         MonthClosed,
         InputCorrection,
         Legacy
+    }
+
+    public enum CashLossAllocationSource
+    {
+        AutomaticVerification,
+        AutomaticCorrection,
+        OwnerManual,
+        MonthClose,
+        Legacy
+    }
+
+    public class CashLossAllocation
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
+
+        public string EmployeeName { get; set; } = "";
+
+        public int Amount { get; set; }
+
+        public int PostedAmount { get; set; }
+
+        public CashLossAllocationSource Source { get; set; } =
+            CashLossAllocationSource.Legacy;
+
+        public string Reason { get; set; } = "";
     }
 
     public class CashExtraContribution
@@ -87,6 +118,12 @@ namespace ClubTimerXbox.Models
 
         public Guid InvestigationId { get; set; } = Guid.NewGuid();
 
+        public List<Guid> LinkedInvestigationIds { get; set; } = new();
+
+        public bool IsTechnicalEvent { get; set; }
+
+        public string OperationId { get; set; } = "";
+
         public DateTime CreatedAt { get; set; } = DateTime.Now;
 
         public CashReconciliationKind Kind { get; set; } = CashReconciliationKind.Other;
@@ -107,9 +144,13 @@ namespace ClubTimerXbox.Models
 
         public long CheckpointNumber { get; set; }
 
+        public int AmountAtCheckpoint { get; set; }
+
         public long? ClosedAtCheckpointNumber { get; set; }
 
         public List<CashExtraContribution> ExtraContributions { get; set; } = new();
+
+        public List<CashLossAllocation> LossAllocations { get; set; } = new();
 
         public int Amount { get; set; }
 

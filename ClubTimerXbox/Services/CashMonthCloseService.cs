@@ -218,7 +218,7 @@ namespace ClubTimerXbox.Services
         private static void Save()
         {
             Directory.CreateDirectory(FolderPath);
-            File.WriteAllText(
+            AtomicFileStorageService.WriteAllText(
                 FilePath,
                 JsonSerializer.Serialize(
                     State,
