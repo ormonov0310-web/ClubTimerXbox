@@ -32,7 +32,7 @@ namespace ClubTimerXbox.Services
 
             var item = new ProductIncomingItem
             {
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 ProductName = productName,
                 QuantityAdded = quantityAdded,
                 QuantityBefore = quantityBefore,
@@ -56,7 +56,8 @@ namespace ClubTimerXbox.Services
 
         public static List<ProductIncomingItem> GetToday()
         {
-            return GetByPeriod(DateTime.Today, DateTime.Today.AddDays(1));
+            var day = BusinessCalendarService.GetBusinessDay(ClubClock.Current.LocalNow);
+            return GetByPeriod(day.StartInclusive, day.EndExclusive);
         }
 
         public static List<ProductIncomingItem> GetByPeriod(

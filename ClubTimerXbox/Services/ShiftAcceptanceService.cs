@@ -166,7 +166,7 @@ namespace ClubTimerXbox.Services
                 ResponsibleEmployeeName = responsibleEmployeeName.Trim(),
                 DisplayResponsibleEmployeeName = responsibleEmployeeName.Trim(),
                 DisplayNewEmployeeName = newEmployeeName.Trim(),
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 ProductsAcceptedAt = null,
                 CashAcceptedAt = null,
                 CompletedAt = null,
@@ -212,7 +212,7 @@ namespace ClubTimerXbox.Services
             Current.ResponsibleEmployeeName = employeeName;
             Current.DisplayNewEmployeeName = employeeName;
             Current.DisplayResponsibleEmployeeName = employeeName;
-            Current.CompletedAt = DateTime.Now;
+            Current.CompletedAt = ClubClock.Current.LocalNow;
 
             Save();
         }
@@ -269,7 +269,7 @@ namespace ClubTimerXbox.Services
                 ResponsibleEmployeeName = employeeName,
                 DisplayResponsibleEmployeeName = employeeName,
                 DisplayNewEmployeeName = employeeName,
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 ProductsAcceptedAt = null,
                 CashAcceptedAt = null,
                 CompletedAt = null,
@@ -299,7 +299,7 @@ namespace ClubTimerXbox.Services
             string correctionNewEmployeeName = Current.CashCorrectionNewEmployeeName.Trim();
 
             Current.ProductsAccepted = true;
-            Current.ProductsAcceptedAt = DateTime.Now;
+            Current.ProductsAcceptedAt = ClubClock.Current.LocalNow;
 
             TryComplete();
 
@@ -328,7 +328,7 @@ namespace ClubTimerXbox.Services
             string correctionNewEmployeeName = Current.CashCorrectionNewEmployeeName.Trim();
 
             Current.CashAccepted = true;
-            Current.CashAcceptedAt = DateTime.Now;
+            Current.CashAcceptedAt = ClubClock.Current.LocalNow;
 
             TryComplete();
 
@@ -352,7 +352,7 @@ namespace ClubTimerXbox.Services
             Current.ProductsAccepted = true;
             Current.CashAccepted = true;
             Current.IsRequired = false;
-            Current.CompletedAt = DateTime.Now;
+            Current.CompletedAt = ClubClock.Current.LocalNow;
             Current.IsManualSelfAcceptance = false;
             ClearManualSelfAcceptanceAvailability();
             ClearCashCorrection();
@@ -410,7 +410,7 @@ namespace ClubTimerXbox.Services
                 return false;
 
             if (Current.CashCorrectionUntil == null ||
-                Current.CashCorrectionUntil.Value <= DateTime.Now)
+                Current.CashCorrectionUntil.Value <= ClubClock.Current.LocalNow)
             {
                 ExpireCashCorrectionIfNeeded();
                 return false;
@@ -444,7 +444,7 @@ namespace ClubTimerXbox.Services
                 return false;
 
             if (Current.CashCorrectionUntil == null ||
-                Current.CashCorrectionUntil.Value <= DateTime.Now)
+                Current.CashCorrectionUntil.Value <= ClubClock.Current.LocalNow)
             {
                 ExpireCashCorrectionIfNeeded();
                 return false;
@@ -475,7 +475,7 @@ namespace ClubTimerXbox.Services
                 return null;
             }
 
-            var remaining = Current.CashCorrectionUntil.Value - DateTime.Now;
+            var remaining = Current.CashCorrectionUntil.Value - ClubClock.Current.LocalNow;
 
             if (remaining <= TimeSpan.Zero)
                 return null;
@@ -496,8 +496,8 @@ namespace ClubTimerXbox.Services
             Current.ResponsibleEmployeeName = Current.CashCorrectionResponsibleEmployeeName.Trim();
             Current.DisplayResponsibleEmployeeName = Current.CashCorrectionResponsibleEmployeeName.Trim();
             Current.DisplayNewEmployeeName = Current.CashCorrectionNewEmployeeName.Trim();
-            Current.CreatedAt = DateTime.Now;
-            Current.ProductsAcceptedAt = DateTime.Now;
+            Current.CreatedAt = ClubClock.Current.LocalNow;
+            Current.ProductsAcceptedAt = ClubClock.Current.LocalNow;
             Current.CashAcceptedAt = null;
             Current.CompletedAt = null;
             Current.IsManualSelfAcceptance = false;
@@ -521,9 +521,9 @@ namespace ClubTimerXbox.Services
             Current.ResponsibleEmployeeName = Current.CashCorrectionResponsibleEmployeeName.Trim();
             Current.DisplayResponsibleEmployeeName = Current.CashCorrectionResponsibleEmployeeName.Trim();
             Current.DisplayNewEmployeeName = Current.CashCorrectionNewEmployeeName.Trim();
-            Current.CreatedAt = DateTime.Now;
+            Current.CreatedAt = ClubClock.Current.LocalNow;
             Current.ProductsAcceptedAt = null;
-            Current.CashAcceptedAt = DateTime.Now;
+            Current.CashAcceptedAt = ClubClock.Current.LocalNow;
             Current.CompletedAt = null;
             Current.IsManualSelfAcceptance = false;
             ClearManualSelfAcceptanceAvailability();
@@ -538,7 +538,7 @@ namespace ClubTimerXbox.Services
             if (Current.ProductsAccepted && Current.CashAccepted)
             {
                 Current.IsRequired = false;
-                Current.CompletedAt = DateTime.Now;
+            Current.CompletedAt = ClubClock.Current.LocalNow;
                 _ = FirebaseEventService.PublishAcceptanceCompletedAsync(Current);
             }
         }
@@ -577,14 +577,15 @@ namespace ClubTimerXbox.Services
             Current.CashCorrectionAcceptanceKey = Current.AcceptanceKey.Trim();
             Current.CashCorrectionNewEmployeeName = Current.NewEmployeeName.Trim();
             Current.CashCorrectionResponsibleEmployeeName = Current.ResponsibleEmployeeName.Trim();
-            Current.CashCorrectionUntil = DateTime.Now.AddMinutes(CashCorrectionWindowMinutes);
+            Current.CashCorrectionUntil =
+                ClubClock.Current.LocalNow.AddMinutes(CashCorrectionWindowMinutes);
         }
 
         private static void ExpireCashCorrectionIfNeeded()
         {
             if (!Current.CashCorrectionAvailable ||
                 Current.CashCorrectionUntil == null ||
-                Current.CashCorrectionUntil.Value > DateTime.Now)
+                Current.CashCorrectionUntil.Value > ClubClock.Current.LocalNow)
             {
                 return;
             }
@@ -600,7 +601,7 @@ namespace ClubTimerXbox.Services
                 Current.IsRequired = false;
                 Current.ProductsAccepted = true;
                 Current.CashAccepted = true;
-                Current.CompletedAt ??= DateTime.Now;
+                Current.CompletedAt ??= ClubClock.Current.LocalNow;
                 Current.IsManualSelfAcceptance = false;
             }
 
@@ -650,7 +651,7 @@ namespace ClubTimerXbox.Services
         {
             return Current.CashCorrectionAvailable &&
                 Current.CashCorrectionUntil != null &&
-                Current.CashCorrectionUntil.Value > DateTime.Now &&
+                Current.CashCorrectionUntil.Value > ClubClock.Current.LocalNow &&
                 !string.IsNullOrWhiteSpace(Current.CashCorrectionAcceptanceKey);
         }
 

@@ -54,11 +54,16 @@ namespace ClubTimerXbox
         private JournalPeriodMode _periodMode = JournalPeriodMode.Day;
         private AuditSubSection _auditSubSection = AuditSubSection.Products;
 
-        private DateTime _selectedDay = DateTime.Today;
-        private int _selectedYear = DateTime.Today.Year;
-        private int _selectedMonth = DateTime.Today.Month;
-        private DateTime _periodStart = DateTime.Today;
-        private DateTime _periodEnd = DateTime.Today;
+        private DateTime _selectedDay = BusinessCalendarService.GetBusinessDate(
+            ClubClock.Current.LocalNow);
+        private int _selectedYear = BusinessCalendarService.GetBusinessDate(
+            ClubClock.Current.LocalNow).Year;
+        private int _selectedMonth = BusinessCalendarService.GetBusinessDate(
+            ClubClock.Current.LocalNow).Month;
+        private DateTime _periodStart = BusinessCalendarService.GetBusinessDate(
+            ClubClock.Current.LocalNow);
+        private DateTime _periodEnd = BusinessCalendarService.GetBusinessDate(
+            ClubClock.Current.LocalNow);
 
         public ActionLogWindow()
         {
@@ -409,8 +414,12 @@ namespace ClubTimerXbox
         {
             if (_periodMode == JournalPeriodMode.Month)
             {
-                DateTime from = new DateTime(_selectedYear, _selectedMonth, 1);
-                return (from, from.AddMonths(1), GetMonthTitle(_selectedYear, _selectedMonth));
+                var month = BusinessCalendarService.GetBusinessMonthByAnchor(
+                    new DateTime(_selectedYear, _selectedMonth, 1));
+                return (
+                    month.StartInclusive,
+                    month.EndExclusive,
+                    GetMonthTitle(_selectedYear, _selectedMonth));
             }
 
             if (_periodMode == JournalPeriodMode.CustomPeriod)
@@ -425,11 +434,17 @@ namespace ClubTimerXbox
                     end = temp;
                 }
 
-                return (from, end.AddDays(1), $"{from:dd.MM.yyyy}–{end:dd.MM.yyyy}");
+                DateTime rangeStart = from.AddHours(
+                    BusinessCalendarService.BusinessDayStartHour);
+                DateTime rangeEnd = end.AddDays(1).AddHours(
+                    BusinessCalendarService.BusinessDayStartHour);
+                return (rangeStart, rangeEnd, $"{from:dd.MM.yyyy}–{end:dd.MM.yyyy}");
             }
 
-            DateTime day = _selectedDay.Date;
-            return (day, day.AddDays(1), day.ToString("dd.MM.yyyy"));
+            DateTime businessDate = _selectedDay.Date;
+            DateTime day = businessDate.AddHours(
+                BusinessCalendarService.BusinessDayStartHour);
+            return (day, day.AddDays(1), businessDate.ToString("dd.MM.yyyy"));
         }
 
         private string GetMonthTitle(int year, int month)

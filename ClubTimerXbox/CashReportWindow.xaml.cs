@@ -19,11 +19,13 @@ namespace ClubTimerXbox
             _filter.Section = CashReportSection.Games;
             _filter.PeriodMode = CashReportPeriodMode.Day;
             _filter.ViewMode = CashReportViewMode.Records;
-            _filter.SelectedDay = DateTime.Today;
-            _filter.SelectedYear = DateTime.Today.Year;
-            _filter.SelectedMonth = DateTime.Today.Month;
-            _filter.PeriodStart = DateTime.Today;
-            _filter.PeriodEnd = DateTime.Today;
+            DateTime businessDate = BusinessCalendarService.GetBusinessDate(
+                ClubClock.Current.LocalNow);
+            _filter.SelectedDay = businessDate;
+            _filter.SelectedYear = businessDate.Year;
+            _filter.SelectedMonth = businessDate.Month;
+            _filter.PeriodStart = businessDate;
+            _filter.PeriodEnd = businessDate;
 
             Render();
         }

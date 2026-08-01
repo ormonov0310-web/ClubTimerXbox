@@ -84,7 +84,7 @@ namespace ClubTimerXbox.Services
             var purchase = new StockPurchase
             {
                 Id = Guid.NewGuid(),
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 AddedBy = string.IsNullOrWhiteSpace(addedBy) ? "Владелец" : addedBy.Trim(),
                 Note = note.Trim(),
                 Items = safeItems

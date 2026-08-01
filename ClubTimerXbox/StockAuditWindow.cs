@@ -659,11 +659,13 @@ namespace ClubTimerXbox
                 {
                     // Если приёмки налички ещё ни разу не было,
                     // временно стартуем с начала текущего месяца.
-                    fromTime = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+                    fromTime = BusinessCalendarService
+                        .GetBusinessMonth(ClubClock.Current.LocalNow)
+                        .StartInclusive;
                     baseCashAmount = 0;
                 }
 
-                DateTime toTime = DateTime.Now.AddSeconds(1);
+                DateTime toTime = ClubClock.Current.LocalNow.AddSeconds(1);
 
                 int cashIncome = 0;
 
@@ -741,8 +743,9 @@ namespace ClubTimerXbox
             int difference = actualCash - _expectedCashAmount;
             int correctedInputMistake = 0;
             int remainingCashExtra = Math.Max(0, difference);
-            var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-            var nextMonthStart = monthStart.AddMonths(1);
+            var month = BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow);
+            var monthStart = month.StartInclusive;
+            var nextMonthStart = month.EndExclusive;
             DateTime reconciliationCycleStart = CashBalanceCheckpointService
                 .GetCurrentCycleStart(monthStart, nextMonthStart);
 
@@ -826,8 +829,9 @@ namespace ClubTimerXbox
 
         private void ResolveSmallCashlessShortagesAfterCashAcceptance(int actualCash)
         {
-            var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-            var nextMonthStart = monthStart.AddMonths(1);
+            var month = BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow);
+            var monthStart = month.StartInclusive;
+            var nextMonthStart = month.EndExclusive;
             var shortages = CashReconciliationService.GetOpenSmallCashlessShortages(
                 monthStart,
                 nextMonthStart
@@ -864,8 +868,9 @@ namespace ClubTimerXbox
             int expectedCashlessBalance,
             int actualCashless)
         {
-            var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-            var nextMonthStart = monthStart.AddMonths(1);
+            var month = BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow);
+            var monthStart = month.StartInclusive;
+            var nextMonthStart = month.EndExclusive;
 
             var groups = PaymentService.Records
                 .Where(record =>

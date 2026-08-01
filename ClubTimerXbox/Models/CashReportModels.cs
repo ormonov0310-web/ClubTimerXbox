@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using ClubTimerXbox.Services;
 
 namespace ClubTimerXbox.Models
 {
@@ -36,15 +37,20 @@ namespace ClubTimerXbox.Models
 
         public CashReportViewMode ViewMode { get; set; } = CashReportViewMode.Records;
 
-        public DateTime SelectedDay { get; set; } = DateTime.Today;
+        public DateTime SelectedDay { get; set; } =
+            BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow);
 
-        public int SelectedYear { get; set; } = DateTime.Today.Year;
+        public int SelectedYear { get; set; } =
+            BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow).Year;
 
-        public int SelectedMonth { get; set; } = DateTime.Today.Month;
+        public int SelectedMonth { get; set; } =
+            BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow).Month;
 
-        public DateTime PeriodStart { get; set; } = DateTime.Today;
+        public DateTime PeriodStart { get; set; } =
+            BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow);
 
-        public DateTime PeriodEnd { get; set; } = DateTime.Today;
+        public DateTime PeriodEnd { get; set; } =
+            BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow);
     }
 
     public class CashReportSummary

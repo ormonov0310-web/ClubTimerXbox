@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Cash Constitution 1.3, protected employee cash amounts, atomic storage and idempotent Firebase commands." `
+            -Notes "Business day 06:00-05:59, continuous balances, FIFO payroll, closed profit and crash-safe month transition." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,9 +66,11 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Cash Constitution 1.3 with deterministic reconciliation, correction, month close and penalty allocation.
+          Business calendar with a 06:00-05:59 workday and a 06:00 month boundary.
 
-          Exact till and cash-acceptance amounts remain visible to the owner but are hidden from employees.
+          Cash and cashless balances continue across months. Payroll is paid from
+          the oldest obligation first, product margin uses weighted cost, and
+          month close resumes safely after an interrupted application run.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {

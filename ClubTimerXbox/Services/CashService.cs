@@ -65,6 +65,23 @@ namespace ClubTimerXbox.Services
 
         public static void AddRecord(CashRecord record)
         {
+            if (record.CreatedAt == default)
+                record.CreatedAt = ClubClock.Current.LocalNow;
+            if (record.BusinessOccurredAt == default)
+                record.BusinessOccurredAt = record.CreatedAt;
+            if (string.IsNullOrWhiteSpace(record.BusinessDateKey))
+            {
+                record.BusinessDateKey = BusinessCalendarService
+                    .GetBusinessDay(record.BusinessOccurredAt)
+                    .Key;
+            }
+            if (string.IsNullOrWhiteSpace(record.BusinessMonthKey))
+            {
+                record.BusinessMonthKey = BusinessCalendarService
+                    .GetBusinessMonth(record.BusinessOccurredAt)
+                    .Key;
+            }
+
             _records.Add(record);
             Save();
         }
@@ -81,16 +98,18 @@ namespace ClubTimerXbox.Services
             string title,
             string description,
             int amount,
-            Guid? gameSessionId = null)
+            Guid? gameSessionId = null,
+            DateTime? businessOccurredAt = null)
         {
             if (amount <= 0)
                 return;
 
             AddRecord(new CashRecord
             {
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 EmployeeName = employeeName,
                 IncomeEmployeeName = incomeEmployeeName,
+                BusinessOccurredAt = businessOccurredAt ?? ClubClock.Current.LocalNow,
                 RelatedEmployeeName = "",
                 Type = CashRecordType.GameSession,
                 Title = title,
@@ -118,7 +137,7 @@ namespace ClubTimerXbox.Services
 
             AddRecord(new CashRecord
             {
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 EmployeeName = employeeName,
                 IncomeEmployeeName = employeeName,
                 RelatedEmployeeName = "",
@@ -140,14 +159,16 @@ namespace ClubTimerXbox.Services
             string responsibleEmployeeName,
             string title,
             string description,
-            int amount)
+            int amount,
+            DateTime? businessOccurredAt = null)
         {
             if (amount <= 0)
                 return;
 
             AddRecord(new CashRecord
             {
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
+                BusinessOccurredAt = businessOccurredAt ?? ClubClock.Current.LocalNow,
                 EmployeeName = checkedByEmployeeName,
                 IncomeEmployeeName = responsibleEmployeeName,
                 RelatedEmployeeName = responsibleEmployeeName,
@@ -177,8 +198,7 @@ namespace ClubTimerXbox.Services
 
             var records = _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.Category == "Недостачи" &&
                     record.Amount > 0 &&
                     (string.IsNullOrWhiteSpace(titleKeyword) ||
@@ -229,7 +249,7 @@ namespace ClubTimerXbox.Services
 
             AddRecord(new CashRecord
             {
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 EmployeeName = employeeName,
                 IncomeEmployeeName = employeeName,
                 RelatedEmployeeName = relatedEmployeeName.Trim(),
@@ -266,7 +286,7 @@ namespace ClubTimerXbox.Services
 
             AddRecord(new CashRecord
             {
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 EmployeeName = ownerName,
                 IncomeEmployeeName = ownerName,
                 RelatedEmployeeName = employeeName,
@@ -293,7 +313,7 @@ namespace ClubTimerXbox.Services
 
             AddRecord(new CashRecord
             {
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 EmployeeName = employeeName,
                 IncomeEmployeeName = employeeName,
                 RelatedEmployeeName = "",
@@ -310,14 +330,15 @@ namespace ClubTimerXbox.Services
 
         public static int GetTotalForToday()
         {
-            return GetCashIncomeTotalByPeriod(DateTime.Today, DateTime.Today.AddDays(1));
+            var day = CurrentBusinessDay();
+            return GetCashIncomeTotalByPeriod(day.StartInclusive, day.EndExclusive);
         }
 
         public static int GetGameTotalForToday()
         {
             return GetTotalByPeriodAndCategory(
-                DateTime.Today,
-                DateTime.Today.AddDays(1),
+                CurrentBusinessDay().StartInclusive,
+                CurrentBusinessDay().EndExclusive,
                 "Игры"
             );
         }
@@ -325,8 +346,8 @@ namespace ClubTimerXbox.Services
         public static int GetProductsAndServicesTotalForToday()
         {
             return GetTotalByPeriodAndCategory(
-                DateTime.Today,
-                DateTime.Today.AddDays(1),
+                CurrentBusinessDay().StartInclusive,
+                CurrentBusinessDay().EndExclusive,
                 "Товары и услуги"
             );
         }
@@ -334,8 +355,8 @@ namespace ClubTimerXbox.Services
         public static int GetShortageTotalForToday()
         {
             return GetTotalByPeriodAndCategory(
-                DateTime.Today,
-                DateTime.Today.AddDays(1),
+                CurrentBusinessDay().StartInclusive,
+                CurrentBusinessDay().EndExclusive,
                 "Недостачи"
             );
         }
@@ -343,8 +364,8 @@ namespace ClubTimerXbox.Services
         public static int GetCorrectionTotalForToday()
         {
             return GetTotalByPeriodAndCategory(
-                DateTime.Today,
-                DateTime.Today.AddDays(1),
+                CurrentBusinessDay().StartInclusive,
+                CurrentBusinessDay().EndExclusive,
                 "Коррекция"
             );
         }
@@ -352,8 +373,8 @@ namespace ClubTimerXbox.Services
         public static int GetExpenseTotalForToday()
         {
             return GetTotalByPeriodAndCategory(
-                DateTime.Today,
-                DateTime.Today.AddDays(1),
+                CurrentBusinessDay().StartInclusive,
+                CurrentBusinessDay().EndExclusive,
                 "Расходы"
             );
         }
@@ -361,9 +382,7 @@ namespace ClubTimerXbox.Services
         public static int GetTotalByPeriod(DateTime fromInclusive, DateTime toExclusive)
         {
             return _records
-                .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive)
+                .Where(record => IsInBusinessPeriod(record, fromInclusive, toExclusive))
                 .Sum(record => record.Amount);
         }
 
@@ -371,8 +390,7 @@ namespace ClubTimerXbox.Services
         {
             return _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.Category != "Недостачи" &&
                     record.Category != "Расходы")
                 .Sum(record => record.Amount);
@@ -387,8 +405,7 @@ namespace ClubTimerXbox.Services
         {
             return _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     IsClubExpense(record))
                 .Sum(record => record.Amount);
         }
@@ -417,8 +434,7 @@ namespace ClubTimerXbox.Services
         {
             return _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.Category == "Расходы" &&
                     record.PaymentMethod == "Наличные")
                 .Sum(record => record.Amount);
@@ -428,8 +444,7 @@ namespace ClubTimerXbox.Services
         {
             return _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.PaymentMethod == "Наличные" &&
                     IsClubExpense(record))
                 .Sum(record => record.Amount);
@@ -439,8 +454,7 @@ namespace ClubTimerXbox.Services
         {
             return _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.Category == "Расходы" &&
                     record.PaymentMethod == "Безнал")
                 .Sum(record => record.Amount);
@@ -450,8 +464,7 @@ namespace ClubTimerXbox.Services
         {
             return _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.PaymentMethod == "Безнал" &&
                     IsClubExpense(record))
                 .Sum(record => record.Amount);
@@ -466,8 +479,7 @@ namespace ClubTimerXbox.Services
 
             return _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.Category == "Расходы" &&
                     record.ExpenseCategory == expenseCategory)
                 .Sum(record => record.Amount);
@@ -482,8 +494,7 @@ namespace ClubTimerXbox.Services
 
             return _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.Category == "Расходы" &&
                     record.ExpenseCategory == expenseCategory)
                 .OrderByDescending(record => record.CreatedAt)
@@ -548,8 +559,7 @@ namespace ClubTimerXbox.Services
         {
             return _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.Category == category)
                 .Sum(record => record.Amount);
         }
@@ -559,9 +569,7 @@ namespace ClubTimerXbox.Services
             DateTime toExclusive)
         {
             return _records
-                .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive)
+                .Where(record => IsInBusinessPeriod(record, fromInclusive, toExclusive))
                 .OrderByDescending(record => record.CreatedAt)
                 .ToList();
         }
@@ -573,8 +581,7 @@ namespace ClubTimerXbox.Services
         {
             return _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.Category == category)
                 .OrderByDescending(record => record.CreatedAt)
                 .ToList();
@@ -589,8 +596,7 @@ namespace ClubTimerXbox.Services
 
             return _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.Category == "Расходы" &&
                     record.PaymentMethod == paymentMethod)
                 .OrderByDescending(record => record.CreatedAt)
@@ -622,6 +628,27 @@ namespace ClubTimerXbox.Services
                    !NonClubExpenseCategories.Contains(record.ExpenseCategory ?? "");
         }
 
+        private static BusinessPeriodRange CurrentBusinessDay()
+        {
+            return BusinessCalendarService.GetBusinessDay(ClubClock.Current.LocalNow);
+        }
+
+        public static DateTime GetBusinessTime(CashRecord record)
+        {
+            return record.BusinessOccurredAt == default
+                ? record.CreatedAt
+                : record.BusinessOccurredAt;
+        }
+
+        private static bool IsInBusinessPeriod(
+            CashRecord record,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            DateTime occurredAt = GetBusinessTime(record);
+            return occurredAt >= fromInclusive && occurredAt < toExclusive;
+        }
+
         private static bool IsSalaryRecord(CashRecord record)
         {
             return record.Category == "Расходы" &&
@@ -635,14 +662,14 @@ namespace ClubTimerXbox.Services
         {
             if (IsWholeMonthPeriod(fromInclusive, toExclusive) &&
                 !string.IsNullOrWhiteSpace(record.SalaryMonthKey) &&
-                TryParseSalaryMonthKey(record.SalaryMonthKey, out var salaryMonthStart))
+                TryParseSalaryMonthKey(record.SalaryMonthKey, out _))
             {
-                return salaryMonthStart >= fromInclusive.Date &&
-                       salaryMonthStart < toExclusive.Date;
+                return record.SalaryMonthKey.Equals(
+                    fromInclusive.ToString("yyyy-MM"),
+                    StringComparison.OrdinalIgnoreCase);
             }
 
-            return record.CreatedAt >= fromInclusive &&
-                   record.CreatedAt < toExclusive;
+            return IsInBusinessPeriod(record, fromInclusive, toExclusive);
         }
 
         private static bool IsAccountingRecordInPeriod(
@@ -652,20 +679,22 @@ namespace ClubTimerXbox.Services
         {
             if (IsWholeMonthPeriod(fromInclusive, toExclusive) &&
                 !string.IsNullOrWhiteSpace(record.AccountingMonthKey) &&
-                TryParseMonthKey(record.AccountingMonthKey, out var accountingMonthStart))
+                TryParseMonthKey(record.AccountingMonthKey, out _))
             {
-                return accountingMonthStart >= fromInclusive.Date &&
-                       accountingMonthStart < toExclusive.Date;
+                return record.AccountingMonthKey.Equals(
+                    fromInclusive.ToString("yyyy-MM"),
+                    StringComparison.OrdinalIgnoreCase);
             }
 
-            return record.CreatedAt >= fromInclusive &&
-                   record.CreatedAt < toExclusive;
+            return IsInBusinessPeriod(record, fromInclusive, toExclusive);
         }
 
         private static bool IsWholeMonthPeriod(DateTime fromInclusive, DateTime toExclusive)
         {
             return fromInclusive.Day == 1 &&
-                   fromInclusive.TimeOfDay == TimeSpan.Zero &&
+                   (fromInclusive.TimeOfDay == TimeSpan.Zero ||
+                    fromInclusive.TimeOfDay == TimeSpan.FromHours(
+                        BusinessCalendarService.BusinessDayStartHour)) &&
                    toExclusive == fromInclusive.AddMonths(1);
         }
 
@@ -821,8 +850,7 @@ namespace ClubTimerXbox.Services
             int changed = 0;
 
             foreach (var record in _records.Where(record =>
-                         record.CreatedAt >= fromInclusive &&
-                         record.CreatedAt < toExclusive &&
+                         IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                          record.Category == "Расходы" &&
                          record.ExpenseCategory == oldExpenseCategory))
             {
@@ -845,8 +873,7 @@ namespace ClubTimerXbox.Services
 
             var records = _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.Category == "Расходы" &&
                     record.ExpenseCategory == expenseCategory)
                 .ToList();
@@ -873,8 +900,7 @@ namespace ClubTimerXbox.Services
 
             var records = _records
                 .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
+                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.Category == "Расходы" &&
                     record.ExpenseCategory == expenseCategory)
                 .OrderByDescending(record => record.CreatedAt)

@@ -47,6 +47,8 @@ namespace ClubTimerXbox
             KnownDataRepairService.Apply();
             CashPenaltyPostingService.Recover();
             CashMonthCloseService.Start();
+            BusinessAccountingService.EnsureActivated();
+            BusinessDayTransitionService.Start();
 
             var loginWindow = new LoginWindow();
 

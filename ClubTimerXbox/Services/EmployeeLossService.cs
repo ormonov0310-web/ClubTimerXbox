@@ -91,9 +91,7 @@ namespace ClubTimerXbox.Services
         public static List<EmployeeLossItem> GetByPeriod(DateTime fromInclusive, DateTime toExclusive)
         {
             return Items
-                .Where(item =>
-                    item.CreatedAt >= fromInclusive &&
-                    item.CreatedAt < toExclusive)
+                .Where(item => IsInPeriod(item, fromInclusive, toExclusive))
                 .OrderByDescending(item => item.CreatedAt)
                 .ToList();
         }
@@ -137,8 +135,7 @@ namespace ClubTimerXbox.Services
             return Items
                 .Where(item =>
                     !item.IsPaid &&
-                    item.CreatedAt >= fromInclusive &&
-                    item.CreatedAt < toExclusive &&
+                    IsInPeriod(item, fromInclusive, toExclusive) &&
                     item.ResponsibleEmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase) &&
                     IsProductLoss(item))
                 .Sum(item => item.Amount);
@@ -154,8 +151,7 @@ namespace ClubTimerXbox.Services
             return Items
                 .Where(item =>
                     !item.IsPaid &&
-                    item.CreatedAt >= fromInclusive &&
-                    item.CreatedAt < toExclusive &&
+                    IsInPeriod(item, fromInclusive, toExclusive) &&
                     item.IsFixed &&
                     item.ResponsibleEmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase) &&
                     IsViolationLoss(item))
@@ -182,8 +178,7 @@ namespace ClubTimerXbox.Services
                     !item.IsPaid &&
                     !item.IsFixed &&
                     item.Amount > 0 &&
-                    item.CreatedAt >= fromInclusive &&
-                    item.CreatedAt < toExclusive &&
+                    IsInPeriod(item, fromInclusive, toExclusive) &&
                     item.ResponsibleEmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase) &&
                     IsViolationLoss(item))
                 .OrderBy(item => item.CreatedAt)
@@ -226,8 +221,7 @@ namespace ClubTimerXbox.Services
             return Items
                 .Where(item =>
                     !item.IsPaid &&
-                    item.CreatedAt >= fromInclusive &&
-                    item.CreatedAt < toExclusive &&
+                    IsInPeriod(item, fromInclusive, toExclusive) &&
                     item.ResponsibleEmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase) &&
                     IsMoneyLoss(item))
                 .Sum(item => item.Amount);
@@ -260,8 +254,7 @@ namespace ClubTimerXbox.Services
             var fixedTotals = Items
                 .Where(item =>
                     !item.IsPaid &&
-                    item.CreatedAt >= fromInclusive &&
-                    item.CreatedAt < toExclusive &&
+                    IsInPeriod(item, fromInclusive, toExclusive) &&
                     item.Amount > 0 &&
                     IsMoneyLoss(item) &&
                     item.IsFixed)
@@ -276,8 +269,7 @@ namespace ClubTimerXbox.Services
             var automaticTotals = Items
                 .Where(item =>
                     !item.IsPaid &&
-                    item.CreatedAt >= fromInclusive &&
-                    item.CreatedAt < toExclusive &&
+                    IsInPeriod(item, fromInclusive, toExclusive) &&
                     item.Amount > 0 &&
                     IsMoneyLoss(item) &&
                     !item.IsFixed)
@@ -363,7 +355,8 @@ namespace ClubTimerXbox.Services
             int amount,
             string note = "",
             string lossKind = "",
-            bool isFixed = false)
+            bool isFixed = false,
+            string salaryMonthKey = "")
         {
             if (amount < 0)
                 amount = 0;
@@ -371,7 +364,8 @@ namespace ClubTimerXbox.Services
             var item = new EmployeeLossItem
             {
                 Id = Guid.NewGuid(),
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
+                SalaryMonthKey = NormalizeMonthKey(salaryMonthKey),
                 ResponsibleEmployeeName = responsibleEmployeeName.Trim(),
                 CheckedByEmployeeName = checkedByEmployeeName.Trim(),
                 LossType = lossType.Trim(),
@@ -595,8 +589,7 @@ namespace ClubTimerXbox.Services
             var losses = Items
                 .Where(item =>
                     !item.IsPaid &&
-                    item.CreatedAt >= fromInclusive &&
-                    item.CreatedAt < toExclusive &&
+                    IsInPeriod(item, fromInclusive, toExclusive) &&
                     item.Amount > 0 &&
                     item.LossType.Contains("налич", StringComparison.OrdinalIgnoreCase))
                 .OrderBy(item => item.CreatedAt)
@@ -624,7 +617,7 @@ namespace ClubTimerXbox.Services
                 if (loss.Amount == 0)
                 {
                     loss.IsPaid = true;
-                    loss.PaidAt = DateTime.Now;
+                    loss.PaidAt = ClubClock.Current.LocalNow;
                 }
             }
 
@@ -632,6 +625,31 @@ namespace ClubTimerXbox.Services
                 Save();
 
             return forgiven;
+        }
+
+        private static bool IsInPeriod(
+            EmployeeLossItem item,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            if (fromInclusive.Day == 1 &&
+                toExclusive == fromInclusive.AddMonths(1) &&
+                !string.IsNullOrWhiteSpace(item.SalaryMonthKey))
+            {
+                return item.SalaryMonthKey.Equals(
+                    fromInclusive.ToString("yyyy-MM"),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+
+            return item.CreatedAt >= fromInclusive && item.CreatedAt < toExclusive;
+        }
+
+        private static string NormalizeMonthKey(string monthKey)
+        {
+            monthKey = monthKey.Trim();
+            return BusinessCalendarService.TryParseMonthKey(monthKey, out DateTime month)
+                ? month.ToString("yyyy-MM")
+                : "";
         }
 
         public static void MarkPaid(Guid id)
@@ -642,7 +660,7 @@ namespace ClubTimerXbox.Services
                 return;
 
             item.IsPaid = true;
-            item.PaidAt = DateTime.Now;
+            item.PaidAt = ClubClock.Current.LocalNow;
 
             Save();
         }

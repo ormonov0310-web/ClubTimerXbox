@@ -75,7 +75,7 @@ namespace ClubTimerXbox.Services
             var item = new EmployeeBonusItem
             {
                 Id = Guid.NewGuid(),
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 EmployeeName = employeeName.Trim(),
                 CreatedBy = "Владелец",
                 BonusType = "OwnerBonus",

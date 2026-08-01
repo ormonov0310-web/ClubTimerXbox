@@ -70,7 +70,13 @@ namespace ClubTimerXbox.Services
             if (paymentTotal != record.TotalAmount)
                 return;
 
-            record.CreatedAt = DateTime.Now;
+            record.CreatedAt = ClubClock.Current.LocalNow;
+            record.BusinessDateKey = BusinessCalendarService
+                .GetBusinessDay(record.CreatedAt)
+                .Key;
+            record.BusinessMonthKey = BusinessCalendarService
+                .GetBusinessMonth(record.CreatedAt)
+                .Key;
 
             _records.Add(record);
 

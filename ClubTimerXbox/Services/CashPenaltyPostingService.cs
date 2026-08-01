@@ -51,6 +51,12 @@ namespace ClubTimerXbox.Services
                     $"Сумма: {amount} сом\n" +
                     $"Основание: {assignment.Reason}\n" +
                     marker;
+                DateTime sourceTime = CashReconciliationService.Items
+                    .FirstOrDefault(item => item.Id == assignment.ReconciliationId)
+                    ?.CreatedAt ?? ClubClock.Current.LocalNow;
+                string salaryMonthKey = BusinessCalendarService
+                    .GetBusinessMonth(sourceTime)
+                    .Key;
 
                 bool cashRecordExists = CashService.Records.Any(record =>
                     record.Description.Contains(marker, StringComparison.Ordinal));
@@ -61,7 +67,8 @@ namespace ClubTimerXbox.Services
                         responsibleEmployeeName: employeeName,
                         title: "Недостача кассы",
                         description: description,
-                        amount: amount
+                        amount: amount,
+                        businessOccurredAt: sourceTime
                     );
                 }
 
@@ -78,7 +85,8 @@ namespace ClubTimerXbox.Services
                         amount: amount,
                         note: "Оформлено Конституционным движком кассы",
                         lossKind: "money",
-                        isFixed: true
+                        isFixed: true,
+                        salaryMonthKey: salaryMonthKey
                     );
                 }
 

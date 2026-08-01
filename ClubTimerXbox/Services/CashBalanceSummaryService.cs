@@ -69,7 +69,9 @@ namespace ClubTimerXbox.Services
             DateTime toExclusive)
         {
             var latestAcceptance = CashAcceptanceService
-                .GetByPeriod(fromInclusive, toExclusive)
+                .Items
+                .Where(item => item.CreatedAt < toExclusive)
+                .OrderByDescending(item => item.CreatedAt)
                 .FirstOrDefault();
 
             if (latestAcceptance == null)
@@ -100,26 +102,14 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            return CalculateCashBalanceFromMonthStart(fromInclusive, toExclusive);
+            return CalculateContinuousExpectedCashBalance(toExclusive);
         }
 
         public static int? CalculateProgramCashBalanceByPeriod(
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            var checkpoint = CashBalanceCheckpointService.GetLatestByPeriod(
-                fromInclusive,
-                toExclusive
-            );
-
-            if (checkpoint == null)
-                return CalculateExpectedCashBalanceByPeriod(fromInclusive, toExclusive);
-
-            return CalculateCashBalanceAfterCheckpoint(
-                checkpoint.CashAmount,
-                checkpoint.CreatedAt,
-                toExclusive
-            );
+            return CalculateContinuousExpectedCashBalance(toExclusive);
         }
 
         public static int? CalculateActualCashlessBalanceByPeriod(
@@ -127,11 +117,8 @@ namespace ClubTimerXbox.Services
             DateTime toExclusive)
         {
             var latestVerification = CashlessService.Records
-                .Where(record =>
-                    record.Date >= fromInclusive.Date &&
-                    record.Date < toExclusive.Date)
-                .OrderByDescending(record => record.Date)
-                .ThenByDescending(record => record.UpdatedAt)
+                .Where(record => record.UpdatedAt < toExclusive)
+                .OrderByDescending(record => record.UpdatedAt)
                 .FirstOrDefault();
 
             if (latestVerification == null)
@@ -162,7 +149,7 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            return CalculateCashlessBalanceFromMonthStart(fromInclusive, toExclusive);
+            return CalculateContinuousExpectedCashlessBalance(toExclusive);
         }
 
         public static int? CalculateProgramCashlessBalanceByPeriod(
@@ -170,15 +157,12 @@ namespace ClubTimerXbox.Services
             DateTime toExclusive)
         {
             var latestVerification = CashlessService.Records
-                .Where(record =>
-                    record.Date >= fromInclusive.Date &&
-                    record.Date < toExclusive.Date)
-                .OrderByDescending(record => record.Date)
-                .ThenByDescending(record => record.UpdatedAt)
+                .Where(record => record.UpdatedAt < toExclusive)
+                .OrderByDescending(record => record.UpdatedAt)
                 .FirstOrDefault(record => record.ExpectedAmount.HasValue);
 
             if (latestVerification == null)
-                return CalculateExpectedCashlessBalanceByPeriod(fromInclusive, toExclusive);
+                return CalculateContinuousExpectedCashlessBalance(toExclusive);
 
             return CalculateCashlessBalanceAfterCheckpoint(
                 latestVerification.ExpectedAmount!.Value,
@@ -208,6 +192,66 @@ namespace ClubTimerXbox.Services
                 .Sum(record => record.Amount);
 
             return Math.Max(0, checkpointAmount + incomeAfterCheckpoint - expensesAfterCheckpoint);
+        }
+
+        private static int CalculateContinuousExpectedCashBalance(DateTime toExclusive)
+        {
+            var checkpoint = CashBalanceCheckpointService.Items
+                .Where(item => item.CreatedAt < toExclusive)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstOrDefault();
+            if (checkpoint != null)
+            {
+                return CalculateCashBalanceAfterCheckpoint(
+                    checkpoint.CashAmount,
+                    checkpoint.CreatedAt,
+                    toExclusive);
+            }
+
+            var acceptance = CashAcceptanceService.Items
+                .Where(item => item.CreatedAt < toExclusive)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstOrDefault();
+            if (acceptance != null)
+            {
+                return CalculateCashBalanceAfterCheckpoint(
+                    acceptance.ExpectedCashAmount,
+                    acceptance.CreatedAt,
+                    toExclusive);
+            }
+
+            return CalculateCashBalanceFromMonthStart(DateTime.MinValue, toExclusive);
+        }
+
+        private static int CalculateContinuousExpectedCashlessBalance(DateTime toExclusive)
+        {
+            var checkpoint = CashlessBalanceCheckpointService.Items
+                .Where(item => item.CreatedAt < toExclusive)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstOrDefault();
+            if (checkpoint != null)
+            {
+                return CalculateCashlessBalanceAfterCheckpoint(
+                    checkpoint.CashlessAmount,
+                    checkpoint.CreatedAt,
+                    DateTime.MinValue,
+                    toExclusive);
+            }
+
+            var verification = CashlessService.Records
+                .Where(item => item.UpdatedAt < toExclusive && item.ExpectedAmount.HasValue)
+                .OrderByDescending(item => item.UpdatedAt)
+                .FirstOrDefault();
+            if (verification != null)
+            {
+                return CalculateCashlessBalanceAfterCheckpoint(
+                    verification.ExpectedAmount!.Value,
+                    verification.UpdatedAt,
+                    DateTime.MinValue,
+                    toExclusive);
+            }
+
+            return CalculateCashlessBalanceFromMonthStart(DateTime.MinValue, toExclusive);
         }
 
         private static int CalculateCashBalanceFromMonthStart(

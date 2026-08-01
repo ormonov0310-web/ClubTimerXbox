@@ -24,7 +24,9 @@ namespace ClubTimerXbox
             Action? onChanged = null)
         {
             _employeeName = employeeName;
-            _monthStart = new DateTime(monthStart.Year, monthStart.Month, 1);
+            _monthStart = BusinessCalendarService
+                .GetBusinessMonthByAnchor(monthStart)
+                .StartInclusive;
             _onChanged = onChanged;
 
             Title = "Взять аванс";
@@ -182,7 +184,9 @@ namespace ClubTimerXbox
                 return;
             }
 
-            if (_monthStart.Year != DateTime.Today.Year || _monthStart.Month != DateTime.Today.Month)
+            if (!BusinessCalendarService.GetBusinessMonth(_monthStart).Key.Equals(
+                    BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow).Key,
+                    StringComparison.OrdinalIgnoreCase))
             {
                 MessageBox.Show(
                     "Аванс можно взять только за текущий месяц.",
@@ -242,12 +246,13 @@ namespace ClubTimerXbox
                 return;
             }
 
-            CashService.AddSalaryPayment(
+            BusinessAccountingService.PaySalaryFifo(
                 ownerName: _employeeName,
                 employeeName: _employeeName,
                 amount: amount,
                 paymentMethod: "Наличные",
-                description: "Аванс наличными из кассы сотрудником"
+                description: "Аванс наличными из кассы сотрудником",
+                throughMonthKey: _monthStart.ToString("yyyy-MM")
             );
 
             _onChanged?.Invoke();

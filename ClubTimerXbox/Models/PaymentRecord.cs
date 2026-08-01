@@ -9,6 +9,10 @@ namespace ClubTimerXbox.Models
 
         public DateTime CreatedAt { get; set; } = DateTime.Now;
 
+        public string BusinessDateKey { get; set; } = "";
+
+        public string BusinessMonthKey { get; set; } = "";
+
         public string EmployeeName { get; set; } = "";
 
         public string OperationTitle { get; set; } = "";

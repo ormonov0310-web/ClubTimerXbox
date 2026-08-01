@@ -26,7 +26,8 @@ namespace ClubTimerXbox.Services
 
         public static int GetAmountForToday()
         {
-            return GetAmountForDate(DateTime.Today);
+            return GetAmountForDate(BusinessCalendarService.GetBusinessDate(
+                ClubClock.Current.LocalNow));
         }
 
         public static void SetAmountForDate(
@@ -58,7 +59,7 @@ namespace ClubTimerXbox.Services
             record.Amount = amount;
             record.ExpectedAmount = expectedAmount;
             record.Note = note;
-            record.UpdatedAt = DateTime.Now;
+            record.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
         }
@@ -68,7 +69,11 @@ namespace ClubTimerXbox.Services
             string note = "",
             int? expectedAmount = null)
         {
-            SetAmountForDate(DateTime.Today, amount, note, expectedAmount);
+            SetAmountForDate(
+                BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow),
+                amount,
+                note,
+                expectedAmount);
         }
 
         public static void SetAmountForTodayIfNotNewerThan(
@@ -78,7 +83,8 @@ namespace ClubTimerXbox.Services
             int? expectedAmount)
         {
             var current = _records.FirstOrDefault(item =>
-                item.Date.Date == DateTime.Today);
+                item.Date.Date == BusinessCalendarService.GetBusinessDate(
+                    ClubClock.Current.LocalNow));
             if (current != null &&
                 (current.UpdatedAt > committedAt ||
                  (current.Amount == Math.Max(0, amount) &&
@@ -94,8 +100,8 @@ namespace ClubTimerXbox.Services
         public static int GetExpectedCashForToday()
         {
             int totalCash = CashService.GetCashIncomeTotalByPeriod(
-                DateTime.Today,
-                DateTime.Today.AddDays(1)
+                BusinessCalendarService.GetBusinessDay(ClubClock.Current.LocalNow).StartInclusive,
+                BusinessCalendarService.GetBusinessDay(ClubClock.Current.LocalNow).EndExclusive
             );
 
             int cashless = GetAmountForToday();

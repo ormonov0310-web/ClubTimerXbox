@@ -1634,7 +1634,7 @@ namespace ClubTimerXbox.Services
                 duplicate.Amount = 0;
                 duplicate.Status = CashReconciliationStatus.Resolved;
                 duplicate.Resolution = CashReconciliationResolution.Legacy;
-                duplicate.ResolvedAt ??= DateTime.Now;
+                duplicate.ResolvedAt ??= ClubClock.Current.LocalNow;
                 duplicate.ResolvedBy = "Система";
                 duplicate.ResolutionNote = "Объединено в единую активную карточку излишка.";
             }

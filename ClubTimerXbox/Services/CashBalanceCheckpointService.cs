@@ -44,8 +44,10 @@ namespace ClubTimerXbox.Services
             var item = new CashBalanceCheckpointItem
             {
                 Id = Guid.NewGuid(),
-                CreatedAt = DateTime.Now,
-                MonthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1),
+                CreatedAt = ClubClock.Current.LocalNow,
+                MonthStart = BusinessCalendarService
+                    .GetBusinessMonth(ClubClock.Current.LocalNow)
+                    .StartInclusive,
                 CashAmount = cashAmount,
                 OperationId = operationId,
                 Note = note.Trim()

@@ -72,7 +72,7 @@ namespace ClubTimerXbox.Services
             if (string.IsNullOrWhiteSpace(responsible))
                 return;
 
-            DateTime now = DateTime.Now;
+            DateTime now = ClubClock.Current.LocalNow;
             DateTime scheduleStart = GetScheduleStart(now.Date, settings);
             DateTime maxAutoTime = scheduleStart.AddMinutes(settings.LateOpeningMaxAutoMinutes);
             DateTime openingWindowEnd = now.Date.AddHours(OpeningWindowEndHour);
@@ -168,7 +168,7 @@ namespace ClubTimerXbox.Services
                 .Any(item =>
                     item.Id != shift.Id &&
                     item.StartedAt < shift.StartedAt &&
-                    (item.ClosedAt ?? DateTime.Now) >= scheduleStart);
+                    (item.ClosedAt ?? ClubClock.Current.LocalNow) >= scheduleStart);
         }
 
         private static bool HasAnyOpeningBy(DateTime scheduleStart, DateTime until)
@@ -176,7 +176,7 @@ namespace ClubTimerXbox.Services
             return ActionLogService.GetAllShifts()
                 .Any(shift =>
                     shift.StartedAt <= until &&
-                    (shift.ClosedAt ?? DateTime.Now) >= scheduleStart);
+                    (shift.ClosedAt ?? ClubClock.Current.LocalNow) >= scheduleStart);
         }
 
         private static bool HasAnyLateOpeningRecord(string dayKey)

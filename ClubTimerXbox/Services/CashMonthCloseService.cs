@@ -35,10 +35,10 @@ namespace ClubTimerXbox.Services
 
         public static void Start()
         {
-            DateTime now = DateTime.Now;
-            string currentMonthKey = MonthKey(
-                new DateTime(now.Year, now.Month, 1)
-            );
+            DateTime now = ClubClock.Current.LocalNow;
+            string currentMonthKey = BusinessCalendarService
+                .GetBusinessMonth(now)
+                .Key;
 
             if (string.IsNullOrWhiteSpace(State.ActivatedMonthKey))
             {
@@ -66,23 +66,23 @@ namespace ClubTimerXbox.Services
             if (!TryParseMonthKey(State.ActivatedMonthKey, out DateTime activatedMonth))
                 return;
 
-            DateTime currentMonth = new(now.Year, now.Month, 1);
+            DateTime currentMonth = BusinessCalendarService
+                .GetBusinessMonth(now)
+                .StartInclusive
+                .Date;
             for (DateTime month = activatedMonth;
                  month < currentMonth;
                  month = month.AddMonths(1))
             {
                 CloseOnce(month);
             }
-
-            if (now >= currentMonth.AddMonths(1).AddMinutes(-2))
-                CloseOnce(currentMonth);
         }
 
         private static void TimerOnTick(object? sender, EventArgs e)
         {
             try
             {
-                RunCatchUp(DateTime.Now);
+                RunCatchUp(ClubClock.Current.LocalNow);
             }
             catch
             {
@@ -93,10 +93,15 @@ namespace ClubTimerXbox.Services
         private static void CloseOnce(DateTime monthStart)
         {
             string key = MonthKey(monthStart);
+            var period = BusinessCalendarService.GetBusinessMonthByAnchor(monthStart);
             if (State.ClosedMonthKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
+            {
+                BusinessAccountingService.CloseMonth(period);
                 return;
+            }
 
-            DateTime nextMonthStart = monthStart.AddMonths(1);
+            DateTime periodStart = period.StartInclusive;
+            DateTime nextMonthStart = period.EndExclusive;
             var workedHours = EmployeeService
                 .GetAllEmployees()
                 .ToDictionary(
@@ -104,14 +109,14 @@ namespace ClubTimerXbox.Services
                     employee => Math.Max(
                         0,
                         EmployeeStatsService
-                            .GetSummary(employee.Name, monthStart)
+                            .GetSummary(employee.Name, periodStart)
                             .MonthWorkTime
                             .TotalHours
                     ),
                     StringComparer.OrdinalIgnoreCase
                 );
             var result = CashReconciliationService.CloseConstitutionMonth(
-                monthStart,
+                periodStart,
                 nextMonthStart,
                 workedHours
             );
@@ -122,6 +127,7 @@ namespace ClubTimerXbox.Services
             State.PendingAssignments = result.Assignments.ToList();
             Save();
             CompletePendingAssignments();
+            BusinessAccountingService.CloseMonth(period);
         }
 
         private static void CompletePendingAssignments()
@@ -130,6 +136,10 @@ namespace ClubTimerXbox.Services
                 return;
 
             string key = State.PendingMonthKey;
+            DateTime sourceTime = BusinessCalendarService
+                .GetBusinessMonthByKey(key)
+                .EndExclusive
+                .AddTicks(-1);
             foreach (var assignment in State.PendingAssignments)
             {
                 string marker =
@@ -148,7 +158,8 @@ namespace ClubTimerXbox.Services
                         responsibleEmployeeName: assignment.EmployeeName,
                         title: "Остаток потерь при закрытии месяца",
                         description: description,
-                        amount: assignment.Amount
+                        amount: assignment.Amount,
+                        businessOccurredAt: sourceTime
                     );
                 }
                 if (!EmployeeLossService.Items.Any(item =>
@@ -163,7 +174,8 @@ namespace ClubTimerXbox.Services
                         amount: assignment.Amount,
                         note: "Распределено по рабочим часам Конституцией кассы",
                         lossKind: "money",
-                        isFixed: true
+                        isFixed: true,
+                        salaryMonthKey: key
                     );
                 }
             }

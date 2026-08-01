@@ -4,6 +4,366 @@ using System.Text.Json;
 
 var suite = new CashConstitutionTestSuite();
 suite.Run();
+new BusinessCalendarTestSuite().Run();
+
+internal sealed class BusinessCalendarTestSuite
+{
+    private int _passed;
+
+    public void Run()
+    {
+        Test("Рабочий день меняется ровно в 06:00", BusinessDayBoundary);
+        Test("Рабочий месяц меняется 1 числа в 06:00", BusinessMonthBoundary);
+        Test("Смена делится по рабочим месяцам", ShiftIsSplitAtBoundary);
+        Test("Ручные часы не меняют системные часы после теста", ManualClockIsScoped);
+        Test("Закрытие месяца не обнуляет наличные и безнал", ContinuousBalancesSurviveClose);
+        Test("Закрытие месяца после сбоя продолжается без дублей", MonthCloseResumesAfterEveryStep);
+        Test("Откат часов не открывает закрытый месяц", ClockRollbackDoesNotReopenMonth);
+        Test("Недостача без рабочих часов сохраняется", NoHoursDefersUnknownShortage);
+        Test("Недостача распределяется пропорционально 99 к 1", ShortageUsesWorkedHours);
+        Test("Зарплата выплачивается от старых обязательств к новым", SalaryPaymentUsesFifo);
+        Test("Выплата сверх остатка запрещена", SalaryOverpaymentIsBlocked);
+        Test("Себестоимость прихода считается средневзвешенно", WeightedInventoryCost);
+        Test("Прибыль использует себестоимость проданного товара", ProfitUsesCostOfGoodsSold);
+        Test("Убыток уменьшает накопленный доход владельца", LossReducesRetainedIncome);
+        Test("Миграционный снимок не удваивает прибыль месяца", ActivationSnapshotPreventsDoubleProfit);
+        Test("Отрицательный остаток сотрудника переносится", NegativeEmployeeBalanceSurvivesClose);
+#if DEBUG
+        Test("DEBUG-стенд полностью изолирован от Firebase и AppData", DebugHarnessIsIsolated);
+        Test("Выплата зарплаты физически уменьшает выбранную кассу", SalaryPaymentMovesMoney);
+        Test("Вывод владельца ограничен закрытым доходом", OwnerWithdrawalUsesRetainedIncome);
+#endif
+
+        Console.WriteLine();
+        Console.WriteLine($"PASS: {_passed} сценариев рабочего календаря и бюджета.");
+    }
+
+    private void BusinessDayBoundary()
+    {
+        Equal("2026-07-31", BusinessCalendarService.GetBusinessDay(
+            new DateTime(2026, 8, 1, 5, 59, 59)).Key, "до границы");
+        Equal("2026-08-01", BusinessCalendarService.GetBusinessDay(
+            new DateTime(2026, 8, 1, 6, 0, 0)).Key, "на границе");
+    }
+
+    private void BusinessMonthBoundary()
+    {
+        Equal("2026-07", BusinessCalendarService.GetBusinessMonth(
+            new DateTime(2026, 8, 1, 5, 59, 59)).Key, "до границы");
+        Equal("2026-08", BusinessCalendarService.GetBusinessMonth(
+            new DateTime(2026, 8, 1, 6, 0, 0)).Key, "на границе");
+    }
+
+    private void ShiftIsSplitAtBoundary()
+    {
+        var split = BusinessCalendarService.SplitByBusinessMonth(
+            new DateTime(2026, 8, 1, 5, 0, 0),
+            new DateTime(2026, 8, 1, 7, 0, 0));
+        Equal(TimeSpan.FromHours(1), split["2026-07"], "июль");
+        Equal(TimeSpan.FromHours(1), split["2026-08"], "август");
+    }
+
+    private void ManualClockIsScoped()
+    {
+        IClubClock before = ClubClock.Current;
+        var manual = new ManualClubClock(new DateTime(2030, 1, 1, 5, 59, 0));
+        using (ClubClock.UseForTesting(manual))
+        {
+            Equal(new DateTime(2030, 1, 1, 5, 59, 0), ClubClock.Current.LocalNow, "ручное время");
+            manual.Advance(TimeSpan.FromMinutes(1));
+            Equal("2030-01-01", BusinessCalendarService.GetBusinessDay(
+                ClubClock.Current.LocalNow).Key, "переход ручного времени");
+        }
+        Same(before, ClubClock.Current, "восстановление часов");
+    }
+
+    private void ContinuousBalancesSurviveClose()
+    {
+        var state = NewState();
+        BusinessMonthTransitionEngine.CloseMonth(
+            state, "2026-07", new DateTime(2026, 8, 1, 6, 0, 0));
+        Equal(10000, state.CashBalance, "наличные");
+        Equal(10000, state.CashlessBalance, "безнал");
+        Equal(5000, state.Months["2026-07"].Payroll.Single().RemainingAmount, "остаток зарплаты");
+        Equal(5000, state.RetainedOwnerIncome, "чистая прибыль");
+    }
+
+    private void MonthCloseResumesAfterEveryStep()
+    {
+        foreach (BusinessMonthCloseStep step in Enum.GetValues<BusinessMonthCloseStep>()
+                     .Where(value => value > BusinessMonthCloseStep.None))
+        {
+            var state = NewState();
+            bool interrupted = false;
+            try
+            {
+                BusinessMonthTransitionEngine.CloseMonth(
+                    state,
+                    "2026-07",
+                    new DateTime(2026, 8, 1, 6, 0, 0),
+                    completedStep =>
+                    {
+                        if (completedStep != step)
+                            return;
+                        interrupted = true;
+                        throw new InvalidOperationException("test interruption");
+                    });
+            }
+            catch (InvalidOperationException) when (interrupted)
+            {
+            }
+
+            var journal = BusinessMonthTransitionEngine.CloseMonth(
+                state, "2026-07", new DateTime(2026, 8, 1, 11, 0, 0));
+            Equal(BusinessMonthCloseStep.Completed, journal.LastCompletedStep, $"шаг {step}");
+            Equal(5000, state.RetainedOwnerIncome, $"доход после шага {step}");
+        }
+    }
+
+    private void ClockRollbackDoesNotReopenMonth()
+    {
+        var state = NewState();
+        BusinessMonthTransitionEngine.CloseMonth(
+            state, "2026-07", new DateTime(2026, 8, 1, 6, 0, 0));
+        BusinessMonthTransitionEngine.CloseMonth(
+            state, "2026-07", new DateTime(2026, 7, 31, 23, 0, 0));
+        Equal(5000, state.RetainedOwnerIncome, "доход не задвоен");
+        True(state.Months["2026-07"].IsClosed, "месяц закрыт");
+    }
+
+    private void NoHoursDefersUnknownShortage()
+    {
+        var state = NewState();
+        state.Months["2026-07"].UnknownCashShortage = 100;
+        state.Months["2026-07"].WorkedHours.Clear();
+        var journal = BusinessMonthTransitionEngine.CloseMonth(
+            state, "2026-07", new DateTime(2026, 8, 1, 6, 0, 0));
+        True(journal.IsDeferred, "закрытие отложено");
+        Equal(100, state.Months["2026-07"].UnknownCashShortage, "потеря сохранена");
+        Equal(BusinessMonthCloseStep.Prepared, journal.LastCompletedStep, "последний шаг");
+    }
+
+    private void ShortageUsesWorkedHours()
+    {
+        var state = NewState();
+        var month = state.Months["2026-07"];
+        month.Payroll.Clear();
+        month.UnknownCashShortage = 100;
+        month.WorkedHours.Clear();
+        month.WorkedHours["Первый"] = 99;
+        month.WorkedHours["Второй"] = 1;
+        BusinessMonthTransitionEngine.CloseMonth(
+            state, "2026-07", new DateTime(2026, 8, 1, 6, 0, 0));
+        Equal(99, month.Payroll.Single(item => item.EmployeeName == "Первый").PenaltyAmount, "первый");
+        Equal(1, month.Payroll.Single(item => item.EmployeeName == "Второй").PenaltyAmount, "второй");
+    }
+
+    private void SalaryPaymentUsesFifo()
+    {
+        var obligations = new List<EmployeePayrollObligation>
+        {
+            NewObligation("Арген", "2026-07", 5000),
+            NewObligation("Арген", "2026-08", 100)
+        };
+        var allocations = PayrollPaymentAllocator.AllocateFifo(obligations, "Арген", 5100);
+        Equal(2, allocations.Count, "число проводок");
+        Equal("2026-07", allocations[0].SourceMonthKey, "первая проводка");
+        Equal(5000, allocations[0].Amount, "старый остаток");
+        Equal("2026-08", allocations[1].SourceMonthKey, "вторая проводка");
+        Equal(100, allocations[1].Amount, "новая зарплата");
+    }
+
+    private void SalaryOverpaymentIsBlocked()
+    {
+        bool blocked = false;
+        try
+        {
+            PayrollPaymentAllocator.AllocateFifo(
+                new[] { NewObligation("Арген", "2026-07", 100) },
+                "Арген",
+                101);
+        }
+        catch (InvalidOperationException)
+        {
+            blocked = true;
+        }
+        True(blocked, "переплата заблокирована");
+    }
+
+    private void WeightedInventoryCost()
+    {
+        Equal(133, InventoryCostService.CalculateWeightedAverageUnitCost(
+            10, 100, 5, 200), "средняя цена");
+    }
+
+    private void ProfitUsesCostOfGoodsSold()
+    {
+        var state = NewState();
+        var month = state.Months["2026-07"];
+        month.GameRevenue = 1000;
+        month.ProductRevenue = 1000;
+        month.ProductCostOfGoodsSold = 400;
+        month.ClubExpenses = 100;
+        month.Payroll.Single().AccruedAmount = 200;
+        BusinessMonthTransitionEngine.CloseMonth(
+            state, "2026-07", new DateTime(2026, 8, 1, 6, 0, 0));
+        Equal(1300, month.ClosedNetProfit, "чистая прибыль");
+    }
+
+    private void LossReducesRetainedIncome()
+    {
+        var state = NewState();
+        state.RetainedOwnerIncome = 100;
+        var month = state.Months["2026-07"];
+        month.GameRevenue = 0;
+        month.ClubExpenses = 200;
+        month.Payroll.Clear();
+        BusinessMonthTransitionEngine.CloseMonth(
+            state, "2026-07", new DateTime(2026, 8, 1, 6, 0, 0));
+        Equal(-100, state.RetainedOwnerIncome, "накопленный доход");
+    }
+
+    private void NegativeEmployeeBalanceSurvivesClose()
+    {
+        var state = NewState();
+        var obligation = state.Months["2026-07"].Payroll.Single();
+        obligation.AccruedAmount = 100;
+        obligation.PenaltyAmount = 150;
+        BusinessMonthTransitionEngine.CloseMonth(
+            state, "2026-07", new DateTime(2026, 8, 1, 6, 0, 0));
+        Equal(-50, obligation.RemainingAmount, "остаток сотрудника");
+    }
+
+    private void ActivationSnapshotPreventsDoubleProfit()
+    {
+        var state = NewState();
+        state.RetainedOwnerIncome = 15900;
+        var month = state.Months["2026-07"];
+        month.GameRevenue = 6000;
+        month.ClubExpenses = 0;
+        month.Payroll.Single().AccruedAmount = 5000;
+        month.ProfitIncludedAtActivation = 900;
+        BusinessMonthTransitionEngine.CloseMonth(
+            state, "2026-07", new DateTime(2026, 8, 1, 6, 0, 0));
+        Equal(16000, state.RetainedOwnerIncome, "накопленный доход");
+    }
+
+#if DEBUG
+    private void DebugHarnessIsIsolated()
+    {
+        using var harness = new BusinessScenarioHarness(
+            new DateTime(2026, 8, 1, 5, 59, 0));
+        harness.SetMoney(10000, 10000)
+            .AddSalary("2026-07", "Арген", 5000);
+        harness.Month("2026-07").GameRevenue = 12000;
+        harness.Month("2026-07").ClubExpenses = 2000;
+        harness.Advance(TimeSpan.FromMinutes(1));
+        harness.CloseMonth("2026-07");
+
+        True(!harness.UsesFirebase, "Firebase отключён");
+        True(!harness.UsesApplicationData, "AppData отключён");
+        Equal(10000, harness.State.CashBalance, "тестовая наличка");
+        Equal(10000, harness.State.CashlessBalance, "тестовый безнал");
+    }
+
+    private void SalaryPaymentMovesMoney()
+    {
+        using var harness = new BusinessScenarioHarness(
+            new DateTime(2026, 8, 1, 7, 0, 0));
+        harness.SetMoney(10000, 10000)
+            .AddSalary("2026-07", "Арген", 5000)
+            .AddSalary("2026-08", "Арген", 100);
+        var allocations = harness.PaySalary("Арген", 5100, "Наличные");
+        Equal(2, allocations.Count, "число источников");
+        Equal(4900, harness.State.CashBalance, "наличные после выплаты");
+        Equal(10000, harness.State.CashlessBalance, "безнал не изменился");
+    }
+
+    private void OwnerWithdrawalUsesRetainedIncome()
+    {
+        using var harness = new BusinessScenarioHarness(
+            new DateTime(2026, 8, 1, 7, 0, 0));
+        harness.SetMoney(10000, 10000);
+        harness.State.RetainedOwnerIncome = 1000;
+        harness.WithdrawOwnerIncome(600, "Безнал");
+        Equal(400, harness.State.RetainedOwnerIncome, "остаток дохода");
+        Equal(9400, harness.State.CashlessBalance, "остаток безнала");
+
+        bool blocked = false;
+        try
+        {
+            harness.WithdrawOwnerIncome(401, "Наличные");
+        }
+        catch (InvalidOperationException)
+        {
+            blocked = true;
+        }
+        True(blocked, "сверхдоход заблокирован");
+    }
+#endif
+
+    private static BusinessLedgerState NewState()
+    {
+        var state = new BusinessLedgerState
+        {
+            CashBalance = 10000,
+            CashlessBalance = 10000
+        };
+        state.Months["2026-07"] = new BusinessMonthLedger
+        {
+            MonthKey = "2026-07",
+            GameRevenue = 12000,
+            ClubExpenses = 2000,
+            WorkedHours = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Арген"] = 100
+            },
+            Payroll = new List<EmployeePayrollObligation>
+            {
+                NewObligation("Арген", "2026-07", 5000)
+            }
+        };
+        return state;
+    }
+
+    private static EmployeePayrollObligation NewObligation(
+        string employeeName,
+        string monthKey,
+        int amount)
+    {
+        return new EmployeePayrollObligation
+        {
+            EmployeeName = employeeName,
+            MonthKey = monthKey,
+            AccruedAmount = amount
+        };
+    }
+
+    private void Test(string title, Action action)
+    {
+        action();
+        _passed++;
+        Console.WriteLine($"PASS: {title}");
+    }
+
+    private static void Equal<T>(T expected, T actual, string label)
+    {
+        if (!EqualityComparer<T>.Default.Equals(expected, actual))
+            throw new Exception($"{label}: ожидалось {expected}, получено {actual}");
+    }
+
+    private static void True(bool value, string label)
+    {
+        if (!value)
+            throw new Exception($"{label}: ожидалось true");
+    }
+
+    private static void Same(object expected, object actual, string label)
+    {
+        if (!ReferenceEquals(expected, actual))
+            throw new Exception($"{label}: экземпляр не восстановлен");
+    }
+}
 
 internal sealed class CashConstitutionTestSuite
 {

@@ -12,8 +12,8 @@ namespace ClubTimerXbox
     {
         private readonly StackPanel _itemsPanel = new StackPanel();
 
-        private DateTime _periodFrom = DateTime.Today;
-        private DateTime _periodTo = DateTime.Today.AddDays(1);
+        private DateTime _periodFrom;
+        private DateTime _periodTo;
         private string _periodTitle = "Сегодня";
 
         public CashWindow()
@@ -119,8 +119,9 @@ namespace ClubTimerXbox
 
         private void SetTodayPeriod()
         {
-            _periodFrom = DateTime.Today;
-            _periodTo = DateTime.Today.AddDays(1);
+            var day = BusinessCalendarService.GetBusinessDay(ClubClock.Current.LocalNow);
+            _periodFrom = day.StartInclusive;
+            _periodTo = day.EndExclusive;
             _periodTitle = "Сегодня";
 
             LoadCash();
@@ -128,8 +129,9 @@ namespace ClubTimerXbox
 
         private void SetMonthPeriod()
         {
-            _periodFrom = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-            _periodTo = _periodFrom.AddMonths(1);
+            var month = BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow);
+            _periodFrom = month.StartInclusive;
+            _periodTo = month.EndExclusive;
             _periodTitle = $"Месяц: {_periodFrom:MM.yyyy}";
 
             LoadCash();
@@ -137,7 +139,10 @@ namespace ClubTimerXbox
 
         private void SetYearPeriod()
         {
-            _periodFrom = new DateTime(DateTime.Today.Year, 1, 1);
+            DateTime businessDate = BusinessCalendarService.GetBusinessDate(
+                ClubClock.Current.LocalNow);
+            _periodFrom = new DateTime(businessDate.Year, 1, 1)
+                .AddHours(BusinessCalendarService.BusinessDayStartHour);
             _periodTo = _periodFrom.AddYears(1);
             _periodTitle = $"Год: {_periodFrom:yyyy}";
 

@@ -132,8 +132,9 @@ namespace ClubTimerXbox.Services
 
         private static object BuildSummary()
         {
-            DateTime todayStart = DateTime.Today;
-            DateTime tomorrowStart = todayStart.AddDays(1);
+            var day = BusinessCalendarService.GetBusinessDay(ClubClock.Current.LocalNow);
+            DateTime todayStart = day.StartInclusive;
+            DateTime tomorrowStart = day.EndExclusive;
 
             int gamesToday = CashService.GetTotalByPeriodAndCategory(
                 todayStart,
@@ -220,6 +221,7 @@ namespace ClubTimerXbox.Services
         private static string BuildHomePageHtml()
         {
             var summary = BuildSummary();
+            var day = BusinessCalendarService.GetBusinessDay(ClubClock.Current.LocalNow);
 
             string json = JsonSerializer.Serialize(
                 summary,
@@ -292,11 +294,11 @@ namespace ClubTimerXbox.Services
     <div class=""muted"">Первая страница владельца</div>
 
     <div class=""card"">
-        <div class=""big"">Касса сегодня: {CashService.GetCashIncomeTotalByPeriod(DateTime.Today, DateTime.Today.AddDays(1))} сом</div>
-        <div class=""line"">Игры: {CashService.GetTotalByPeriodAndCategory(DateTime.Today, DateTime.Today.AddDays(1), "Игры")} сом</div>
-        <div class=""line"">Товары/услуги: {CashService.GetTotalByPeriodAndCategory(DateTime.Today, DateTime.Today.AddDays(1), "Товары и услуги")} сом</div>
-        <div class=""line"">Недостачи: {CashService.GetShortageTotalByPeriod(DateTime.Today, DateTime.Today.AddDays(1))} сом</div>
-        <div class=""line"">Расходы: {CashService.GetExpenseTotalByPeriod(DateTime.Today, DateTime.Today.AddDays(1))} сом</div>
+        <div class=""big"">Касса сегодня: {CashService.GetCashIncomeTotalByPeriod(day.StartInclusive, day.EndExclusive)} сом</div>
+        <div class=""line"">Игры: {CashService.GetTotalByPeriodAndCategory(day.StartInclusive, day.EndExclusive, "Игры")} сом</div>
+        <div class=""line"">Товары/услуги: {CashService.GetTotalByPeriodAndCategory(day.StartInclusive, day.EndExclusive, "Товары и услуги")} сом</div>
+        <div class=""line"">Недостачи: {CashService.GetShortageTotalByPeriod(day.StartInclusive, day.EndExclusive)} сом</div>
+        <div class=""line"">Расходы: {CashService.GetExpenseTotalByPeriod(day.StartInclusive, day.EndExclusive)} сом</div>
     </div>
 
     <div class=""card"">

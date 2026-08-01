@@ -155,7 +155,7 @@ namespace ClubTimerXbox.Services
         {
             Items.Add(new ActionLogItem
             {
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 EmployeeName = employeeName,
                 ActionType = actionType,
                 PlaceName = placeName,
@@ -204,7 +204,7 @@ namespace ClubTimerXbox.Services
             var shift = new ShiftLogItem
             {
                 EmployeeName = cleanEmployeeName,
-                StartedAt = DateTime.Now,
+                StartedAt = ClubClock.Current.LocalNow,
                 ClosedAt = null,
                 IsClosed = false
             };
@@ -232,7 +232,7 @@ namespace ClubTimerXbox.Services
 
         public static void CloseCurrentShift()
         {
-            CloseCurrentShiftAt(DateTime.Now);
+            CloseCurrentShiftAt(ClubClock.Current.LocalNow);
         }
 
         public static void CloseCurrentShiftAt(DateTime closeTime)
@@ -281,7 +281,7 @@ namespace ClubTimerXbox.Services
             var newShift = new ShiftLogItem
             {
                 EmployeeName = newEmployeeName.Trim(),
-                StartedAt = DateTime.Now,
+                StartedAt = ClubClock.Current.LocalNow,
                 ClosedAt = null,
                 IsClosed = false
             };
@@ -424,7 +424,7 @@ namespace ClubTimerXbox.Services
 
                     ShiftAcceptanceService.AllowManualSelfAcceptanceAfterReentry(
                         newEmployeeName,
-                        $"manual-self:{DateTime.Now:yyyyMMddHHmmss}:{Guid.NewGuid():N}"
+                        $"manual-self:{ClubClock.Current.LocalNow:yyyyMMddHHmmss}:{Guid.NewGuid():N}"
                     );
 
                     return;
@@ -518,7 +518,7 @@ namespace ClubTimerXbox.Services
             {
                 PlaceName = placeName,
                 StartedByEmployeeName = employeeName,
-                StartedAt = DateTime.Now,
+                StartedAt = ClubClock.Current.LocalNow,
                 IsOpenMode = isOpenMode,
                 TariffText = tariffText,
                 PaidAmount = paidAmount,
@@ -554,7 +554,7 @@ namespace ClubTimerXbox.Services
 
             session.ExtraLines.Add(new GameSessionExtraLine
             {
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 Type = type,
                 EmployeeName = employeeName,
                 Description = description,
@@ -582,7 +582,7 @@ namespace ClubTimerXbox.Services
 
             session.SaleLines.Add(new GameSessionSaleLine
             {
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 EmployeeName = employeeName,
                 ItemName = item.Name,
                 ItemType = item.Type,
@@ -659,7 +659,7 @@ namespace ClubTimerXbox.Services
 
             session.ExtraLines.Add(new GameSessionExtraLine
             {
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 Type = "Перенос оплаты",
                 EmployeeName = employeeName,
                 Description =
@@ -702,7 +702,7 @@ namespace ClubTimerXbox.Services
 
             session.ExtraLines.Add(new GameSessionExtraLine
             {
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 Type = "Пересадка",
                 EmployeeName = employeeName,
                 Description = description,
@@ -739,7 +739,7 @@ namespace ClubTimerXbox.Services
             }
 
             session.ClosedByEmployeeName = closedByEmployeeName;
-            session.ClosedAt = DateTime.Now;
+            session.ClosedAt = ClubClock.Current.LocalNow;
             session.ActualPlayedAmount = actualPlayedAmount;
             session.RefundAmount = refundAmount;
             session.NeedToPayAmount = needToPayAmount;

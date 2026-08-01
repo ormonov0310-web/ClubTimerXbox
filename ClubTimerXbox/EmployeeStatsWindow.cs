@@ -42,7 +42,9 @@ namespace ClubTimerXbox
         private Button _productsButton = null!;
         private Button _lossesButton = null!;
 
-        private DateTime _monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        private DateTime _monthStart = BusinessCalendarService
+            .GetBusinessMonth(ClubClock.Current.LocalNow)
+            .StartInclusive;
         private StatsSection _section = StatsSection.Salary;
 
         public EmployeeStatsWindow(string employeeName)

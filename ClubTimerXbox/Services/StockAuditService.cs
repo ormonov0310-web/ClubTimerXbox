@@ -70,7 +70,7 @@ namespace ClubTimerXbox.Services
             var item = new StockAuditItem
             {
                 BatchId = batchId,
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 CheckedByEmployeeName = checkedByEmployeeName,
                 ResponsibleEmployeeName = responsibleEmployeeName,
                 AcceptanceKey = acceptanceKey.Trim(),
@@ -108,7 +108,8 @@ namespace ClubTimerXbox.Services
 
         public static List<StockAuditItem> GetToday()
         {
-            return GetByPeriod(DateTime.Today, DateTime.Today.AddDays(1));
+            var day = BusinessCalendarService.GetBusinessDay(ClubClock.Current.LocalNow);
+            return GetByPeriod(day.StartInclusive, day.EndExclusive);
         }
 
         public static List<IGrouping<Guid, StockAuditItem>> GetTodayBatches()

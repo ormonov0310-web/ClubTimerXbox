@@ -184,7 +184,8 @@ namespace ClubTimerXbox.Services
             IEnumerable<ClubPlace> places)
         {
             var placeList = places.ToList();
-            DateTime todayStart = DateTime.Today;
+            DateTime todayStart = BusinessCalendarService.GetBusinessDate(
+                ClubClock.Current.LocalNow);
             int gamesToday = GetPaymentTotal(
                 CashReportSection.Games,
                 CashReportPeriodMode.Day,
@@ -301,11 +302,15 @@ namespace ClubTimerXbox.Services
             try
             {
                 var pcIdentity = PcIdentityService.Current;
-                DateTime todayStart = DateTime.Today;
-                DateTime tomorrowStart = todayStart.AddDays(1);
+                var businessDay = BusinessCalendarService.GetBusinessDay(
+                    ClubClock.Current.LocalNow);
+                DateTime todayStart = businessDay.StartInclusive.Date;
+                DateTime tomorrowStart = businessDay.EndExclusive;
 
-                DateTime monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-                DateTime nextMonthStart = monthStart.AddMonths(1);
+                var businessMonth = BusinessCalendarService.GetBusinessMonth(
+                    ClubClock.Current.LocalNow);
+                DateTime monthStart = businessMonth.StartInclusive;
+                DateTime nextMonthStart = businessMonth.EndExclusive;
 
                 int gamesToday = GetPaymentTotal(
                     CashReportSection.Games,
@@ -668,6 +673,8 @@ namespace ClubTimerXbox.Services
                 int salaryLossesMonth = autoSalaryReport.Employees.Sum(employee => employee.LossesAmount);
                 int salaryAccruedMonth = autoSalaryReport.Employees.Sum(employee =>
                     Math.Max(0, employee.GrossAmount - employee.LossesAmount));
+                int salaryOutstandingMonth = autoSalaryReport.Employees.Sum(employee =>
+                    Math.Max(0, employee.RemainingAmount));
                 int possibleProfitMonth = CalculatePossibleProfit(
                     cashMonth,
                     expensesMonth,
@@ -811,6 +818,7 @@ namespace ClubTimerXbox.Services
                         salaryToday,
                         salaryMonth,
                         salaryAccruedMonth,
+                        salaryOutstandingMonth,
                         salaryGrossMonth,
                         salaryLossesMonth,
                         salaryCashMonth,
@@ -824,7 +832,8 @@ namespace ClubTimerXbox.Services
                         ownerWithdrawMonth,
                         ownerWithdrawCashMonth,
                         ownerWithdrawCashlessMonth,
-                        possibleProfitMonth
+                        possibleProfitMonth,
+                        retainedOwnerIncome = BusinessAccountingService.RetainedOwnerIncome
                     },
 
                     cashRecords = new
@@ -1244,6 +1253,13 @@ namespace ClubTimerXbox.Services
                 SelectedMonth = selectedDate.Month
             };
 
+            if (section == CashReportSection.ProductsAndServices)
+            {
+                return ProductServiceRevenueService.GetTotal(
+                    CashReportService.GetPeriodStart(filter),
+                    CashReportService.GetPeriodEndExclusive(filter));
+            }
+
             var report = CashReportService.BuildReport(filter);
 
             return report.Summary.TotalAmount;
@@ -1279,7 +1295,9 @@ namespace ClubTimerXbox.Services
             DateTime toExclusive)
         {
             var latestAcceptance = CashAcceptanceService
-                .GetByPeriod(fromInclusive, toExclusive)
+                .Items
+                .Where(item => item.CreatedAt < toExclusive)
+                .OrderByDescending(item => item.CreatedAt)
                 .FirstOrDefault();
 
             if (latestAcceptance == null)
@@ -1313,29 +1331,18 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            return CalculateCashBalanceFromMonthStart(
+            return CashBalanceSummaryService.CalculateExpectedCashBalanceByPeriod(
                 fromInclusive,
-                toExclusive
-            );
+                toExclusive);
         }
 
         private static int? CalculateProgramCashBalanceByPeriod(
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            var checkpoint = CashBalanceCheckpointService.GetLatestByPeriod(
+            return CashBalanceSummaryService.CalculateProgramCashBalanceByPeriod(
                 fromInclusive,
-                toExclusive
-            );
-
-            if (checkpoint == null)
-                return CalculateExpectedCashBalanceByPeriod(fromInclusive, toExclusive);
-
-            return CalculateCashBalanceAfterCheckpoint(
-                checkpoint.CashAmount,
-                checkpoint.CreatedAt,
-                toExclusive
-            );
+                toExclusive);
         }
 
         private static int CalculateCashBalanceAfterCheckpoint(
@@ -1389,11 +1396,8 @@ namespace ClubTimerXbox.Services
             DateTime toExclusive)
         {
             var latestVerification = CashlessService.Records
-                .Where(record =>
-                    record.Date >= fromInclusive.Date &&
-                    record.Date < toExclusive.Date)
-                .OrderByDescending(record => record.Date)
-                .ThenByDescending(record => record.UpdatedAt)
+                .Where(record => record.UpdatedAt < toExclusive)
+                .OrderByDescending(record => record.UpdatedAt)
                 .FirstOrDefault();
 
             if (latestVerification == null)
@@ -1427,33 +1431,18 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            return CalculateCashlessBalanceFromMonthStart(
+            return CashBalanceSummaryService.CalculateExpectedCashlessBalanceByPeriod(
                 fromInclusive,
-                toExclusive
-            );
+                toExclusive);
         }
 
         private static int? CalculateProgramCashlessBalanceByPeriod(
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            var latestVerification = CashlessService.Records
-                .Where(record =>
-                    record.Date >= fromInclusive.Date &&
-                    record.Date < toExclusive.Date)
-                .OrderByDescending(record => record.Date)
-                .ThenByDescending(record => record.UpdatedAt)
-                .FirstOrDefault(record => record.ExpectedAmount.HasValue);
-
-            if (latestVerification == null)
-                return CalculateExpectedCashlessBalanceByPeriod(fromInclusive, toExclusive);
-
-            return CalculateCashlessBalanceAfterCheckpoint(
-                latestVerification.ExpectedAmount!.Value,
-                latestVerification.UpdatedAt,
+            return CashBalanceSummaryService.CalculateProgramCashlessBalanceByPeriod(
                 fromInclusive,
-                toExclusive
-            );
+                toExclusive);
         }
 
         private static int CalculateCashlessBalanceAfterCheckpoint(
@@ -1530,7 +1519,7 @@ namespace ClubTimerXbox.Services
                 monthStarts.Add(new DateTime(date.Year, date.Month, 1));
             }
 
-            AddMonth(DateTime.Today);
+            AddMonth(BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow));
 
             foreach (var record in CashService.Records)
             {
@@ -1623,6 +1612,8 @@ namespace ClubTimerXbox.Services
                     rawMoneyLossesAmount = employee.RawMoneyLossesAmount,
                     productLossesAmount = employee.ProductLossesAmount,
                     paidAmount = employee.PaidAmount,
+                    carryInAmount = employee.CarryInAmount,
+                    currentPeriodRemainingAmount = employee.CurrentPeriodRemainingAmount,
                     remainingAmount = employee.RemainingAmount
                 }).ToList()
             };
@@ -1661,14 +1652,9 @@ namespace ClubTimerXbox.Services
 
             foreach (var session in ActionLogService.GetAllGameSessions())
             {
-                if (session.ClosedAt == null ||
-                    session.ClosedAt.Value < fromInclusive ||
-                    session.ClosedAt.Value >= toExclusive)
-                {
-                    continue;
-                }
-
-                foreach (var line in session.SaleLines.Where(line => line.IsPaid))
+                foreach (var line in session.SaleLines.Where(line =>
+                             line.CreatedAt >= fromInclusive &&
+                             line.CreatedAt < toExclusive))
                 {
                     AddProductServiceSale(summary, line);
                 }
@@ -2152,7 +2138,9 @@ namespace ClubTimerXbox.Services
 
         private static object BuildMonthReport(DateTime monthStart)
         {
-            DateTime nextMonthStart = monthStart.AddMonths(1);
+            var businessMonth = BusinessCalendarService.GetBusinessMonthByAnchor(monthStart);
+            monthStart = businessMonth.StartInclusive;
+            DateTime nextMonthStart = businessMonth.EndExclusive;
 
             int games = GetPaymentTotal(CashReportSection.Games, CashReportPeriodMode.Month, monthStart);
             int products = GetPaymentTotal(CashReportSection.ProductsAndServices, CashReportPeriodMode.Month, monthStart);
@@ -2199,6 +2187,8 @@ namespace ClubTimerXbox.Services
             int salaryLosses = salaryReport.Employees.Sum(employee => employee.LossesAmount);
             int salaryAccrued = salaryReport.Employees.Sum(employee =>
                 Math.Max(0, employee.GrossAmount - employee.LossesAmount));
+            int salaryOutstanding = salaryReport.Employees.Sum(employee =>
+                Math.Max(0, employee.RemainingAmount));
             int losses = CashService.GetShortageTotalByPeriod(monthStart, nextMonthStart);
             int possibleProfit = CalculatePossibleProfit(
                 income,
@@ -2317,6 +2307,7 @@ namespace ClubTimerXbox.Services
                     ownerWithdrawCashMonth = ownerWithdrawCash,
                     ownerWithdrawCashlessMonth = ownerWithdrawCashless,
                     salaryAccruedMonth = salaryAccrued,
+                    salaryOutstandingMonth = salaryOutstanding,
                     salaryGrossMonth = salaryGross,
                     salaryLossesMonth = salaryLosses,
                     salaryMonth = salary,
@@ -2324,6 +2315,7 @@ namespace ClubTimerXbox.Services
                     salaryCashlessMonth = salaryCashless,
                     shortagesMonth = losses,
                     possibleProfitMonth = possibleProfit,
+                    retainedOwnerIncome = BusinessAccountingService.RetainedOwnerIncome,
                     incomeCashMonth = incomePayment.CashAmount,
                     incomeMBankMonth = incomePayment.MBankAmount,
                     actualCashBalanceMonth = actualCashBalance,
@@ -2868,7 +2860,7 @@ namespace ClubTimerXbox.Services
 
                 if (command.Type == "AddExpense")
                 {
-                    ApplyAddExpense(command);
+                    ApplyAddExpense(command, commandId);
 
                     await MarkCommandApplied(
                         commandId,
@@ -2998,7 +2990,7 @@ namespace ClubTimerXbox.Services
 
                 if (command.Type == "AddSalaryPayment")
                 {
-                    ApplyAddSalaryPayment(command);
+                    ApplyAddSalaryPayment(commandId, command);
                     var (salaryMonthStart, _) = ParseCommandMonth(command.MonthKey);
 
                     await MarkCommandApplied(
@@ -3499,7 +3491,7 @@ namespace ClubTimerXbox.Services
             return string.Join("\n", lines);
         }
 
-        private static void ApplyAddExpense(FirebaseCommand command)
+        private static void ApplyAddExpense(FirebaseCommand command, string commandId)
         {
             if (command.Amount <= 0)
                 throw new Exception("amount должен быть больше 0.");
@@ -3510,8 +3502,11 @@ namespace ClubTimerXbox.Services
                 : command.Title.Trim();
             string accountingMonthKey = "";
             string paymentMethod = NormalizePaymentMethod(command.PaymentMethod);
+            bool isOwnerWithdrawal = expenseCategory.Equals(
+                "Владелец",
+                StringComparison.OrdinalIgnoreCase);
 
-            if (expenseCategory.Equals("Владелец", StringComparison.OrdinalIgnoreCase))
+            if (isOwnerWithdrawal)
             {
                 var (monthStart, nextMonthStart) = ParseCommandMonth(command.MonthKey);
                 bool openingBalanceMode = command.OwnerWithdrawMode.Equals(
@@ -3532,6 +3527,9 @@ namespace ClubTimerXbox.Services
                         nextMonthStart,
                         paymentMethod
                     );
+                available = Math.Min(
+                    available,
+                    Math.Max(0, BusinessAccountingService.RetainedOwnerIncome));
 
                 if (command.Amount > available)
                 {
@@ -3540,6 +3538,18 @@ namespace ClubTimerXbox.Services
                         $"Доступно: {available} сом, запрошено: {command.Amount} сом."
                     );
                 }
+            }
+
+            if (isOwnerWithdrawal)
+            {
+                BusinessAccountingService.WithdrawOwnerIncome(
+                    command.Amount,
+                    paymentMethod,
+                    accountingMonthKey,
+                    title,
+                    command.Description,
+                    $"firebase:{commandId}");
+                return;
             }
 
             CashService.AddExpense(
@@ -3636,14 +3646,14 @@ namespace ClubTimerXbox.Services
 
         private static (DateTime monthStart, DateTime nextMonthStart) ParseCommandMonth(string monthKey)
         {
-            if (DateTime.TryParse($"{monthKey}-01", out DateTime parsed))
+            if (BusinessCalendarService.TryParseMonthKey(monthKey, out DateTime parsed))
             {
-                var monthStart = new DateTime(parsed.Year, parsed.Month, 1);
-                return (monthStart, monthStart.AddMonths(1));
+                var period = BusinessCalendarService.GetBusinessMonthByAnchor(parsed);
+                return (period.StartInclusive, period.EndExclusive);
             }
 
-            var current = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-            return (current, current.AddMonths(1));
+            var current = BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow);
+            return (current.StartInclusive, current.EndExclusive);
         }
 
         private static CashReconciliationItem ApplyResolveCashReconciliation(FirebaseCommand command)
@@ -3863,8 +3873,10 @@ namespace ClubTimerXbox.Services
             if (command.Amount < 0)
                 throw new Exception("amount не может быть меньше 0.");
 
-            var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-            var nextMonthStart = monthStart.AddMonths(1);
+            var currentMonth = BusinessCalendarService.GetBusinessMonth(
+                ClubClock.Current.LocalNow);
+            var monthStart = currentMonth.StartInclusive;
+            var nextMonthStart = currentMonth.EndExclusive;
             DateTime reconciliationCycleStart = CashBalanceCheckpointService
                 .GetCurrentCycleStart(monthStart, nextMonthStart);
 
@@ -4082,8 +4094,10 @@ namespace ClubTimerXbox.Services
                 return "Корректировка уже была применена ранее.";
             }
 
-            var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-            var nextMonthStart = monthStart.AddMonths(1);
+            var currentMonth = BusinessCalendarService.GetBusinessMonth(
+                ClubClock.Current.LocalNow);
+            var monthStart = currentMonth.StartInclusive;
+            var nextMonthStart = currentMonth.EndExclusive;
             DateTime reconciliationCycleStart = CashBalanceCheckpointService
                 .GetCurrentCycleStart(monthStart, nextMonthStart);
             int actualCashless = command.Amount;
@@ -4418,7 +4432,9 @@ namespace ClubTimerXbox.Services
             );
         }
 
-        private static void ApplyAddSalaryPayment(FirebaseCommand command)
+        private static void ApplyAddSalaryPayment(
+            string commandId,
+            FirebaseCommand command)
         {
             string employeeName = command.EmployeeName.Trim();
 
@@ -4447,7 +4463,7 @@ namespace ClubTimerXbox.Services
             if (command.Amount > remaining)
                 throw new Exception($"Нельзя выдать больше остатка после штрафов: {remaining} сом.");
 
-            CashService.AddSalaryPayment(
+            BusinessAccountingService.PaySalaryFifo(
                 ownerName: "Владелец",
                 employeeName: employee.Name,
                 amount: command.Amount,
@@ -4455,7 +4471,8 @@ namespace ClubTimerXbox.Services
                 description: string.IsNullOrWhiteSpace(command.Description)
                     ? $"Выплата зарплаты за {monthStart:yyyy-MM}"
                     : $"{command.Description}\nМесяц зарплаты: {monthStart:yyyy-MM}",
-                salaryMonthKey: monthStart.ToString("yyyy-MM")
+                throughMonthKey: monthStart.ToString("yyyy-MM"),
+                operationId: $"firebase:{commandId}"
             );
         }
 

@@ -17,6 +17,10 @@ namespace ClubTimerXbox.Models
 
         public DateTime CreatedAt { get; set; } = DateTime.Now;
 
+        // Business recognition time. Legacy records fall back to CreatedAt.
+        // It may differ for a prepaid session that is physically closed later.
+        public DateTime BusinessOccurredAt { get; set; }
+
         // Кто сделал операцию.
         public string EmployeeName { get; set; } = "";
 
@@ -35,6 +39,11 @@ namespace ClubTimerXbox.Models
         // Для зарплаты: месяц, за который сделана выплата, в формате yyyy-MM.
         // CreatedAt при этом остается фактической датой движения денег.
         public string SalaryMonthKey { get; set; } = "";
+
+        // Stable 06:00-based period keys for new records.
+        public string BusinessDateKey { get; set; } = "";
+
+        public string BusinessMonthKey { get; set; } = "";
 
         public CashRecordType Type { get; set; }
 

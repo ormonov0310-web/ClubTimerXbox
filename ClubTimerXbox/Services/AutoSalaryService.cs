@@ -8,9 +8,6 @@ namespace ClubTimerXbox.Services
     public static class AutoSalaryService
     {
         private const string GamesCategory = "\u0418\u0433\u0440\u044b";
-        private const string ProductsAndServicesCategory =
-            "\u0422\u043e\u0432\u0430\u0440\u044b \u0438 \u0443\u0441\u043b\u0443\u0433\u0438";
-
         public static AutoSalarySettings Settings { get; private set; } =
             NormalizeSettings(AutoSalarySettingsStorageService.Load());
 
@@ -43,18 +40,18 @@ namespace ClubTimerXbox.Services
 
         public static AutoSalaryReport BuildReport(DateTime monthStart)
         {
-            monthStart = new DateTime(monthStart.Year, monthStart.Month, 1);
-            DateTime nextMonthStart = monthStart.AddMonths(1);
+            var period = BusinessCalendarService.GetBusinessMonthByAnchor(monthStart);
+            monthStart = period.StartInclusive;
+            DateTime nextMonthStart = period.EndExclusive;
 
             int gameRevenue = CashService.GetTotalByPeriodAndCategory(
                 monthStart,
                 nextMonthStart,
                 GamesCategory
             );
-            int productRevenue = CashService.GetTotalByPeriodAndCategory(
+            int productRevenue = ProductServiceRevenueService.GetTotal(
                 monthStart,
-                nextMonthStart,
-                ProductsAndServicesCategory
+                nextMonthStart
             );
             int expenseReserve = Percent(gameRevenue, Settings.ExpenseReservePercent);
             int salaryBase = Math.Max(0, gameRevenue - expenseReserve);
@@ -63,7 +60,7 @@ namespace ClubTimerXbox.Services
 
             var report = new AutoSalaryReport
             {
-                MonthKey = monthStart.ToString("yyyy-MM"),
+                MonthKey = period.Key,
                 Settings = Settings,
                 GameRevenue = gameRevenue,
                 ProductRevenue = productRevenue,
@@ -123,7 +120,31 @@ namespace ClubTimerXbox.Services
                 );
                 int bonusAmount = input.Bonuses.Sum(bonus => bonus.Amount);
                 int gross = timeAmount + gameAmount + productBonus + bonusAmount;
-                int remaining = gross - input.Summary.MonthUnpaidLosses - input.PaidSalary;
+                int losses = input.Summary.MonthUnpaidLosses;
+                int paid = input.PaidSalary;
+
+                if (BusinessAccountingService.TryGetClosedPayroll(
+                        report.MonthKey,
+                        input.EmployeeName,
+                        out var closedPayroll))
+                {
+                    gross = closedPayroll.AccruedAmount + closedPayroll.BonusAmount;
+                    losses = closedPayroll.PenaltyAmount;
+                    paid = closedPayroll.PaidAmount;
+                }
+
+                int currentRemaining = gross - losses - paid;
+                string currentMonthKey = BusinessCalendarService
+                    .GetBusinessMonth(ClubClock.Current.LocalNow)
+                    .Key;
+                int carryIn = report.MonthKey.Equals(
+                        currentMonthKey,
+                        StringComparison.OrdinalIgnoreCase)
+                    ? BusinessAccountingService.GetCarriedSalary(
+                        input.EmployeeName,
+                        report.MonthKey)
+                    : 0;
+                int remaining = currentRemaining + carryIn;
 
                 report.ProductBonusTotalAmount += productBonus;
                 report.BonusTotalAmount += bonusAmount;
@@ -142,12 +163,14 @@ namespace ClubTimerXbox.Services
                         .OrderByDescending(bonus => bonus.CreatedAt)
                         .ToList(),
                     GrossAmount = gross,
-                    LossesAmount = input.Summary.MonthUnpaidLosses,
+                    LossesAmount = losses,
                     MoneyLossesAmount = input.Summary.MonthUnpaidMoneyLosses,
                     RawMoneyLossesAmount = input.Summary.MonthRawUnpaidMoneyLosses,
                     ProductLossesAmount = input.Summary.MonthUnpaidProductLosses,
                     ViolationLossesAmount = input.Summary.MonthUnpaidViolationLosses,
-                    PaidAmount = input.PaidSalary,
+                    PaidAmount = paid,
+                    CarryInAmount = carryIn,
+                    CurrentPeriodRemainingAmount = currentRemaining,
                     RemainingAmount = remaining
                 });
             }
@@ -172,7 +195,7 @@ namespace ClubTimerXbox.Services
                 );
 
             DateTime day = monthStart.Date;
-            while (day < nextMonthStart)
+            while (day < nextMonthStart.Date)
             {
                 DateTime scheduleStart = GetScheduleStart(day);
                 DateTime scheduleEnd = GetScheduleEnd(day);
@@ -262,7 +285,7 @@ namespace ClubTimerXbox.Services
 
                 foreach (var shift in shifts)
                 {
-                    DateTime shiftEnd = shift.ClosedAt ?? DateTime.Now;
+                    DateTime shiftEnd = shift.ClosedAt ?? ClubClock.Current.LocalNow;
                     if (shift.StartedAt >= scheduleEnd || shiftEnd <= scheduleStart)
                         continue;
 
@@ -350,7 +373,7 @@ namespace ClubTimerXbox.Services
                     GetLateActiveTime(
                         input.EmployeeName,
                         shift.StartedAt,
-                        shift.ClosedAt ?? DateTime.Now,
+                        shift.ClosedAt ?? ClubClock.Current.LocalNow,
                         scheduleEnd
                     ) > TimeSpan.Zero);
 
@@ -440,7 +463,7 @@ namespace ClubTimerXbox.Services
                 .Select(session => new
                 {
                     Start = Max(session.StartedAt, Max(shiftStart, scheduleEnd)),
-                    End = Min(session.ClosedAt ?? DateTime.Now, shiftEnd)
+                    End = Min(session.ClosedAt ?? ClubClock.Current.LocalNow, shiftEnd)
                 })
                 .Where(interval => interval.End > interval.Start)
                 .OrderBy(interval => interval.Start)

@@ -8,6 +8,9 @@ namespace ClubTimerXbox.Models
 
         public DateTime CreatedAt { get; set; } = DateTime.Now;
 
+        // Source salary period for penalties posted after the 06:00 close.
+        public string SalaryMonthKey { get; set; } = "";
+
         // На кого записана потеря / недостача.
         public string ResponsibleEmployeeName { get; set; } = "";
 

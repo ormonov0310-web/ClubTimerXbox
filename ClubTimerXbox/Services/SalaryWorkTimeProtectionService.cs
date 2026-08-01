@@ -79,7 +79,7 @@ namespace ClubTimerXbox.Services
                         LastRawHours = rawHours,
                         ProtectedHours = rawHours,
                         LastSavedProtectedHours = rawHours,
-                        UpdatedAt = DateTime.Now
+                        UpdatedAt = ClubClock.Current.LocalNow
                     };
 
                     Data.Items.Add(item);
@@ -104,7 +104,7 @@ namespace ClubTimerXbox.Services
                         item.ProtectedHours = candidate;
 
                     item.LastRawHours = rawHours;
-                    item.UpdatedAt = DateTime.Now;
+                    item.UpdatedAt = ClubClock.Current.LocalNow;
 
                     if (item.ProtectedHours - item.LastSavedProtectedHours >= SaveStepHours)
                     {
@@ -154,7 +154,7 @@ namespace ClubTimerXbox.Services
                     recoveredHours + item.LastRawHours
                 );
                 item.LastSavedProtectedHours = item.ProtectedHours;
-                item.UpdatedAt = DateTime.Now;
+                item.UpdatedAt = ClubClock.Current.LocalNow;
 
                 SaveUnsafe();
             }
@@ -178,7 +178,7 @@ namespace ClubTimerXbox.Services
                     }
 
                     item.EmployeeName = newEmployeeName.Trim();
-                    item.UpdatedAt = DateTime.Now;
+                    item.UpdatedAt = ClubClock.Current.LocalNow;
                     changed++;
                 }
 

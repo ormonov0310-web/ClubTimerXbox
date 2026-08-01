@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Windows;
 using System.Windows.Controls;
+using ClubTimerXbox.Services;
 
 namespace ClubTimerXbox
 {
@@ -30,7 +31,9 @@ namespace ClubTimerXbox
             }
 
             if (MonthComboBox.SelectedItem == null)
-                MonthComboBox.SelectedIndex = DateTime.Today.Month - 1;
+                MonthComboBox.SelectedIndex = BusinessCalendarService
+                    .GetBusinessDate(ClubClock.Current.LocalNow)
+                    .Month - 1;
         }
 
         private void ApplyButton_Click(object sender, RoutedEventArgs e)

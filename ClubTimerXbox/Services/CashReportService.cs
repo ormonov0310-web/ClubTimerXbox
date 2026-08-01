@@ -41,14 +41,14 @@ namespace ClubTimerXbox.Services
                 return BuildExpenseReport(filter, range);
 
             var records = PaymentService.Records
-                .Where(record =>
-                    record.CreatedAt >= range.FromInclusive &&
-                    record.CreatedAt < range.ToExclusive)
                 .OrderByDescending(record => record.CreatedAt)
                 .ToList();
 
             var lines = records
                 .SelectMany(record => BuildAllocatedLines(record))
+                .Where(line =>
+                    line.CreatedAt >= range.FromInclusive &&
+                    line.CreatedAt < range.ToExclusive)
                 .Where(line => IsLineInSection(line, filter.Section))
                 .OrderByDescending(line => line.CreatedAt)
                 .ToList();
@@ -105,8 +105,10 @@ namespace ClubTimerXbox.Services
         {
             if (filter.PeriodMode == CashReportPeriodMode.Month)
             {
-                var from = new DateTime(filter.SelectedYear, filter.SelectedMonth, 1);
-                var to = from.AddMonths(1);
+                var month = BusinessCalendarService.GetBusinessMonthByAnchor(
+                    new DateTime(filter.SelectedYear, filter.SelectedMonth, 1));
+                var from = month.StartInclusive;
+                var to = month.EndExclusive;
 
                 return (
                     from,
@@ -117,31 +119,36 @@ namespace ClubTimerXbox.Services
 
             if (filter.PeriodMode == CashReportPeriodMode.CustomPeriod)
             {
-                DateTime from = filter.PeriodStart.Date;
+                DateTime fromDate = filter.PeriodStart.Date;
                 DateTime end = filter.PeriodEnd.Date;
 
-                if (end < from)
+                if (end < fromDate)
                 {
-                    DateTime temp = from;
-                    from = end;
+                    DateTime temp = fromDate;
+                    fromDate = end;
                     end = temp;
                 }
 
-                DateTime to = end.AddDays(1);
+                DateTime from = fromDate.AddHours(
+                    BusinessCalendarService.BusinessDayStartHour);
+                DateTime to = end.AddDays(1).AddHours(
+                    BusinessCalendarService.BusinessDayStartHour);
 
                 return (
                     from,
                     to,
-                    $"{from:dd.MM.yyyy}–{end:dd.MM.yyyy}"
+                    $"{fromDate:dd.MM.yyyy}–{end:dd.MM.yyyy}"
                 );
             }
 
-            DateTime day = filter.SelectedDay.Date;
+            DateTime businessDate = filter.SelectedDay.Date;
+            DateTime day = businessDate.AddHours(
+                BusinessCalendarService.BusinessDayStartHour);
 
             return (
                 day,
                 day.AddDays(1),
-                day.ToString("dd.MM.yyyy")
+                businessDate.ToString("dd.MM.yyyy")
             );
         }
 
@@ -200,7 +207,8 @@ namespace ClubTimerXbox.Services
         {
             if (filter.ViewMode == CashReportViewMode.Days)
                 return records
-                    .GroupBy(record => record.CreatedAt.Date)
+                    .GroupBy(record => BusinessCalendarService.GetBusinessDate(
+                        CashService.GetBusinessTime(record)))
                     .OrderByDescending(group => group.Key)
                     .Select(group => CreateExpenseGroupRow(
                         group.Key.ToString("dd.MM.yyyy"),
@@ -467,7 +475,7 @@ namespace ClubTimerXbox.Services
         {
             return new AllocatedReportLine
             {
-                CreatedAt = record.CreatedAt,
+                CreatedAt = ResolveLineOccurredAt(record, item),
                 OperationTitle = record.OperationTitle,
                 ItemName = item.Name,
                 Quantity = item.Quantity,
@@ -479,6 +487,25 @@ namespace ClubTimerXbox.Services
                 CashAmount = cashAmount,
                 MBankAmount = mBankAmount
             };
+        }
+
+        private static DateTime ResolveLineOccurredAt(
+            PaymentRecord record,
+            CheckoutItem item)
+        {
+            if (record.GameSessionId == null || IsGameItem(item))
+                return record.CreatedAt;
+
+            var session = ActionLogService.GetAllGameSessions()
+                .FirstOrDefault(candidate => candidate.Id == record.GameSessionId.Value);
+            var sale = session?.SaleLines
+                .Where(line =>
+                    line.ItemName.Equals(item.Name, StringComparison.OrdinalIgnoreCase) &&
+                    line.Quantity == item.Quantity &&
+                    line.UnitPrice == item.UnitPrice)
+                .OrderBy(line => line.CreatedAt)
+                .FirstOrDefault();
+            return sale?.CreatedAt ?? record.CreatedAt;
         }
 
         private static int GetFixedItemPriority(CheckoutItem item)
@@ -575,7 +602,7 @@ namespace ClubTimerXbox.Services
         private static List<CashReportRow> BuildRowsByDays(List<AllocatedReportLine> lines)
         {
             return lines
-                .GroupBy(line => line.CreatedAt.Date)
+                .GroupBy(line => BusinessCalendarService.GetBusinessDate(line.CreatedAt))
                 .OrderByDescending(group => group.Key)
                 .Select(group => new CashReportRow
                 {

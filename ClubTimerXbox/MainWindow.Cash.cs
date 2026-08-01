@@ -50,7 +50,8 @@ namespace ClubTimerXbox
                 Section = CashReportSection.Games,
                 PeriodMode = CashReportPeriodMode.Day,
                 ViewMode = CashReportViewMode.Records,
-                SelectedDay = DateTime.Today
+                SelectedDay = BusinessCalendarService.GetBusinessDate(
+                    ClubClock.Current.LocalNow)
             };
 
             var productsFilter = new CashReportFilter
@@ -58,7 +59,8 @@ namespace ClubTimerXbox
                 Section = CashReportSection.ProductsAndServices,
                 PeriodMode = CashReportPeriodMode.Day,
                 ViewMode = CashReportViewMode.Records,
-                SelectedDay = DateTime.Today
+                SelectedDay = BusinessCalendarService.GetBusinessDate(
+                    ClubClock.Current.LocalNow)
             };
 
             var gamesReport = CashReportService.BuildReport(gamesFilter);

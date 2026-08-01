@@ -105,6 +105,12 @@
                                FontSize="30"
                                FontWeight="Bold"/>
 
+                    <TextBlock x:Name="BusinessCalendarText"
+                               Foreground="#E2E8F0"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Margin="0,4,0,0"/>
+
                     <TextBlock x:Name="NewBranchPromoTimerText"
                                Foreground="#4ADE80"
                                FontSize="16"

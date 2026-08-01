@@ -84,7 +84,7 @@ namespace ClubTimerXbox.Services
                     MinimumQuantity = item.MinimumQuantity,
                     PurchasePrice = item.PurchasePrice,
                     SalePrice = item.SalePrice,
-                    UpdatedAt = DateTime.Now
+                    UpdatedAt = ClubClock.Current.LocalNow
                 })
                 .ToList();
         }
@@ -107,7 +107,7 @@ namespace ClubTimerXbox.Services
                     MinimumQuantity = defaultItem.MinimumQuantity,
                     PurchasePrice = defaultItem.PurchasePrice,
                     SalePrice = defaultItem.SalePrice,
-                    UpdatedAt = DateTime.Now
+                    UpdatedAt = ClubClock.Current.LocalNow
                 });
             }
         }
@@ -221,7 +221,7 @@ namespace ClubTimerXbox.Services
                 PurchasePrice = purchasePrice,
                 SalePrice = salePrice,
                 MinimumQuantity = minimumQuantity,
-                UpdatedAt = DateTime.Now
+                    UpdatedAt = ClubClock.Current.LocalNow
             });
 
             Save();
@@ -291,7 +291,7 @@ namespace ClubTimerXbox.Services
             item.PurchasePrice = purchasePrice;
             item.SalePrice = salePrice;
             item.MinimumQuantity = minimumQuantity;
-            item.UpdatedAt = DateTime.Now;
+            item.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
 
@@ -327,7 +327,7 @@ namespace ClubTimerXbox.Services
                 quantity = 0;
 
             item.Quantity = quantity;
-            item.UpdatedAt = DateTime.Now;
+            item.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
         }
@@ -343,7 +343,7 @@ namespace ClubTimerXbox.Services
                 return;
 
             item.Quantity += quantity;
-            item.UpdatedAt = DateTime.Now;
+            item.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
         }
@@ -362,7 +362,7 @@ namespace ClubTimerXbox.Services
                 return false;
 
             item.Quantity -= quantity;
-            item.UpdatedAt = DateTime.Now;
+            item.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
 
@@ -380,7 +380,7 @@ namespace ClubTimerXbox.Services
                 return;
 
             item.Quantity -= quantity;
-            item.UpdatedAt = DateTime.Now;
+            item.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
         }
@@ -414,7 +414,7 @@ namespace ClubTimerXbox.Services
                 minimumQuantity = 0;
 
             item.MinimumQuantity = minimumQuantity;
-            item.UpdatedAt = DateTime.Now;
+            item.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
         }
@@ -437,7 +437,7 @@ namespace ClubTimerXbox.Services
 
             item.PurchasePrice = purchasePrice;
             item.SalePrice = salePrice;
-            item.UpdatedAt = DateTime.Now;
+            item.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
         }
@@ -465,7 +465,7 @@ namespace ClubTimerXbox.Services
             item.PurchasePrice = purchasePrice;
             item.SalePrice = salePrice;
             item.MinimumQuantity = minimumQuantity;
-            item.UpdatedAt = DateTime.Now;
+            item.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
         }
@@ -496,12 +496,17 @@ namespace ClubTimerXbox.Services
 
             int quantityBefore = item.Quantity;
             int quantityAfter = item.Quantity + quantityToAdd;
+            int weightedPurchasePrice = InventoryCostService.CalculateWeightedAverageUnitCost(
+                quantityBefore,
+                item.PurchasePrice,
+                quantityToAdd,
+                purchasePrice);
 
             item.Quantity = quantityAfter;
-            item.PurchasePrice = purchasePrice;
+            item.PurchasePrice = weightedPurchasePrice;
             item.SalePrice = salePrice;
             item.MinimumQuantity = minimumQuantity;
-            item.UpdatedAt = DateTime.Now;
+            item.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
 

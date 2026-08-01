@@ -121,7 +121,7 @@ namespace ClubTimerXbox.Services
             var item = new CashAcceptanceItem
             {
                 Id = Guid.NewGuid(),
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 CheckedByEmployeeName = checkedByEmployeeName.Trim(),
                 ResponsibleEmployeeName = responsibleEmployeeName.Trim(),
                 AcceptanceKey = acceptanceKey,

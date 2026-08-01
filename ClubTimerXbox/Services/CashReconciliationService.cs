@@ -106,7 +106,7 @@ namespace ClubTimerXbox.Services
                     _items,
                     fromInclusive,
                     toExclusive,
-                    DateTime.Now,
+                    ClubClock.Current.LocalNow,
                     checkedByEmployeeName,
                     responsibleEmployeeName,
                     expectedAmount,
@@ -133,7 +133,7 @@ namespace ClubTimerXbox.Services
                     _items,
                     fromInclusive,
                     toExclusive,
-                    DateTime.Now,
+                    ClubClock.Current.LocalNow,
                     expectedAmount,
                     actualAmount,
                     suspectedEmployeeName,
@@ -177,7 +177,7 @@ namespace ClubTimerXbox.Services
                     _items,
                     fromInclusive,
                     toExclusive,
-                    DateTime.Now,
+                    ClubClock.Current.LocalNow,
                     checkpointNumber,
                     operationId,
                     actualCashAtCheckpoint,
@@ -204,7 +204,7 @@ namespace ClubTimerXbox.Services
                     _items,
                     fromInclusive,
                     toExclusive,
-                    DateTime.Now,
+                    ClubClock.Current.LocalNow,
                     difference,
                     expectedAmount,
                     actualAmount,
@@ -230,7 +230,7 @@ namespace ClubTimerXbox.Services
                     _items,
                     fromInclusive,
                     toExclusive,
-                    DateTime.Now,
+                    ClubClock.Current.LocalNow,
                     employeeName,
                     amount,
                     operationId
@@ -294,7 +294,7 @@ namespace ClubTimerXbox.Services
                     _items,
                     monthStart,
                     nextMonthStart,
-                    DateTime.Now,
+                    ClubClock.Current.LocalNow,
                     workedHours
                 );
                 Save();
@@ -748,7 +748,7 @@ namespace ClubTimerXbox.Services
             var item = new CashReconciliationItem
             {
                 Id = Guid.NewGuid(),
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 Kind = difference > 0
                     ? CashReconciliationKind.CashExtra
                     : CashReconciliationKind.CashShortage,
@@ -783,7 +783,7 @@ namespace ClubTimerXbox.Services
             var item = new CashReconciliationItem
             {
                 Id = Guid.NewGuid(),
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 Kind = actualAmount >= expectedAmount
                     ? CashReconciliationKind.CashlessExtra
                     : CashReconciliationKind.CashlessShortage,
@@ -806,7 +806,7 @@ namespace ClubTimerXbox.Services
             {
                 item.ResolvedAmount = item.Amount;
                 item.Amount = 0;
-                item.ResolvedAt = DateTime.Now;
+                item.ResolvedAt = ClubClock.Current.LocalNow;
                 item.ResolvedBy = "Система";
                 item.ResolutionNote = note.Trim();
             }
@@ -944,7 +944,7 @@ namespace ClubTimerXbox.Services
                 .ToList())
             {
                 item.Status = CashReconciliationStatus.Resolved;
-                item.ResolvedAt = DateTime.Now;
+                item.ResolvedAt = ClubClock.Current.LocalNow;
                 item.ResolvedBy = "Система";
                 item.ResolutionNote =
                     "Закрыто автоматически: повторная сверка показала, что фактический безнал равен программе.";
@@ -969,7 +969,7 @@ namespace ClubTimerXbox.Services
             var item = new CashReconciliationItem
             {
                 Id = Guid.NewGuid(),
-                CreatedAt = DateTime.Now,
+                CreatedAt = ClubClock.Current.LocalNow,
                 Kind = isShortage
                     ? CashReconciliationKind.CashlessShortage
                     : CashReconciliationKind.CashlessExtra,
@@ -1179,7 +1179,7 @@ namespace ClubTimerXbox.Services
                     if (extra.Amount == 0)
                     {
                         extra.Status = CashReconciliationStatus.Resolved;
-                        extra.ResolvedAt = DateTime.Now;
+                        extra.ResolvedAt = ClubClock.Current.LocalNow;
                         extra.ResolvedBy = "Система";
                         extra.ResolutionNote = extraResolvedNote;
                     }
@@ -1187,7 +1187,7 @@ namespace ClubTimerXbox.Services
                     if (shortage.Amount == 0)
                     {
                         shortage.Status = CashReconciliationStatus.Resolved;
-                        shortage.ResolvedAt = DateTime.Now;
+                        shortage.ResolvedAt = ClubClock.Current.LocalNow;
                         shortage.ResolvedBy = "Система";
                         shortage.ResolutionNote = shortageResolvedNote;
                     }
@@ -1250,7 +1250,7 @@ namespace ClubTimerXbox.Services
                 if (item.Amount == 0)
                 {
                     item.Status = CashReconciliationStatus.Resolved;
-                    item.ResolvedAt = DateTime.Now;
+                item.ResolvedAt = ClubClock.Current.LocalNow;
                     item.ResolvedBy = "Система";
                     item.ResolutionNote = "Зачтено как ошибка типа оплаты: безнал был принят наличными.";
                 }
@@ -1299,7 +1299,7 @@ namespace ClubTimerXbox.Services
                 if (item.Amount == 0)
                 {
                     item.Status = CashReconciliationStatus.Resolved;
-                    item.ResolvedAt = DateTime.Now;
+                item.ResolvedAt = ClubClock.Current.LocalNow;
                     item.ResolvedBy = "Система";
                     item.ResolutionNote = "Зачтено как ошибка типа оплаты: наличка была принята безналом.";
                 }
@@ -1376,7 +1376,7 @@ namespace ClubTimerXbox.Services
             if (item.Amount == 0)
             {
                 item.Status = CashReconciliationStatus.Resolved;
-                item.ResolvedAt = DateTime.Now;
+                item.ResolvedAt = ClubClock.Current.LocalNow;
                 item.ResolvedBy = "Система";
                 item.ResolutionNote = "Активная сумма стала 0, карточка закрыта.";
             }
@@ -1412,7 +1412,7 @@ namespace ClubTimerXbox.Services
                 }
 
                 item.Status = CashReconciliationStatus.Resolved;
-                item.ResolvedAt = DateTime.Now;
+                item.ResolvedAt = ClubClock.Current.LocalNow;
                 item.ResolvedBy = string.IsNullOrWhiteSpace(resolvedBy)
                     ? "Владелец"
                     : resolvedBy.Trim();
@@ -1455,7 +1455,7 @@ namespace ClubTimerXbox.Services
                 }
 
                 item.Status = CashReconciliationStatus.Resolved;
-                item.ResolvedAt = DateTime.Now;
+                item.ResolvedAt = ClubClock.Current.LocalNow;
                 item.ResolvedBy = "Система";
                 item.ResolutionNote = note.Trim();
                 AppendNote(item, note.Trim());
@@ -1560,7 +1560,7 @@ namespace ClubTimerXbox.Services
                 if (item.Amount == 0)
                 {
                     item.Status = CashReconciliationStatus.Resolved;
-                    item.ResolvedAt = DateTime.Now;
+                item.ResolvedAt = ClubClock.Current.LocalNow;
                     item.ResolvedBy = string.IsNullOrWhiteSpace(resolvedBy)
                         ? "Владелец"
                         : resolvedBy.Trim();
@@ -1623,7 +1623,7 @@ namespace ClubTimerXbox.Services
 
             (fromInclusive, toExclusive) = LimitToSingleMonth(fromInclusive, toExclusive);
 
-            DateTime fromTime = DateTime.Now.Subtract(correctionWindow);
+            DateTime fromTime = ClubClock.Current.LocalNow.Subtract(correctionWindow);
             int remaining = amount;
             int resolved = 0;
 
@@ -1663,7 +1663,7 @@ namespace ClubTimerXbox.Services
                 if (item.Amount == 0)
                 {
                     item.Status = CashReconciliationStatus.Resolved;
-                    item.ResolvedAt = DateTime.Now;
+                item.ResolvedAt = ClubClock.Current.LocalNow;
                     item.ResolvedBy = checkedByEmployeeName;
                     item.ResolutionNote = "Закрыто повторной приёмкой: сотрудник исправил свою ошибку ввода налички.";
                 }
@@ -1719,7 +1719,7 @@ namespace ClubTimerXbox.Services
                 _ => CashReconciliationResolution.Legacy
             };
             item.ClosedAtCheckpointNumber = DateTime.UtcNow.Ticks;
-            item.ResolvedAt = DateTime.Now;
+                item.ResolvedAt = ClubClock.Current.LocalNow;
             item.ResolvedBy = string.IsNullOrWhiteSpace(resolvedBy)
                 ? "Владелец"
                 : resolvedBy.Trim();
@@ -1765,11 +1765,7 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            var monthStart = new DateTime(fromInclusive.Year, fromInclusive.Month, 1);
-            var nextMonthStart = monthStart.AddMonths(1);
-
-            if (fromInclusive < monthStart)
-                fromInclusive = monthStart;
+            DateTime nextMonthStart = fromInclusive.AddMonths(1);
 
             if (toExclusive > nextMonthStart || toExclusive <= fromInclusive)
                 toExclusive = nextMonthStart;
@@ -1803,7 +1799,7 @@ namespace ClubTimerXbox.Services
             }
 
             item.Status = CashReconciliationStatus.Resolved;
-            item.ResolvedAt = DateTime.Now;
+            item.ResolvedAt = ClubClock.Current.LocalNow;
             item.ResolvedBy = resolvedBy;
             item.ResolutionNote = note;
         }

@@ -53,6 +53,7 @@ namespace ClubTimerXbox
             UpdateStockAuditButtonState();
             UpdateSettingsButtonUpdateState();
             UpdateNewBranchPromoTimerText();
+            UpdateBusinessCalendarText();
 
             _mainTimer.Interval = TimeSpan.FromSeconds(1);
             _mainTimer.Tick += MainTimer_Tick;
@@ -1483,7 +1484,8 @@ namespace ClubTimerXbox
                     $"Оплачено: {place.PaidAmount} сом. " +
                     $"Возврат по игре: {refund} сом. Доплата по игре: {needToPayForGame} сом.",
                 amount: gameCashIncome,
-                gameSessionId: sessionId
+                gameSessionId: sessionId,
+                businessOccurredAt: wasOpenMode ? null : activeSession?.StartedAt
             );
 
             if (productsAmount > 0)
@@ -1609,7 +1611,10 @@ namespace ClubTimerXbox
                     $"{sourcePlace.Name}. Клиент играл: {sourceGameAmount} сом. " +
                     $"Оплата перенесена на {targetPlaceName}.",
                 amount: sourceGameAmount,
-                gameSessionId: sessionId);
+                gameSessionId: sessionId,
+                businessOccurredAt: activeSession?.IsOpenMode == false
+                    ? activeSession.StartedAt
+                    : null);
 
             if (sourceProductsAmount > 0)
             {
@@ -1718,7 +1723,10 @@ namespace ClubTimerXbox
                     .Where(record =>
                         record.PlaceName == place.Name &&
                         record.TotalAmount > 0 &&
-                        record.CreatedAt >= (place.StartTime ?? DateTime.Today) &&
+                        record.CreatedAt >= (place.StartTime ??
+                            BusinessCalendarService
+                                .GetBusinessDay(ClubClock.Current.LocalNow)
+                                .StartInclusive) &&
                         record.Items.Any(item => item.Category == "Игры"))
                     .ToList();
 
@@ -1807,6 +1815,7 @@ namespace ClubTimerXbox
             _expiredCardBlinkState = !_expiredCardBlinkState;
             UpdateSettingsButtonUpdateState();
             UpdateNewBranchPromoTimerText();
+            UpdateBusinessCalendarText();
 
             foreach (var place in _places)
             {
@@ -1859,6 +1868,14 @@ namespace ClubTimerXbox
                 SaveActivePlacesToStorage();
         }
 
+        private void UpdateBusinessCalendarText()
+        {
+            DateTime now = ClubClock.Current.LocalNow;
+            var month = BusinessCalendarService.GetBusinessMonth(now);
+            BusinessCalendarText.Text =
+                $"{BusinessCalendarService.FormatBusinessDate(now)} • Месяц: {month.Key}";
+        }
+
         private void FinalizeExpiredPrepaidPlace(ClubPlace place)
         {
             if (!place.IsBusy || place.IsOpenMode || place.IsCalculating)
@@ -1900,7 +1917,8 @@ namespace ClubTimerXbox
                         $"{place.Name}. Время закончилось автоматически. " +
                         $"Оплачено: {place.PaidAmount} сом.",
                     amount: place.PaidAmount,
-                    gameSessionId: sessionId
+                    gameSessionId: sessionId,
+                    businessOccurredAt: activeSession.StartedAt
                 );
 
                 if (productsAmount > 0)
@@ -3601,7 +3619,8 @@ namespace ClubTimerXbox
                 Section = CashReportSection.Games,
                 PeriodMode = CashReportPeriodMode.Day,
                 ViewMode = CashReportViewMode.Records,
-                SelectedDay = DateTime.Today
+                SelectedDay = BusinessCalendarService.GetBusinessDate(
+                    ClubClock.Current.LocalNow)
             };
 
             var productsFilter = new CashReportFilter
@@ -3609,7 +3628,8 @@ namespace ClubTimerXbox
                 Section = CashReportSection.ProductsAndServices,
                 PeriodMode = CashReportPeriodMode.Day,
                 ViewMode = CashReportViewMode.Records,
-                SelectedDay = DateTime.Today
+                SelectedDay = BusinessCalendarService.GetBusinessDate(
+                    ClubClock.Current.LocalNow)
             };
 
             var gamesReport = CashReportService.BuildReport(gamesFilter);
