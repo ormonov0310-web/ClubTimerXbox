@@ -209,6 +209,7 @@ $manifest = [ordered]@{
     url = $DownloadUrl
     downloadUrl = $DownloadUrl
     sha256 = $hash
+    sizeBytes = (Get-Item -LiteralPath $zipPath).Length
     notes = $Notes
     publishedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
 }

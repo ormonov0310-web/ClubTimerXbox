@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
@@ -21,6 +22,10 @@ namespace ClubTimerUpdater
         [STAThread]
         private static int Main(string[] args)
         {
+            string recoveryJournal = ReadArg(args, "--recover-journal");
+            if (!string.IsNullOrWhiteSpace(recoveryJournal))
+                return RunRecovery(recoveryJournal);
+
             var options = UpdateOptions.Parse(args);
             if (!options.IsValid(out string error))
             {
@@ -54,6 +59,93 @@ namespace ClubTimerUpdater
             app.Run(window);
             return window.ExitCode;
         }
+
+        private static int RunRecovery(string journalPath)
+        {
+            try
+            {
+                UpdateLog.Write($"Automatic recovery started: {journalPath}");
+                UpdateRecoveryResult result = UpdateTransactionEngine.RecoverFromJournal(journalPath);
+                WriteRecoveryStatus(
+                    result.StatusFile,
+                    result.Result,
+                    result.Result == "done"
+                        ? "Установка была завершена до перезапуска Windows."
+                        : "После прерванной установки восстановлена предыдущая версия.",
+                    result.Version);
+                StartRecoveredApp(result, result.Result);
+                UpdateLog.Write("Automatic recovery completed.");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                UpdateLog.Write($"Automatic recovery failed: {ex}");
+                return 3;
+            }
+        }
+
+        private static void StartRecoveredApp(UpdateRecoveryResult result, string updateResult)
+        {
+            if (!result.Restart)
+                return;
+            string exePath = Path.Combine(result.TargetDir, result.MainExe);
+            if (!File.Exists(exePath))
+                return;
+            var args = new List<string>();
+            if (!string.IsNullOrWhiteSpace(result.SessionToken))
+            {
+                args.Add("--update-session");
+                args.Add(result.SessionToken);
+                args.Add("--update-result");
+                args.Add(updateResult);
+                if (result.ReportOnly)
+                    args.Add("--update-report-only");
+            }
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = exePath,
+                Arguments = string.Join(" ", args.Select(QuoteArg)),
+                WorkingDirectory = result.TargetDir,
+                UseShellExecute = true
+            });
+        }
+
+        private static void WriteRecoveryStatus(
+            string path,
+            string state,
+            string message,
+            string version)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, JsonSerializer.Serialize(new
+                {
+                    state,
+                    message,
+                    version,
+                    updatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                }, new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+            }
+            catch
+            {
+            }
+        }
+
+        private static string ReadArg(string[] args, string key)
+        {
+            for (int index = 0; index < args.Length - 1; index++)
+            {
+                if (args[index].Equals(key, StringComparison.OrdinalIgnoreCase))
+                    return args[index + 1];
+            }
+            return "";
+        }
+
+        private static string QuoteArg(string value) =>
+            "\"" + value.Replace("\"", "\\\"") + "\"";
 
         private static Mutex CreateSingleInstanceMutex(UpdateOptions options, out bool ownsMutex)
         {
@@ -179,9 +271,11 @@ namespace ClubTimerUpdater
 
             content.Children.Add(new TextBlock
             {
-                Text =
-                    "Пожалуйста, подождите. Не выключайте компьютер.\n" +
-                    "Программа сама откроется после завершения обновления.",
+                Text = _options.ReportOnly
+                    ? "Пожалуйста, подождите. Не выключайте компьютер.\n" +
+                      "После обновления клуб останется закрытым."
+                    : "Пожалуйста, подождите. Не выключайте компьютер.\n" +
+                      "Программа сама откроется после завершения обновления.",
                 FontSize = 15,
                 Foreground = Brush("#D7E1EC"),
                 LineHeight = 22,
@@ -243,21 +337,43 @@ namespace ClubTimerUpdater
             try
             {
                 await Task.Run(RunUpdate);
-                SetProgress(100, "100% - готово", "Новая версия запускается.");
+                SetProgress(
+                    100,
+                    "100% - готово",
+                    _options.ReportOnly
+                        ? "Обновление завершено. Клуб остаётся закрытым."
+                        : "Новая версия запускается.");
                 WriteStatus("done", $"Обновление {_options.Version} установлено.");
                 await Task.Delay(1500);
+                CloseFromUi();
+            }
+            catch (UpdateRolledBackException ex)
+            {
+                ExitCode = 1;
+                UpdateLog.Write(ex.ToString());
+                WriteStatus("rolled_back", ex.Message);
+                SetProgress(
+                    Math.Max((int)_progressBar.Value, 1),
+                    "Обновление отменено, предыдущая версия восстановлена.",
+                    "Данные клуба не изменены. Программа откроется в прежней версии.");
+                TryStartApp("rolled_back");
+                await Task.Delay(7000);
                 CloseFromUi();
             }
             catch (Exception ex)
             {
                 ExitCode = 1;
                 UpdateLog.Write(ex.ToString());
-                WriteStatus("failed", ex.Message);
+                bool recoveryRequired = File.Exists(_options.JournalFile);
+                WriteStatus(recoveryRequired ? "recovery_required" : "failed", ex.Message);
                 SetProgress(
                     Math.Max((int)_progressBar.Value, 1),
                     "Обновление не удалось. Позовите владельца.",
-                    "Подробности записаны в updater.log. Пробуем открыть программу обратно.");
-                TryStartApp();
+                    recoveryRequired
+                        ? "Windows продолжит восстановление при следующем входе. Не удаляйте резервную копию."
+                        : "Пакет не был установлен. Пробуем открыть программу обратно.");
+                if (!recoveryRequired)
+                    TryStartApp("failed");
                 await Task.Delay(10000);
                 CloseFromUi();
             }
@@ -269,10 +385,35 @@ namespace ClubTimerUpdater
             UpdateLog.Write($"Package path: {_options.PackagePath}");
             UpdateLog.Write($"Target dir: {_options.TargetDir}");
 
-            SetProgress(0, "0% - подготовка обновления");
+            SetProgress(0, "0% - проверяем пакет обновления");
             WriteStatus("starting", $"Начата установка обновления {_options.Version}.");
 
-            SetProgress(10, "10% - закрываем программу");
+            var request = new UpdateTransactionRequest
+            {
+                PackagePath = _options.PackagePath,
+                ExpectedSha256 = _options.Sha256,
+                TargetDir = _options.TargetDir,
+                BackupRoot = _options.BackupRoot,
+                JournalPath = _options.JournalFile,
+                MainExe = _options.MainExe,
+                Version = _options.Version,
+                SessionToken = _options.UpdateSession,
+                InstallMode = _options.InstallMode,
+                Restart = _options.Restart,
+                ReportOnly = _options.ReportOnly,
+                RecoveryUpdaterPath = Environment.ProcessPath ?? "",
+                StatusFile = _options.StatusFile
+            };
+
+            using PreparedUpdatePackage prepared = UpdateTransactionEngine.PreparePackage(
+                request,
+                phase =>
+                {
+                    if (phase == UpdateTransactionPhase.PackagePrepared)
+                        SetProgress(12, "12% - пакет проверен и распакован");
+                });
+
+            SetProgress(15, "15% - закрываем программу");
             WriteStatus("waiting_app", "Ждём закрытия программы.");
             UpdateLog.Write("Waiting for process exit");
             WaitForProcessExit(
@@ -282,19 +423,35 @@ namespace ClubTimerUpdater
 
             SetProgress(25, "25% - создаём резервную копию");
             WriteStatus("backup", "Создаём резервную копию текущей версии.");
-            string backupPath = CreateBackup(_options.TargetDir, _options.BackupRoot);
-            UpdateLog.Write($"Backup created: {backupPath}");
-
-            SetProgress(50, "50% - устанавливаем новую версию");
-            WriteStatus("copying", "Копируем файлы новой версии.");
-            InstallPackage(_options.PackagePath, _options.TargetDir);
-            UpdateLog.Write("Package installed");
+            string backupPath = UpdateTransactionEngine.InstallPrepared(
+                prepared,
+                request,
+                phase =>
+                {
+                    switch (phase)
+                    {
+                        case UpdateTransactionPhase.BackupCreated:
+                            SetProgress(42, "42% - резервная копия готова");
+                            break;
+                        case UpdateTransactionPhase.FilesPrepared:
+                            SetProgress(62, "62% - новые файлы подготовлены");
+                            break;
+                        case UpdateTransactionPhase.Committing:
+                            SetProgress(72, "72% - включаем новую версию");
+                            WriteStatus("copying", "Атомарно заменяем файлы приложения.");
+                            break;
+                        case UpdateTransactionPhase.ValidatingInstall:
+                            SetProgress(88, "88% - проверяем установленную версию");
+                            break;
+                    }
+                });
+            UpdateLog.Write($"Package installed. Backup: {backupPath}");
 
             CleanupOldLocalFiles(backupPath);
 
-            SetProgress(80, "80% - запускаем программу");
-            WriteStatus("starting_app", "Запускаем программу после обновления.");
-            TryStartApp();
+            SetProgress(96, "96% - завершаем обновление");
+            WriteStatus("starting_app", "Проверка завершена. Запускаем программу.");
+            TryStartApp("done");
             UpdateLog.Write("App restart requested");
         }
 
@@ -318,12 +475,26 @@ namespace ClubTimerUpdater
             });
         }
 
-        private void TryStartApp()
+        private void TryStartApp(string updateResult)
         {
-            if (string.IsNullOrWhiteSpace(_options.MainExe))
+            if (!_options.Restart || string.IsNullOrWhiteSpace(_options.MainExe))
                 return;
 
-            StartApp(Path.Combine(_options.TargetDir, _options.MainExe));
+            string[] args = string.IsNullOrWhiteSpace(_options.UpdateSession)
+                ? Array.Empty<string>()
+                : _options.ReportOnly
+                    ? new[]
+                    {
+                        "--update-session", _options.UpdateSession,
+                        "--update-result", updateResult,
+                        "--update-report-only"
+                    }
+                    : new[]
+                    {
+                        "--update-session", _options.UpdateSession,
+                        "--update-result", updateResult
+                    };
+            StartApp(Path.Combine(_options.TargetDir, _options.MainExe), args);
         }
 
         private void WriteStatus(string state, string message)
@@ -535,7 +706,7 @@ namespace ClubTimerUpdater
             }
         }
 
-        private static void StartApp(string exePath)
+        private static void StartApp(string exePath, IReadOnlyList<string>? args = null)
         {
             if (!File.Exists(exePath))
             {
@@ -546,6 +717,9 @@ namespace ClubTimerUpdater
             Process.Start(new ProcessStartInfo
             {
                 FileName = exePath,
+                Arguments = args == null
+                    ? ""
+                    : string.Join(" ", args.Select(value => "\"" + value.Replace("\"", "\\\"") + "\"")),
                 WorkingDirectory = Path.GetDirectoryName(exePath) ?? "",
                 UseShellExecute = true
             });
@@ -641,6 +815,12 @@ namespace ClubTimerUpdater
         public string Version { get; private set; } = "";
         public string MainExe { get; private set; } = "ClubTimerXbox.exe";
         public string ProcessName { get; private set; } = "ClubTimerXbox";
+        public string JournalFile { get; private set; } = "";
+        public string Sha256 { get; private set; } = "";
+        public string UpdateSession { get; private set; } = "";
+        public string InstallMode { get; private set; } = "";
+        public bool Restart { get; private set; } = true;
+        public bool ReportOnly { get; private set; }
         public int WaitSeconds { get; private set; } = 60;
 
         public static UpdateOptions Parse(string[] args)
@@ -670,12 +850,36 @@ namespace ClubTimerUpdater
                         options.StatusFile = value;
                         i++;
                         break;
+                    case "--journal-file":
+                        options.JournalFile = value;
+                        i++;
+                        break;
                     case "--version":
                         options.Version = value;
                         i++;
                         break;
                     case "--main-exe":
                         options.MainExe = value;
+                        i++;
+                        break;
+                    case "--sha256":
+                        options.Sha256 = value;
+                        i++;
+                        break;
+                    case "--update-session":
+                        options.UpdateSession = value;
+                        i++;
+                        break;
+                    case "--install-mode":
+                        options.InstallMode = value;
+                        i++;
+                        break;
+                    case "--restart":
+                        options.Restart = !value.Equals("false", StringComparison.OrdinalIgnoreCase);
+                        i++;
+                        break;
+                    case "--report-only":
+                        options.ReportOnly = value.Equals("true", StringComparison.OrdinalIgnoreCase);
                         i++;
                         break;
                     case "--process":
@@ -713,6 +917,14 @@ namespace ClubTimerUpdater
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "ClubTimerXbox",
                     "backups");
+            }
+
+            if (string.IsNullOrWhiteSpace(JournalFile))
+            {
+                JournalFile = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "ClubTimerXbox",
+                    "update-transaction.json");
             }
 
             if (string.IsNullOrWhiteSpace(Version))

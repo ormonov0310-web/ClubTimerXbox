@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Business day 06:00-05:59, continuous balances, FIFO payroll, closed profit and crash-safe month transition." `
+            -Notes "Background update preparation, latest-package protection, safe rollback, employee session resume and clear update states." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,11 +66,12 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Business calendar with a 06:00-05:59 workday and a 06:00 month boundary.
+          Updates are downloaded and verified in the background while the club
+          continues working. Only the latest prepared package can be installed.
 
-          Cash and cashless balances continue across months. Payroll is paid from
-          the oldest obligation first, product margin uses weighted cost, and
-          month close resumes safely after an interrupted application run.
+          Installation now keeps a backup and transaction journal, rolls back on
+          failure, resumes after a Windows interruption, and can return directly
+          to the current employee without a false close/open notification.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {

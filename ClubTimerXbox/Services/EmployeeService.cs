@@ -120,6 +120,23 @@ namespace ClubTimerXbox.Services
             return true;
         }
 
+        public static bool ResumeAfterUpdate(string employeeId, string employeeName)
+        {
+            Employee? employee = null;
+
+            if (!string.IsNullOrWhiteSpace(employeeId))
+                employee = FindById(employeeId);
+
+            if (employee == null && !string.IsNullOrWhiteSpace(employeeName))
+                employee = FindByName(employeeName);
+
+            if (employee?.IsActive != true)
+                return false;
+
+            CurrentEmployee = employee;
+            return true;
+        }
+
         public static bool ValidateEmployeePin(string employeeName, string pinCode)
         {
             employeeName = employeeName.Trim();

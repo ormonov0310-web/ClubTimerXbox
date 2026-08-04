@@ -111,6 +111,62 @@ namespace ClubTimerXbox.Services
             return QueueAndFlushAsync(record);
         }
 
+        public static Task PublishUpdateResultAsync(
+            UpdateSessionTicket ticket,
+            string result)
+        {
+            var identity = PcIdentityService.Current;
+            if (!CanPublish(identity))
+                return Task.CompletedTask;
+
+            string cleanResult = string.IsNullOrWhiteSpace(result)
+                ? "failed"
+                : result.Trim().ToLowerInvariant();
+            string employee = CleanEmployeeName(ticket.EmployeeName);
+            string type;
+            string body;
+            string severity;
+
+            if (cleanResult == "done")
+            {
+                type = "update_completed";
+                severity = "info";
+                body = ticket.Mode switch
+                {
+                    AppUpdateInstallMode.ExitAndClose =>
+                        $"Версия: {ticket.TargetVersion}. Сотрудник: {employee}. Работа завершена.",
+                    AppUpdateInstallMode.StartupBeforeLogin =>
+                        $"Версия: {ticket.TargetVersion}. Программа запущена. Ожидается вход сотрудника.",
+                    _ =>
+                        $"Версия: {ticket.TargetVersion}. Сотрудник: {employee}. Работа продолжена."
+                };
+            }
+            else if (cleanResult == "rolled_back")
+            {
+                type = "update_rolled_back";
+                severity = "urgent";
+                body = $"Версия {ticket.TargetVersion} не установлена. Предыдущая версия восстановлена.";
+            }
+            else
+            {
+                type = "update_failed";
+                severity = "urgent";
+                body = $"Версия {ticket.TargetVersion} не установлена. Требуется проверка владельца.";
+            }
+
+            var record = CreateBaseRecord(
+                id: $"update_{CleanId(ticket.SessionId)}_{cleanResult}",
+                type: type,
+                title: $"{identity.ClubName}: обновление",
+                body: body,
+                severity: severity);
+            record.EmployeeName = employee;
+            record.UpdateVersion = ticket.TargetVersion;
+            record.UpdateResult = cleanResult;
+            record.InstallMode = ticket.Mode.ToString();
+            return QueueAndFlushAsync(record);
+        }
+
         public static Task PublishAcceptanceCompletedAsync(ShiftAcceptanceStatus status)
         {
             var identity = PcIdentityService.Current;
@@ -413,6 +469,9 @@ namespace ClubTimerXbox.Services
             public int CashDifference { get; set; }
             public int ProductShortageAmount { get; set; }
             public int ProductExtraAmount { get; set; }
+            public string UpdateVersion { get; set; } = "";
+            public string UpdateResult { get; set; } = "";
+            public string InstallMode { get; set; } = "";
         }
     }
 }

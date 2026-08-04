@@ -1,10 +1,175 @@
 using ClubTimerXbox.Models;
 using ClubTimerXbox.Services;
+using ClubTimerUpdater;
 using System.Text.Json;
 
 var suite = new CashConstitutionTestSuite();
 suite.Run();
 new BusinessCalendarTestSuite().Run();
+new AppUpdateTestSuite().Run();
+
+internal sealed class AppUpdateTestSuite
+{
+    private int _passed;
+
+    public void Run()
+    {
+        Test("Повреждённый пакет не касается рабочей версии", CorruptPackageDoesNotTouchTarget);
+        Test("Проверенный пакет устанавливается целиком", ValidPackageInstalls);
+        Test("Ошибка во время замены возвращает старую версию", CommitFailureRollsBack);
+        Test("Более новая версия вытесняет скачанный пакет", NewerReleaseReplacesPrepared);
+        Test("Новый SHA той же версии вытесняет скачанный пакет", RepackedReleaseReplacesPrepared);
+        Console.WriteLine();
+        Console.WriteLine($"PASS: {_passed} сценариев безопасного обновления.");
+    }
+
+    private void CorruptPackageDoesNotTouchTarget()
+    {
+        using var sandbox = new UpdateSandbox();
+        UpdateTransactionRequest request = sandbox.CreateRequest("wrong-hash");
+        bool rejected = false;
+        try
+        {
+            using PreparedUpdatePackage _ = UpdateTransactionEngine.PreparePackage(request);
+        }
+        catch (InvalidOperationException)
+        {
+            rejected = true;
+        }
+
+        True(rejected, "пакет отклонён");
+        Equal("old-main", File.ReadAllText(Path.Combine(sandbox.TargetDir, "ClubTimerXbox.exe")), "рабочий exe");
+        Equal("old-library", File.ReadAllText(Path.Combine(sandbox.TargetDir, "core.dll")), "рабочая библиотека");
+    }
+
+    private void ValidPackageInstalls()
+    {
+        using var sandbox = new UpdateSandbox();
+        UpdateTransactionRequest request = sandbox.CreateRequest(sandbox.PackageSha256);
+        using PreparedUpdatePackage prepared = UpdateTransactionEngine.PreparePackage(request);
+        string backup = UpdateTransactionEngine.InstallPrepared(prepared, request);
+
+        Equal("new-main", File.ReadAllText(Path.Combine(sandbox.TargetDir, "ClubTimerXbox.exe")), "новый exe");
+        Equal("new-library", File.ReadAllText(Path.Combine(sandbox.TargetDir, "core.dll")), "новая библиотека");
+        Equal("old-main", File.ReadAllText(Path.Combine(backup, "ClubTimerXbox.exe")), "резервный exe");
+        True(!File.Exists(request.JournalPath), "журнал завершённой транзакции удалён");
+    }
+
+    private void CommitFailureRollsBack()
+    {
+        using var sandbox = new UpdateSandbox();
+        UpdateTransactionRequest request = sandbox.CreateRequest(sandbox.PackageSha256);
+        using PreparedUpdatePackage prepared = UpdateTransactionEngine.PreparePackage(request);
+        bool rolledBack = false;
+        try
+        {
+            UpdateTransactionEngine.InstallPrepared(
+                prepared,
+                request,
+                failureHook: phase =>
+                {
+                    if (phase == UpdateTransactionPhase.Committing)
+                        throw new IOException("simulated write failure");
+                });
+        }
+        catch (UpdateRolledBackException)
+        {
+            rolledBack = true;
+        }
+
+        True(rolledBack, "откат выполнен");
+        Equal("old-main", File.ReadAllText(Path.Combine(sandbox.TargetDir, "ClubTimerXbox.exe")), "exe после отката");
+        Equal("old-library", File.ReadAllText(Path.Combine(sandbox.TargetDir, "core.dll")), "библиотека после отката");
+    }
+
+    private void NewerReleaseReplacesPrepared()
+    {
+        True(AppUpdateService.ShouldReplacePreparedPackage(
+            "1.4.3", "new", "url-new", "1.4.2", "old", "url-old"), "новая версия");
+        True(!AppUpdateService.ShouldReplacePreparedPackage(
+            "1.4.1", "older", "url", "1.4.2", "newer", "url"), "старая версия");
+    }
+
+    private void RepackedReleaseReplacesPrepared()
+    {
+        True(AppUpdateService.ShouldReplacePreparedPackage(
+            "1.4.2", "new-sha", "same-url", "1.4.2", "old-sha", "same-url"), "новый SHA");
+        True(!AppUpdateService.ShouldReplacePreparedPackage(
+            "1.4.2", "same", "same-url", "1.4.2", "same", "same-url"), "тот же пакет");
+    }
+
+    private void Test(string title, Action action)
+    {
+        action();
+        _passed++;
+        Console.WriteLine($"PASS: {title}");
+    }
+
+    private static void Equal<T>(T expected, T actual, string label)
+    {
+        if (!EqualityComparer<T>.Default.Equals(expected, actual))
+            throw new Exception($"{label}: ожидалось {expected}, получено {actual}");
+    }
+
+    private static void True(bool value, string label)
+    {
+        if (!value)
+            throw new Exception($"{label}: ожидалось true");
+    }
+
+    private sealed class UpdateSandbox : IDisposable
+    {
+        private readonly string _root = Path.Combine(
+            Path.GetTempPath(),
+            "ClubTimerUpdateTests",
+            Guid.NewGuid().ToString("N"));
+
+        public string TargetDir { get; }
+        public string PackagePath { get; }
+        public string PackageSha256 { get; }
+
+        public UpdateSandbox()
+        {
+            TargetDir = Path.Combine(_root, "app");
+            string packageSource = Path.Combine(_root, "package");
+            PackagePath = Path.Combine(_root, "update.zip");
+            Directory.CreateDirectory(TargetDir);
+            Directory.CreateDirectory(packageSource);
+            File.WriteAllText(Path.Combine(TargetDir, "ClubTimerXbox.exe"), "old-main");
+            File.WriteAllText(Path.Combine(TargetDir, "core.dll"), "old-library");
+            File.WriteAllText(Path.Combine(packageSource, "ClubTimerXbox.exe"), "new-main");
+            File.WriteAllText(Path.Combine(packageSource, "core.dll"), "new-library");
+            System.IO.Compression.ZipFile.CreateFromDirectory(packageSource, PackagePath);
+            using FileStream stream = File.OpenRead(PackagePath);
+            PackageSha256 = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(stream)).ToLowerInvariant();
+        }
+
+        public UpdateTransactionRequest CreateRequest(string sha256) => new UpdateTransactionRequest
+        {
+            PackagePath = PackagePath,
+            ExpectedSha256 = sha256,
+            TargetDir = TargetDir,
+            BackupRoot = Path.Combine(_root, "backups"),
+            JournalPath = Path.Combine(_root, "update-transaction.json"),
+            MainExe = "ClubTimerXbox.exe",
+            Version = "9.9.9",
+            RecoveryUpdaterPath = ""
+        };
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Directory.Exists(_root))
+                    Directory.Delete(_root, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+}
 
 internal sealed class BusinessCalendarTestSuite
 {

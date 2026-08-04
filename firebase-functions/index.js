@@ -122,6 +122,30 @@ function formatClubEventBody(clubEvent) {
       ),
     ].slice(0, 4).join("\n");
   }
+  if (type === "update_completed") {
+    const mode = String(clubEvent.installMode || "");
+    const lines = [`Обновлено до ${String(clubEvent.updateVersion || "новой версии")}`];
+    if (mode === "ExitAndClose") {
+      lines.push(`Сотрудник: ${employee}`, "Работа завершена");
+    } else if (mode === "StartupBeforeLogin") {
+      lines.push("Программа запущена", "Ожидается вход сотрудника");
+    } else {
+      lines.push(`Сотрудник: ${employee}`, "Работа продолжена");
+    }
+    return lines.join("\n");
+  }
+  if (type === "update_rolled_back") {
+    return [
+      `Версия ${String(clubEvent.updateVersion || "")} не установлена`,
+      "Предыдущая версия восстановлена",
+    ].join("\n");
+  }
+  if (type === "update_failed") {
+    return [
+      `Версия ${String(clubEvent.updateVersion || "")} не установлена`,
+      "Требуется проверка владельца",
+    ].join("\n");
+  }
   return String(clubEvent.body || "Новое событие клуба");
 }
 
@@ -337,7 +361,19 @@ exports.checkClubConnections = onSchedule(
             0,
         );
         const previous = alerts[clubId] || {};
+        const updateStatus = ownerClub.updateStatus || {};
+        const maintenanceUntil = Number(updateStatus.maintenanceUntilUnixMs || 0);
+        const updateState = String(updateStatus.state || "");
+        const updateInProgress = maintenanceUntil > now && [
+          "installing",
+          "starting",
+          "waiting_app",
+          "backup",
+          "copying",
+          "starting_app",
+        ].includes(updateState);
         const isLost = isOpen &&
+          !updateInProgress &&
           heartbeatAt > 0 &&
           now - heartbeatAt > CONNECTION_LOST_AFTER_MS;
 
@@ -347,7 +383,14 @@ exports.checkClubConnections = onSchedule(
               3,
               Math.floor((now - heartbeatAt) / 60000),
           );
-          const body = [
+          const updateTimedOut = Boolean(updateStatus.updateSessionId) &&
+            maintenanceUntil > 0 && maintenanceUntil <= now &&
+            ["installing", "starting", "waiting_app", "backup", "copying", "starting_app"]
+                .includes(updateState);
+          const body = updateTimedOut ? [
+            "Обновление не завершено",
+            `Нет связи: ${offlineMinutes} ${minuteWord(offlineMinutes)}`,
+          ].join("\n") : [
             "Связь с ПК потеряна",
             `Нет связи: ${offlineMinutes} ${minuteWord(offlineMinutes)}`,
           ].join("\n");
@@ -357,7 +400,7 @@ exports.checkClubConnections = onSchedule(
             title: clubName,
             body,
             eventId,
-            eventType: "connection_lost",
+            eventType: updateTimedOut ? "update_timeout" : "connection_lost",
             severity: "urgent",
             extraData: {
               messageType: "connection_state",

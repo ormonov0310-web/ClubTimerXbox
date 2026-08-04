@@ -31,6 +31,9 @@ namespace ClubTimerXbox
             StartOwnerApiServer();
             StartFirebaseSync();
 
+            if (AppUpdateLaunchContext.SuppressOpenedNotification)
+                return;
+
             var state = AppRuntimeStateStorageService.Load();
 
             AppRuntimeStateStorageService.SaveOpenedNow();
@@ -218,7 +221,7 @@ namespace ClubTimerXbox
             }
         }
 
-        private void SaveRuntimeClosedNow()
+        private void SaveRuntimeClosedNow(bool publishNormalEvent = true)
         {
             AppRuntimeStateStorageService.SaveClosedNow();
 
@@ -233,11 +236,14 @@ namespace ClubTimerXbox
                 // Явное закрытие повторно подтвердит обычное событие клуба.
             }
 
-            FirebaseEventService.PublishClubClosedAndWait(
-                _notificationSessionId,
-                EmployeeService.CurrentEmployee?.Name ?? "Не выбран",
-                TimeSpan.FromSeconds(3)
-            );
+            if (publishNormalEvent)
+            {
+                FirebaseEventService.PublishClubClosedAndWait(
+                    _notificationSessionId,
+                    EmployeeService.CurrentEmployee?.Name ?? "Не выбран",
+                    TimeSpan.FromSeconds(3)
+                );
+            }
 
             _firebaseStatePushTimer.Stop();
             _firebaseCommandTimer.Stop();

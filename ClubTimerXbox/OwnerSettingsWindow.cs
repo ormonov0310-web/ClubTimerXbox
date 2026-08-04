@@ -338,27 +338,73 @@ namespace ClubTimerXbox
                 if (!info.HasUpdate)
                     return;
 
-                _updateTitleText.Text = $"Вышло обновление {info.DisplayLatestVersion}";
+                _updateTitleText.Text = $"Обновление {info.DisplayLatestVersion}";
+                _updateButton.Foreground = Brushes.White;
 
-                if (info.SafeToInstall)
+                switch (info.Stage)
                 {
-                    _updateSubtitleText.Text =
-                        "Клуб свободен. Можно установить обновление сейчас. " +
-                        "Программа закроется, updater установит новую версию и откроет приложение обратно.";
-                    _updateButton.Content = "Обновить";
-                    _updateButton.IsEnabled = true;
-                    _updateButton.Background = new SolidColorBrush(Color.FromRgb(245, 158, 11));
-                    _updateButton.Foreground = Brushes.White;
-                }
-                else
-                {
-                    _updateSubtitleText.Text =
-                        $"Обновление готово, но сейчас активных мест: {info.ActivePlaces}. " +
-                        "Кнопка станет доступной, когда все сеансы будут закрыты.";
-                    _updateButton.Content = "Обновить нельзя: есть активные сеансы";
-                    _updateButton.IsEnabled = false;
-                    _updateButton.Background = new SolidColorBrush(Color.FromRgb(75, 85, 99));
-                    _updateButton.Foreground = new SolidColorBrush(Color.FromRgb(209, 213, 219));
+                    case AppUpdateService.AppUpdateStage.Downloading:
+                        SetUpdateCardColors(Color.FromRgb(37, 99, 235), Color.FromRgb(17, 36, 68));
+                        _updateSubtitleText.Text =
+                            $"Скачивание в фоне: {info.DownloadPercent}%. " +
+                            "Игровые места и работа программы продолжаются как обычно.";
+                        _updateButton.Content = $"Скачивается: {info.DownloadPercent}%";
+                        _updateButton.IsEnabled = false;
+                        _updateButton.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+                        break;
+
+                    case AppUpdateService.AppUpdateStage.Verifying:
+                        SetUpdateCardColors(Color.FromRgb(56, 189, 248), Color.FromRgb(17, 36, 68));
+                        _updateSubtitleText.Text = "Скачивание завершено. Проверяем размер и SHA-256 пакета.";
+                        _updateButton.Content = "Проверяем пакет...";
+                        _updateButton.IsEnabled = false;
+                        _updateButton.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+                        break;
+
+                    case AppUpdateService.AppUpdateStage.DownloadedBlocked:
+                        SetUpdateCardColors(Color.FromRgb(59, 130, 246), Color.FromRgb(17, 36, 68));
+                        _updateSubtitleText.Text =
+                            $"Пакет скачан и проверен. Активных мест: {info.ActivePlaces}. " +
+                            "Установка станет доступна после завершения всех сеансов.";
+                        _updateButton.Content = "Скачано, ждём свободный клуб";
+                        _updateButton.IsEnabled = false;
+                        _updateButton.Background = new SolidColorBrush(Color.FromRgb(75, 85, 99));
+                        break;
+
+                    case AppUpdateService.AppUpdateStage.Ready:
+                        SetUpdateCardColors(Color.FromRgb(34, 197, 94), Color.FromRgb(20, 83, 45));
+                        _updateSubtitleText.Text =
+                            "Пакет скачан и проверен, клуб свободен. После установки программа " +
+                            "вернётся в текущего сотрудника без повторного кода и приёмки.";
+                        _updateButton.Content = "Установить обновление";
+                        _updateButton.IsEnabled = true;
+                        _updateButton.Background = new SolidColorBrush(Color.FromRgb(22, 163, 74));
+                        break;
+
+                    case AppUpdateService.AppUpdateStage.Installing:
+                    case AppUpdateService.AppUpdateStage.Recovering:
+                        SetUpdateCardColors(Color.FromRgb(56, 189, 248), Color.FromRgb(17, 36, 68));
+                        _updateSubtitleText.Text = info.StateMessage;
+                        _updateButton.Content = "Установка уже началась";
+                        _updateButton.IsEnabled = false;
+                        break;
+
+                    case AppUpdateService.AppUpdateStage.Failed:
+                        SetUpdateCardColors(Color.FromRgb(239, 68, 68), Color.FromRgb(69, 10, 10));
+                        _updateSubtitleText.Text = info.StateMessage;
+                        _updateButton.Content = "Скачать и проверить заново";
+                        _updateButton.IsEnabled = info.SafeToInstall;
+                        _updateButton.Background = new SolidColorBrush(Color.FromRgb(185, 28, 28));
+                        break;
+
+                    default:
+                        SetUpdateCardColors(Color.FromRgb(245, 158, 11), Color.FromRgb(36, 28, 18));
+                        _updateSubtitleText.Text =
+                            "Новая версия найдена. Фоновая подготовка начнётся автоматически.";
+                        _updateButton.Content = "Подготавливаем...";
+                        _updateButton.IsEnabled = false;
+                        _updateButton.Background = new SolidColorBrush(Color.FromRgb(75, 85, 99));
+                        break;
                 }
             }
             catch (Exception ex)
@@ -371,6 +417,14 @@ namespace ClubTimerXbox
                 _updateButton.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
                 _updateButton.Foreground = Brushes.White;
             }
+        }
+
+        private void SetUpdateCardColors(Color border, Color background)
+        {
+            if (_updateCard == null)
+                return;
+            _updateCard.BorderBrush = new SolidColorBrush(border);
+            _updateCard.Background = new SolidColorBrush(background);
         }
 
         private async Task InstallUpdateFromSettingsAsync()

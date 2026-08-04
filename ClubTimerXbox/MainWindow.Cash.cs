@@ -17,13 +17,20 @@ namespace ClubTimerXbox
 
             CheckRuntimeShiftAfterStart();
 
-            Closing += (_, _) =>
+            Closing += (_, e) =>
             {
-                if (_runtimeCloseSaved)
+                if (e.Cancel || _runtimeCloseSaved)
                     return;
 
                 _runtimeCloseSaved = true;
-                SaveRuntimeClosedNow();
+                bool preserveOpenState = AppUpdateShutdownCoordinator.IsPlannedUpdate &&
+                    (AppUpdateShutdownCoordinator.Mode == AppUpdateInstallMode.SettingsResume ||
+                     AppUpdateShutdownCoordinator.Mode == AppUpdateInstallMode.RemoteResume);
+                if (preserveOpenState)
+                    return;
+
+                SaveRuntimeClosedNow(
+                    publishNormalEvent: !AppUpdateShutdownCoordinator.IsPlannedUpdate);
             };
 
             MainCashText.Cursor = Cursors.Hand;

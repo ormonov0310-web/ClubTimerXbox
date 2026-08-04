@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Media;
 using System.Windows;
@@ -32,16 +33,21 @@ namespace ClubTimerXbox
 
         // Мигание кнопки "Приёмка", если новый админ ещё не принял товары и наличку.
         private readonly DispatcherTimer _stockAuditBlinkTimer = new DispatcherTimer();
+        private readonly DispatcherTimer _updateAnimationTimer = new DispatcherTimer();
         private bool _stockAuditBlinkState = false;
         private AppUpdateService.AppUpdateInfo? _settingsUpdateInfo;
         private bool _settingsUpdateBlinkState = false;
         private bool _expiredCardBlinkState = false;
+        private bool _allowWindowClose;
+        private bool _updateClosePromptOpen;
 
         // Совместимость со старым именем.
         public MainWindow()
         {
             InitializeComponent();
+            AppUpdateRuntimeGuard.MarkRunning();
             VisualThemeService.ThemeChanged += VisualThemeService_ThemeChanged;
+            AppUpdateService.StateChanged += AppUpdateService_StateChanged;
 
             UpdateCurrentEmployeeText();
 
@@ -63,6 +69,17 @@ namespace ClubTimerXbox
             _stockAuditBlinkTimer.Tick += StockAuditBlinkTimer_Tick;
             _stockAuditBlinkTimer.Start();
 
+            _updateAnimationTimer.Interval = TimeSpan.FromMilliseconds(80);
+            _updateAnimationTimer.Tick += (_, _) =>
+            {
+                if (_settingsUpdateInfo?.Stage == AppUpdateService.AppUpdateStage.Downloading ||
+                    _settingsUpdateInfo?.Stage == AppUpdateService.AppUpdateStage.Verifying)
+                {
+                    UpdateSettingsButtonUpdateState();
+                }
+            };
+            _updateAnimationTimer.Start();
+
             _tuyaRefreshTimer.Interval = TimeSpan.FromSeconds(10);
             _tuyaRefreshTimer.Tick += async (_, _) => await RefreshTuyaDevicesIfNeededAsync();
 
@@ -79,7 +96,12 @@ namespace ClubTimerXbox
             PreviewMouseWheel += (_, _) => ResetTuyaInactivityTimer();
             PreviewKeyDown += (_, _) => ResetTuyaInactivityTimer();
 
-            Closing += (_, _) => HandleWindowClosing();
+            Closing += MainWindow_UpdateClosing;
+            Closing += (_, e) =>
+            {
+                if (!e.Cancel)
+                    HandleWindowClosing();
+            };
 
             _ = RefreshSettingsUpdateIndicatorAsync(forceRefresh: true);
         }
@@ -87,7 +109,9 @@ namespace ClubTimerXbox
         private void HandleWindowClosing()
         {
             VisualThemeService.ThemeChanged -= VisualThemeService_ThemeChanged;
+            AppUpdateService.StateChanged -= AppUpdateService_StateChanged;
             _stockAuditBlinkTimer.Stop();
+            _updateAnimationTimer.Stop();
             _tuyaRefreshTimer.Stop();
             _tuyaInactivityTimer.Stop();
 
@@ -98,7 +122,79 @@ namespace ClubTimerXbox
             // активные игровые сеансы остаются,
             // но рабочая смена сотрудника должна закрыться,
             // чтобы время сотрудника не накручивалось после закрытия программы.
-            ActionLogService.CloseCurrentShift();
+            bool preserveShift = AppUpdateShutdownCoordinator.IsPlannedUpdate &&
+                (AppUpdateShutdownCoordinator.Mode == AppUpdateInstallMode.SettingsResume ||
+                 AppUpdateShutdownCoordinator.Mode == AppUpdateInstallMode.RemoteResume);
+            if (!preserveShift)
+                ActionLogService.CloseCurrentShift();
+
+            AppUpdateRuntimeGuard.MarkCleanShutdown();
+        }
+
+        private void AppUpdateService_StateChanged(object? sender, EventArgs e)
+        {
+            Dispatcher.InvokeAsync(() =>
+            {
+                _settingsUpdateInfo = AppUpdateService.GetLocalUpdateInfo(_places);
+                UpdateSettingsButtonUpdateState();
+            });
+        }
+
+        private async void MainWindow_UpdateClosing(object? sender, CancelEventArgs e)
+        {
+            if (_allowWindowClose || AppUpdateShutdownCoordinator.IsPlannedUpdate)
+                return;
+
+            var info = AppUpdateService.GetLocalUpdateInfo(_places);
+            if (!info.HasUpdate || !info.IsPackageReady || !info.SafeToInstall)
+                return;
+
+            e.Cancel = true;
+            if (_updateClosePromptOpen)
+                return;
+
+            _updateClosePromptOpen = true;
+            try
+            {
+                var choiceWindow = new UpdateExitChoiceWindow(info.DisplayLatestVersion)
+                {
+                    Owner = this
+                };
+                bool? updateRequested = choiceWindow.ShowDialog();
+                if (updateRequested != true)
+                {
+                    _allowWindowClose = true;
+                    Close();
+                    return;
+                }
+
+                var progressWindow = new UpdateInstallProgressWindow
+                {
+                    Owner = this
+                };
+                progressWindow.Show();
+                var result = await progressWindow.RunAsync(progress =>
+                    AppUpdateService.InstallLatestUpdateAsync(
+                        _places.ToList(),
+                        progress,
+                        AppUpdateInstallMode.ExitAndClose));
+                if (result.ShouldShutdown)
+                {
+                    Application.Current.Shutdown();
+                    return;
+                }
+
+                progressWindow.Close();
+                MessageBox.Show(result.Message, "Обновление");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "Обновление");
+            }
+            finally
+            {
+                _updateClosePromptOpen = false;
+            }
         }
 
         private void VisualThemeService_ThemeChanged(object? sender, EventArgs e)

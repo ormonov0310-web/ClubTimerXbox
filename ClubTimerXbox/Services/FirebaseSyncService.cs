@@ -3150,7 +3150,9 @@ namespace ClubTimerXbox.Services
 
                 if (command.Type == "InstallAppUpdate")
                 {
-                    var result = await AppUpdateService.InstallLatestUpdateAsync(places);
+                    var result = await AppUpdateService.InstallLatestUpdateAsync(
+                        places,
+                        mode: AppUpdateInstallMode.RemoteResume);
 
                     await MarkCommandApplied(
                         commandId,
