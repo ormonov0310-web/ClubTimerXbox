@@ -60,6 +60,8 @@ namespace ClubTimerXbox
             UpdateSettingsButtonUpdateState();
             UpdateNewBranchPromoTimerText();
             UpdateBusinessCalendarText();
+            LateOpeningPenaltyService.EvaluatePendingRecommendations();
+            EmployeeNightRatingService.Evaluate();
 
             _mainTimer.Interval = TimeSpan.FromSeconds(1);
             _mainTimer.Tick += MainTimer_Tick;
@@ -95,6 +97,15 @@ namespace ClubTimerXbox
             PreviewMouseDown += (_, _) => ResetTuyaInactivityTimer();
             PreviewMouseWheel += (_, _) => ResetTuyaInactivityTimer();
             PreviewKeyDown += (_, _) => ResetTuyaInactivityTimer();
+
+            Loaded += (_, _) =>
+            {
+                foreach (var expiredPlace in _places.Where(place =>
+                             place.IsTimeExpiredAwaitingAcknowledgement))
+                {
+                    ShowExpiredAlarmWindowIfAllowed(expiredPlace);
+                }
+            };
 
             Closing += MainWindow_UpdateClosing;
             Closing += (_, e) =>
@@ -227,6 +238,13 @@ namespace ClubTimerXbox
                 place.IsNewBranchPromoSession = saved.IsNewBranchPromoSession;
                 place.IsCalculating = saved.IsCalculating;
                 place.IsTimeExpiredAwaitingAcknowledgement = saved.IsTimeExpiredAwaitingAcknowledgement;
+                place.TimeExpiredAt = saved.TimeExpiredAt;
+                place.ExpiredGameSessionId = saved.ExpiredGameSessionId;
+                place.ExpiredPenaltyLossId = saved.ExpiredPenaltyLossId;
+                place.ExpiredPenaltyLossMonthKey = saved.ExpiredPenaltyLossMonthKey;
+                place.ExpiredPenaltyLossBaseMinutes = saved.ExpiredPenaltyLossBaseMinutes;
+                place.ExpiredPenaltyEmployeeName = saved.ExpiredPenaltyEmployeeName;
+                place.ExpiredPenaltyChargedMinutes = saved.ExpiredPenaltyChargedMinutes;
                 place.PaidAmount = saved.PaidAmount;
                 place.PrepaidCashAmount = saved.PrepaidCashAmount;
                 place.PrepaidMBankAmount = saved.PrepaidMBankAmount;
@@ -289,6 +307,13 @@ namespace ClubTimerXbox
                     IsNewBranchPromoSession = place.IsNewBranchPromoSession,
                     IsCalculating = place.IsCalculating,
                     IsTimeExpiredAwaitingAcknowledgement = place.IsTimeExpiredAwaitingAcknowledgement,
+                    TimeExpiredAt = place.TimeExpiredAt,
+                    ExpiredGameSessionId = place.ExpiredGameSessionId,
+                    ExpiredPenaltyLossId = place.ExpiredPenaltyLossId,
+                    ExpiredPenaltyLossMonthKey = place.ExpiredPenaltyLossMonthKey,
+                    ExpiredPenaltyLossBaseMinutes = place.ExpiredPenaltyLossBaseMinutes,
+                    ExpiredPenaltyEmployeeName = place.ExpiredPenaltyEmployeeName,
+                    ExpiredPenaltyChargedMinutes = place.ExpiredPenaltyChargedMinutes,
 
                     PaidAmount = place.PaidAmount,
                     PrepaidCashAmount = place.PrepaidCashAmount,
@@ -1889,6 +1914,13 @@ namespace ClubTimerXbox
             place.IsNewBranchPromoSession = false;
             place.IsCalculating = false;
             place.IsTimeExpiredAwaitingAcknowledgement = false;
+            place.TimeExpiredAt = null;
+            place.ExpiredGameSessionId = null;
+            place.ExpiredPenaltyLossId = null;
+            place.ExpiredPenaltyLossMonthKey = "";
+            place.ExpiredPenaltyLossBaseMinutes = 0;
+            place.ExpiredPenaltyEmployeeName = null;
+            place.ExpiredPenaltyChargedMinutes = 0;
             place.PaidAmount = 0;
             place.PrepaidCashAmount = 0;
             place.PrepaidMBankAmount = 0;
@@ -1923,6 +1955,25 @@ namespace ClubTimerXbox
 
                 if (place.IsTimeExpiredAwaitingAcknowledgement)
                 {
+                    if (ExpiredSessionPenaltyService.Evaluate(
+                            place,
+                            GetCurrentEmployeeName(),
+                            ClubClock.Current.LocalNow))
+                    {
+                        needSave = true;
+                        UpdateMainCashText();
+                    }
+
+                    if (_activeAlarmWindows.TryGetValue(place.Name, out var alarmWindow))
+                    {
+                        alarmWindow.UpdateExpiredPenalty(
+                            ExpiredSessionPenaltyService.GetElapsedSeconds(
+                                place,
+                                ClubClock.Current.LocalNow),
+                            place.ExpiredPenaltyChargedMinutes *
+                            ExpiredSessionPenaltyService.SomPerMinute);
+                    }
+
                     needRedraw = true;
                     continue;
                 }
@@ -2037,6 +2088,13 @@ namespace ClubTimerXbox
             place.IsOpenMode = false;
             place.IsCalculating = false;
             place.IsTimeExpiredAwaitingAcknowledgement = true;
+            place.TimeExpiredAt = ClubClock.Current.LocalNow;
+            place.ExpiredGameSessionId = sessionId ?? Guid.NewGuid();
+            place.ExpiredPenaltyLossId = null;
+            place.ExpiredPenaltyLossMonthKey = "";
+            place.ExpiredPenaltyLossBaseMinutes = 0;
+            place.ExpiredPenaltyEmployeeName = EmployeeService.CurrentEmployee?.Name;
+            place.ExpiredPenaltyChargedMinutes = 0;
 
             ShowExpiredAlarmWindowIfAllowed(place);
         }
@@ -2052,6 +2110,9 @@ namespace ClubTimerXbox
             if (!place.IsTimeExpiredAwaitingAcknowledgement)
                 return;
 
+            ExpiredSessionViolationService.Complete(
+                place,
+                ClubClock.Current.LocalNow);
             ClearPlace(place);
             DrawPlaces();
             SaveActivePlacesToStorage();
@@ -3822,7 +3883,13 @@ namespace ClubTimerXbox
             int productsAmount = GetActiveSessionProductsAndServicesTotal(place.Name);
 
             if (place.IsTimeExpiredAwaitingAcknowledgement)
-                return $"Тариф закрыт: {place.PaidAmount} сом. Нажмите карточку, чтобы освободить место.";
+            {
+                string penaltyStatus = ExpiredSessionPenaltyService.BuildStatusText(
+                    place,
+                    ClubClock.Current.LocalNow);
+                return $"Тариф закрыт: {place.PaidAmount} сом. {penaltyStatus}. " +
+                       "Нажмите карточку, чтобы освободить место.";
+            }
 
             if (place.IsCalculating)
             {

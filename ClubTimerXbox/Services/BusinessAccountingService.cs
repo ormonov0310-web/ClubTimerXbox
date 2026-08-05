@@ -132,6 +132,8 @@ namespace ClubTimerXbox.Services
                         period.Key,
                         ClubClock.Current.LocalNow,
                         _ => Save());
+                    if (existing.IsClosed)
+                        BusinessArchiveService.Seal(existing, ClubClock.Current.LocalNow);
                     Save();
                     return;
                 }
@@ -152,11 +154,31 @@ namespace ClubTimerXbox.Services
                 ledger.Payroll = salary.Employees.Select(item =>
                     new EmployeePayrollObligation
                     {
+                        EmployeeId = item.EmployeeId,
                         EmployeeName = item.EmployeeName,
                         MonthKey = period.Key,
                         AccruedAmount = item.GrossAmount,
                         PenaltyAmount = item.LossesAmount,
-                        PaidAmount = item.PaidAmount
+                        PaidAmount = item.PaidAmount,
+                        TimeAmount = item.TimeAmount,
+                        GameRevenueAmount = item.GameRevenueAmount,
+                        ProductBonusAmount = item.ProductBonusAmount,
+                        TimeRatingPercent = item.TimeRatingPercent,
+                        RevenueRatingPercent = item.RevenueRatingPercent,
+                        OverallRatingPercent = item.OverallRatingPercent
+                    }).ToList();
+                ledger.SalaryPolicyVersions = SalaryPolicyHistoryService.GetVersions(
+                    period.StartInclusive,
+                    period.EndExclusive);
+                ledger.EmployeeRatings = salary.Employees.Select(item =>
+                    new EmployeeRatingArchiveItem
+                    {
+                        EmployeeId = item.EmployeeId,
+                        EmployeeName = item.EmployeeName,
+                        TimePercent = item.TimeRatingPercent,
+                        RevenuePercent = item.RevenueRatingPercent,
+                        OverallPercent = item.OverallRatingPercent,
+                        Events = item.RatingEvents
                     }).ToList();
                 State.Months[period.Key] = ledger;
                 Save();
@@ -166,6 +188,8 @@ namespace ClubTimerXbox.Services
                     period.Key,
                     ClubClock.Current.LocalNow,
                     _ => Save());
+                if (ledger.IsClosed)
+                    BusinessArchiveService.Seal(ledger, ClubClock.Current.LocalNow);
                 Save();
             }
         }

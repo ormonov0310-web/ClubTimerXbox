@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Background update preparation, latest-package protection, safe rollback, employee session resume and clear update states." `
+            -Notes "Individual employee salary policies and ratings, opening and night rules, expired-TV violation tracking, and owner salary history." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,12 +66,12 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Updates are downloaded and verified in the background while the club
-          continues working. Only the latest prepared package can be installed.
+          Adds individual employee salary policies and two-branch ratings with
+          immutable event history. Opening, late-night and expired-TV rules now
+          create auditable violations without mixing them into cash losses.
 
-          Installation now keeps a backup and transaction journal, rolls back on
-          failure, resumes after a Windows interruption, and can return directly
-          to the current employee without a false close/open notification.
+          The owner app receives detailed salary payment history, including who
+          paid or took salary, payment method, amount and date.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {

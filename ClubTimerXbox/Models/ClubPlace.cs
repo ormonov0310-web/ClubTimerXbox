@@ -24,6 +24,16 @@ namespace ClubTimerXbox.Models
         // но админ ещё не подтвердил освобождение места.
         public bool IsTimeExpiredAwaitingAcknowledgement { get; set; }
 
+        // Состояние дисциплинарного штрафа за оставленный после тарифа ТВ.
+        // Оно сохраняется вместе с активным местом, чтобы перезапуск не сбрасывал отсчёт.
+        public DateTime? TimeExpiredAt { get; set; }
+        public Guid? ExpiredGameSessionId { get; set; }
+        public Guid? ExpiredPenaltyLossId { get; set; }
+        public string ExpiredPenaltyLossMonthKey { get; set; } = "";
+        public int ExpiredPenaltyLossBaseMinutes { get; set; }
+        public string? ExpiredPenaltyEmployeeName { get; set; }
+        public int ExpiredPenaltyChargedMinutes { get; set; }
+
         public int PaidAmount { get; set; }
         public int PrepaidCashAmount { get; set; }
         public int PrepaidMBankAmount { get; set; }

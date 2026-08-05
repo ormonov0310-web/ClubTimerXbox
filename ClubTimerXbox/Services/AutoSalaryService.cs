@@ -8,8 +8,19 @@ namespace ClubTimerXbox.Services
     public static class AutoSalaryService
     {
         private const string GamesCategory = "\u0418\u0433\u0440\u044b";
-        public static AutoSalarySettings Settings { get; private set; } =
+        private static readonly AutoSalarySettings LegacySettings =
             NormalizeSettings(AutoSalarySettingsStorageService.Load());
+
+        static AutoSalaryService()
+        {
+            SalaryPolicyHistoryService.EnsureInitialized(LegacySettings);
+        }
+
+        public static AutoSalarySettings Settings => NormalizeSettings(
+            SalaryPolicyHistoryService.GetSettingsAt(ClubClock.Current.LocalNow));
+
+        public static SalaryPolicyVersion LatestPolicyVersion =>
+            SalaryPolicyHistoryService.GetLatestVersion();
 
         public static int RenameEmployeeReferences(
             string oldEmployeeName,
@@ -20,22 +31,21 @@ namespace ClubTimerXbox.Services
                 newEmployeeName
             );
 
-            if (EmployeeReferenceRenameService.Matches(
-                    Settings.OpeningResponsibleEmployeeName,
-                    oldEmployeeName))
-            {
-                Settings.OpeningResponsibleEmployeeName = newEmployeeName;
-                AutoSalarySettingsStorageService.Save(Settings);
-                changed++;
-            }
+            changed += SalaryPolicyHistoryService.RenameEmployeeReferences(
+                oldEmployeeName,
+                newEmployeeName);
+            changed += EmployeeRatingService.RenameEmployeeReferences(
+                oldEmployeeName,
+                newEmployeeName);
 
             return changed;
         }
 
-        public static void UpdateSettings(AutoSalarySettings settings)
+        public static SalaryPolicyVersion UpdateSettings(AutoSalarySettings settings)
         {
-            Settings = NormalizeSettings(settings);
-            AutoSalarySettingsStorageService.Save(Settings);
+            settings = NormalizeSettings(settings);
+            AutoSalarySettingsStorageService.Save(settings);
+            return SalaryPolicyHistoryService.Schedule(settings);
         }
 
         public static AutoSalaryReport BuildReport(DateTime monthStart)
@@ -43,6 +53,12 @@ namespace ClubTimerXbox.Services
             var period = BusinessCalendarService.GetBusinessMonthByAnchor(monthStart);
             monthStart = period.StartInclusive;
             DateTime nextMonthStart = period.EndExclusive;
+
+            EmployeeRatingService.SynchronizeConfirmedLosses();
+            EmployeeRatingService.SynchronizeConfirmedCashExtras();
+            SalaryPolicyVersion latestPolicy = LatestPolicyVersion;
+            AutoSalarySettings displaySettings = NormalizeSettings(
+                SalaryPolicyHistoryService.Clone(latestPolicy.Settings));
 
             int gameRevenue = CashService.GetTotalByPeriodAndCategory(
                 monthStart,
@@ -53,15 +69,18 @@ namespace ClubTimerXbox.Services
                 monthStart,
                 nextMonthStart
             );
-            int expenseReserve = Percent(gameRevenue, Settings.ExpenseReservePercent);
+            var gameFund = CalculateGameFund(monthStart, nextMonthStart);
+            int expenseReserve = gameFund.ExpenseReserve;
             int salaryBase = Math.Max(0, gameRevenue - expenseReserve);
-            int salaryFund = Percent(salaryBase, Settings.SalaryFundPercent);
-            int plannedTimeFund = Math.Max(0, Settings.TimeMonthlyFundAmount);
+            int salaryFund = gameFund.SalaryFund;
+            int plannedTimeFund = Math.Max(0, displaySettings.TimeMonthlyFundAmount);
 
             var report = new AutoSalaryReport
             {
                 MonthKey = period.Key,
-                Settings = Settings,
+                Settings = displaySettings,
+                SettingsEffectiveFrom = latestPolicy.EffectiveFrom,
+                HasPendingSettings = latestPolicy.EffectiveFrom > ClubClock.Current.LocalNow,
                 GameRevenue = gameRevenue,
                 ProductRevenue = productRevenue,
                 ExpenseReserveAmount = expenseReserve,
@@ -95,10 +114,12 @@ namespace ClubTimerXbox.Services
 
                     return new EmployeeSalaryInput
                     {
+                        EmployeeId = employee.EmployeeId,
                         EmployeeName = employee.Name,
                         Summary = summary,
                         PaidSalary = paidSalary,
                         WorkHours = bonusInput.WorkHours,
+                        PaidIntervals = bonusInput.PaidIntervals,
                         Bonuses = bonusInput.Bonuses
                     };
                 })
@@ -109,15 +130,17 @@ namespace ClubTimerXbox.Services
                 var input = employeeInputs[index];
 
                 int timeAmount = CalculateTimeAmount(
-                    fund: report.TimeFundAmount,
-                    plannedHours: Settings.TimeMonthlyPlannedHours,
-                    employeeHours: input.WorkHours
-                );
-                int gameAmount = CalculateGameRevenueAmount(input.Summary.MonthGameIncome);
-                int productBonus = Percent(
-                    input.Summary.MonthProductsIncome,
-                    Settings.ProductBonusPercent
-                );
+                    input,
+                    monthStart,
+                    nextMonthStart);
+                int gameAmount = CalculateGameRevenueAmount(
+                    input.EmployeeName,
+                    monthStart,
+                    nextMonthStart);
+                int productBonus = CalculateProductBonusAmount(
+                    input.EmployeeName,
+                    monthStart,
+                    nextMonthStart);
                 int bonusAmount = input.Bonuses.Sum(bonus => bonus.Amount);
                 int gross = timeAmount + gameAmount + productBonus + bonusAmount;
                 int losses = input.Summary.MonthUnpaidLosses;
@@ -148,8 +171,15 @@ namespace ClubTimerXbox.Services
 
                 report.ProductBonusTotalAmount += productBonus;
                 report.BonusTotalAmount += bonusAmount;
+                DateTime ratingAt = nextMonthStart <= ClubClock.Current.LocalNow
+                    ? nextMonthStart.AddTicks(-1)
+                    : ClubClock.Current.LocalNow;
+                var rating = EmployeeRatingService.GetSnapshot(
+                    input.EmployeeName,
+                    ratingAt);
                 report.Employees.Add(new AutoSalaryEmployeeResult
                 {
+                    EmployeeId = input.EmployeeId,
                     EmployeeName = input.EmployeeName,
                     WorkHours = Math.Round(input.WorkHours, 2),
                     GameRevenue = input.Summary.MonthGameIncome,
@@ -171,7 +201,16 @@ namespace ClubTimerXbox.Services
                     PaidAmount = paid,
                     CarryInAmount = carryIn,
                     CurrentPeriodRemainingAmount = currentRemaining,
-                    RemainingAmount = remaining
+                    RemainingAmount = remaining,
+                    TimeRatingPercent = rating.TimePercent,
+                    RevenueRatingPercent = rating.RevenuePercent,
+                    OverallRatingPercent = rating.OverallPercent,
+                    RatingHasWarning = rating.HasWarning,
+                    RatingEvents = rating.History
+                        .Where(item =>
+                            item.EffectiveFrom < nextMonthStart &&
+                            item.EffectiveUntil > monthStart)
+                        .ToList()
                 });
             }
 
@@ -197,18 +236,21 @@ namespace ClubTimerXbox.Services
             DateTime day = monthStart.Date;
             while (day < nextMonthStart.Date)
             {
-                DateTime scheduleStart = GetScheduleStart(day);
-                DateTime scheduleEnd = GetScheduleEnd(day);
+                AutoSalarySettings settings = SalaryPolicyHistoryService.GetSettingsAt(
+                    day.Date.AddHours(BusinessCalendarService.BusinessDayStartHour));
+                DateTime scheduleStart = GetScheduleStart(day, settings);
+                DateTime scheduleEnd = GetScheduleEnd(day, settings);
 
                 ApplyPaidTimeForDay(result, scheduleStart, scheduleEnd);
-                ApplyPunctualityBonusForDay(result, scheduleStart);
-                ApplyLateActiveBonusForDay(result, scheduleStart, scheduleEnd);
-                ApplyOverNormBonusForDay(result, scheduleStart, scheduleEnd);
+                ApplyPunctualityBonusForDay(result, scheduleStart, settings);
+                ApplyLateActiveBonusForDay(result, scheduleStart, scheduleEnd, settings);
+                ApplyOverNormBonusForDay(result, scheduleStart, scheduleEnd, settings);
 
                 day = day.AddDays(1);
             }
 
             ApplyManualOwnerBonuses(result, monthStart, nextMonthStart);
+            ApplyRatingCompensations(result, monthStart, nextMonthStart);
 
             foreach (var input in result.Values)
             {
@@ -220,6 +262,36 @@ namespace ClubTimerXbox.Services
             }
 
             return result;
+        }
+
+        private static void ApplyRatingCompensations(
+            Dictionary<string, EmployeeBonusInput> result,
+            DateTime monthStart,
+            DateTime nextMonthStart)
+        {
+            foreach (var input in result.Values)
+            {
+                var snapshot = EmployeeRatingService.GetSnapshot(
+                    input.EmployeeName,
+                    nextMonthStart.AddTicks(-1));
+                foreach (var item in snapshot.History.Where(item =>
+                             item.Status == EmployeeRatingEventStatus.CancelledAsError &&
+                             item.CompensationAmount > 0 &&
+                             item.EndedAt >= monthStart &&
+                             item.EndedAt < nextMonthStart))
+                {
+                    input.Bonuses.Add(new AutoSalaryBonusItem
+                    {
+                        CreatedAt = item.EndedAt ?? item.CreatedAt,
+                        Type = "RatingCompensation",
+                        Title = "Компенсация рейтинга",
+                        Description = string.IsNullOrWhiteSpace(item.ResolutionNote)
+                            ? $"Отмена ошибочного снижения: {item.Title}."
+                            : item.ResolutionNote,
+                        Amount = item.CompensationAmount
+                    });
+                }
+            }
         }
 
         public static void SetRecoveredWorkHours(
@@ -289,19 +361,26 @@ namespace ClubTimerXbox.Services
                     if (shift.StartedAt >= scheduleEnd || shiftEnd <= scheduleStart)
                         continue;
 
-                    TimeSpan paidTime = GetOverlap(
-                        shift.StartedAt,
-                        shiftEnd,
-                        scheduleStart,
-                        scheduleEnd
-                    );
+                    DateTime paidStart = Max(shift.StartedAt, scheduleStart);
+                    DateTime paidEnd = Min(shiftEnd, scheduleEnd);
+                    TimeSpan paidTime = TimeSpan.Zero;
+                    if (paidEnd > paidStart)
+                    {
+                        input.AddPaidInterval(paidStart, paidEnd);
+                        paidTime += paidEnd - paidStart;
+                    }
 
-                    paidTime += GetLateActiveTime(
+                    TimeSpan latePaidTime = GetLateActiveTime(
                         input.EmployeeName,
                         shift.StartedAt,
                         shiftEnd,
                         scheduleEnd
                     );
+                    if (latePaidTime > TimeSpan.Zero)
+                    {
+                        input.AddPaidInterval(scheduleEnd, scheduleEnd + latePaidTime);
+                        paidTime += latePaidTime;
+                    }
 
                     if (paidTime <= TimeSpan.Zero)
                         continue;
@@ -315,9 +394,10 @@ namespace ClubTimerXbox.Services
 
         private static void ApplyPunctualityBonusForDay(
             Dictionary<string, EmployeeBonusInput> result,
-            DateTime scheduleStart)
+            DateTime scheduleStart,
+            AutoSalarySettings settings)
         {
-            if (Settings.PunctualityBonusAmount <= 0)
+            if (settings.PunctualityBonusAmount <= 0)
                 return;
 
             DateTime earlyOpenStart = scheduleStart.Date.AddHours(6);
@@ -348,17 +428,18 @@ namespace ClubTimerXbox.Services
                 CreatedAt = scheduleStart,
                 Type = "Punctuality",
                 Title = "Пунктуальность",
-                Description = $"Открыл клуб до {FormatHour(Settings.WorkDayStartHour)}.",
-                Amount = Settings.PunctualityBonusAmount
+                Description = $"Открыл клуб до {FormatHour(settings.WorkDayStartHour)}.",
+                Amount = settings.PunctualityBonusAmount
             });
         }
 
         private static void ApplyLateActiveBonusForDay(
             Dictionary<string, EmployeeBonusInput> result,
             DateTime scheduleStart,
-            DateTime scheduleEnd)
+            DateTime scheduleEnd,
+            AutoSalarySettings settings)
         {
-            if (Settings.LateActiveSessionBonusAmount <= 0)
+            if (settings.LateActiveSessionBonusAmount <= 0)
                 return;
 
             foreach (var input in result.Values)
@@ -369,13 +450,14 @@ namespace ClubTimerXbox.Services
                     scheduleEnd.AddHours(8)
                 );
 
+                var sessions = EmployeeStatsService
+                    .GetGameSessionsForMonth(input.EmployeeName, scheduleEnd);
                 bool hasLateActiveSession = shifts.Any(shift =>
-                    GetLateActiveTime(
-                        input.EmployeeName,
-                        shift.StartedAt,
-                        shift.ClosedAt ?? ClubClock.Current.LocalNow,
-                        scheduleEnd
-                    ) > TimeSpan.Zero);
+                    shift.StartedAt <= scheduleEnd &&
+                    (shift.ClosedAt ?? ClubClock.Current.LocalNow) > scheduleEnd &&
+                    sessions.Any(session =>
+                        session.StartedAt <= scheduleEnd.AddMinutes(-20) &&
+                        (session.ClosedAt ?? ClubClock.Current.LocalNow) > scheduleEnd));
 
                 if (!hasLateActiveSession)
                     continue;
@@ -385,8 +467,8 @@ namespace ClubTimerXbox.Services
                     CreatedAt = scheduleEnd,
                     Type = "LateActiveSession",
                     Title = "Поздняя активная смена",
-                    Description = $"После {FormatHour(Settings.WorkDayEndHour)} были активные игровые сеансы.",
-                    Amount = Settings.LateActiveSessionBonusAmount
+                    Description = $"После {FormatHour(settings.WorkDayEndHour)} были активные игровые сеансы.",
+                    Amount = settings.LateActiveSessionBonusAmount
                 });
             }
         }
@@ -394,9 +476,10 @@ namespace ClubTimerXbox.Services
         private static void ApplyOverNormBonusForDay(
             Dictionary<string, EmployeeBonusInput> result,
             DateTime scheduleStart,
-            DateTime scheduleEnd)
+            DateTime scheduleEnd,
+            AutoSalarySettings settings)
         {
-            if (Settings.DailyGameRevenueNorm <= 0 || Settings.OverNormBonusPercent <= 0)
+            if (settings.DailyGameRevenueNorm <= 0 || settings.OverNormBonusPercent <= 0)
                 return;
 
             int dayGameRevenue = CashService.GetTotalByPeriodAndCategory(
@@ -404,12 +487,12 @@ namespace ClubTimerXbox.Services
                 scheduleEnd,
                 GamesCategory
             );
-            int overNormRevenue = dayGameRevenue - Settings.DailyGameRevenueNorm;
+            int overNormRevenue = dayGameRevenue - settings.DailyGameRevenueNorm;
 
             if (overNormRevenue <= 0)
                 return;
 
-            int bonusFund = Percent(overNormRevenue, Settings.OverNormBonusPercent);
+            int bonusFund = Percent(overNormRevenue, settings.OverNormBonusPercent);
             if (bonusFund <= 0)
                 return;
 
@@ -507,15 +590,19 @@ namespace ClubTimerXbox.Services
             return end > start ? end - start : TimeSpan.Zero;
         }
 
-        private static DateTime GetScheduleStart(DateTime day)
+        private static DateTime GetScheduleStart(
+            DateTime day,
+            AutoSalarySettings settings)
         {
-            return day.Date.AddHours(Settings.WorkDayStartHour);
+            return day.Date.AddHours(settings.WorkDayStartHour);
         }
 
-        private static DateTime GetScheduleEnd(DateTime day)
+        private static DateTime GetScheduleEnd(
+            DateTime day,
+            AutoSalarySettings settings)
         {
-            DateTime start = GetScheduleStart(day);
-            DateTime end = day.Date.AddHours(Settings.WorkDayEndHour);
+            DateTime start = GetScheduleStart(day, settings);
+            DateTime end = day.Date.AddHours(settings.WorkDayEndHour);
 
             if (end <= start)
                 end = end.AddDays(1);
@@ -539,24 +626,230 @@ namespace ClubTimerXbox.Services
         }
 
         private static int CalculateTimeAmount(
-            int fund,
-            int plannedHours,
-            double employeeHours)
+            EmployeeSalaryInput input,
+            DateTime monthStart,
+            DateTime nextMonthStart)
         {
-            if (fund <= 0 || plannedHours <= 0 || employeeHours <= 0)
-                return 0;
+            var groups = new Dictionary<TimeAccrualGroupKey, double>();
+            double intervalHours = 0;
+            foreach (var interval in input.PaidIntervals)
+            {
+                foreach (var segment in SplitBySalaryRules(
+                             input.EmployeeName,
+                             interval.Start,
+                             interval.End))
+                {
+                    SalaryPolicyVersion policy =
+                        SalaryPolicyHistoryService.GetVersionAt(segment.Start);
+                    AutoSalarySettings settings = policy.Settings;
+                    int rating = EmployeeRatingService.GetPercent(
+                        input.EmployeeName,
+                        EmployeeRatingBranch.Time,
+                        segment.Start);
+                    double hours = (segment.End - segment.Start).TotalHours;
+                    intervalHours += hours;
+                    var key = new TimeAccrualGroupKey(
+                        policy.Id,
+                        EmployeeRatingService.GetAccrualSignature(
+                            input.EmployeeName,
+                            EmployeeRatingBranch.Time,
+                            segment.Start),
+                        settings.TimeMonthlyFundAmount,
+                        settings.TimeMonthlyPlannedHours,
+                        rating);
+                    groups[key] = groups.TryGetValue(key, out double total)
+                        ? total + hours
+                        : hours;
+                }
+            }
 
-            return (int)Math.Round(fund * (employeeHours / plannedHours));
+            double protectedExtraHours = Math.Max(0, input.WorkHours - intervalHours);
+            if (protectedExtraHours > 0)
+            {
+                // Recovered hours represent an older protected balance. Pinning them to
+                // the month opening prevents a later rating change from repricing them.
+                DateTime at = monthStart;
+                SalaryPolicyVersion policy = SalaryPolicyHistoryService.GetVersionAt(at);
+                AutoSalarySettings settings = policy.Settings;
+                int rating = EmployeeRatingService.GetPercent(
+                    input.EmployeeName,
+                    EmployeeRatingBranch.Time,
+                    at);
+                var key = new TimeAccrualGroupKey(
+                    policy.Id,
+                    EmployeeRatingService.GetAccrualSignature(
+                        input.EmployeeName,
+                        EmployeeRatingBranch.Time,
+                        at),
+                    settings.TimeMonthlyFundAmount,
+                    settings.TimeMonthlyPlannedHours,
+                    rating);
+                groups[key] = groups.TryGetValue(key, out double total)
+                    ? total + protectedExtraHours
+                    : protectedExtraHours;
+            }
+
+            int amount = groups.Sum(group =>
+            {
+                var settings = new AutoSalarySettings
+                {
+                    TimeMonthlyFundAmount = group.Key.MonthlyFund,
+                    TimeMonthlyPlannedHours = group.Key.PlannedHours
+                };
+                return (int)Math.Round(EmployeeSalaryRuleEngine.CalculateTimeAccrual(
+                    group.Value,
+                    settings,
+                    group.Key.Rating));
+            });
+            return Math.Max(0, amount);
         }
 
-        private static int CalculateGameRevenueAmount(int employeeGameRevenue)
+        private static int CalculateGameRevenueAmount(
+            string employeeName,
+            DateTime fromInclusive,
+            DateTime toExclusive)
         {
-            if (employeeGameRevenue <= 0)
-                return 0;
+            var groups = CashService.GetRecordsByPeriod(fromInclusive, toExclusive)
+                .Where(record =>
+                    record.Category == GamesCategory &&
+                    record.IncomeEmployeeName.Equals(
+                        employeeName,
+                        StringComparison.OrdinalIgnoreCase))
+                .Select(record =>
+                {
+                    DateTime at = CashService.GetBusinessTime(record);
+                    SalaryPolicyVersion policy =
+                        SalaryPolicyHistoryService.GetVersionAt(at);
+                    AutoSalarySettings settings = policy.Settings;
+                    int rating = EmployeeRatingService.GetPercent(
+                        employeeName,
+                        EmployeeRatingBranch.Revenue,
+                        at);
+                    return new
+                    {
+                        record.Amount,
+                        PolicyId = policy.Id,
+                        RatingSignature = EmployeeRatingService.GetAccrualSignature(
+                            employeeName,
+                            EmployeeRatingBranch.Revenue,
+                            at),
+                        settings.ExpenseReservePercent,
+                        settings.SalaryFundPercent,
+                        Rating = rating
+                    };
+                })
+                .GroupBy(item => new
+                {
+                    item.PolicyId,
+                    item.RatingSignature,
+                    item.ExpenseReservePercent,
+                    item.SalaryFundPercent,
+                    item.Rating
+                });
 
-            int expenseReserve = Percent(employeeGameRevenue, Settings.ExpenseReservePercent);
-            int salaryBase = Math.Max(0, employeeGameRevenue - expenseReserve);
-            return Percent(salaryBase, Settings.SalaryFundPercent);
+            double amount = 0;
+            foreach (var group in groups)
+            {
+                int revenue = group.Sum(item => item.Amount);
+                int reserve = Percent(revenue, group.Key.ExpenseReservePercent);
+                int salaryBeforeRating = Percent(
+                    Math.Max(0, revenue - reserve),
+                    group.Key.SalaryFundPercent);
+                amount += salaryBeforeRating * group.Key.Rating / 100.0;
+            }
+
+            return Math.Max(0, (int)Math.Round(amount));
+        }
+
+        private static int CalculateProductBonusAmount(
+            string employeeName,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            var groups = ProductServiceRevenueService
+                .GetEntries(fromInclusive, toExclusive, employeeName)
+                .Select(entry =>
+                {
+                    SalaryPolicyVersion policy =
+                        SalaryPolicyHistoryService.GetVersionAt(entry.OccurredAt);
+                    return new
+                    {
+                        entry.Amount,
+                        PolicyId = policy.Id,
+                        policy.Settings.ProductBonusPercent
+                    };
+                })
+                .GroupBy(item => new { item.PolicyId, item.ProductBonusPercent });
+            int amount = groups.Sum(group => Percent(
+                group.Sum(item => item.Amount),
+                group.Key.ProductBonusPercent));
+            return Math.Max(0, amount);
+        }
+
+        private static (int ExpenseReserve, int SalaryFund) CalculateGameFund(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            var groups = CashService.GetRecordsByPeriod(fromInclusive, toExclusive)
+                .Where(record => record.Category == GamesCategory)
+                .Select(record =>
+                {
+                    SalaryPolicyVersion policy = SalaryPolicyHistoryService.GetVersionAt(
+                        CashService.GetBusinessTime(record));
+                    AutoSalarySettings settings = policy.Settings;
+                    return new
+                    {
+                        record.Amount,
+                        PolicyId = policy.Id,
+                        settings.ExpenseReservePercent,
+                        settings.SalaryFundPercent
+                    };
+                })
+                .GroupBy(item => new
+                {
+                    item.PolicyId,
+                    item.ExpenseReservePercent,
+                    item.SalaryFundPercent
+                });
+            int reserve = 0;
+            int salary = 0;
+            foreach (var group in groups)
+            {
+                int revenue = group.Sum(item => item.Amount);
+                int groupReserve = Percent(revenue, group.Key.ExpenseReservePercent);
+                reserve += groupReserve;
+                salary += Percent(
+                    Math.Max(0, revenue - groupReserve),
+                    group.Key.SalaryFundPercent);
+            }
+
+            return (
+                Math.Max(0, reserve),
+                Math.Max(0, salary));
+        }
+
+        private static IEnumerable<PaidInterval> SplitBySalaryRules(
+            string employeeName,
+            DateTime start,
+            DateTime end)
+        {
+            var boundaries = SalaryPolicyHistoryService
+                .GetVersions(start, end)
+                .Select(item => item.EffectiveFrom)
+                .Concat(EmployeeRatingService.GetBoundaries(employeeName, start, end))
+                .Where(value => value > start && value < end)
+                .Distinct()
+                .OrderBy(value => value)
+                .ToList();
+            DateTime cursor = start;
+            foreach (DateTime boundary in boundaries)
+            {
+                yield return new PaidInterval(cursor, boundary);
+                cursor = boundary;
+            }
+
+            if (end > cursor)
+                yield return new PaidInterval(cursor, end);
         }
 
         private static int Percent(int amount, int percent)
@@ -663,6 +956,8 @@ namespace ClubTimerXbox.Services
 
         private class EmployeeSalaryInput
         {
+            public string EmployeeId { get; set; } = "";
+
             public string EmployeeName { get; set; } = "";
 
             public EmployeeStatsSummary Summary { get; set; } = new EmployeeStatsSummary();
@@ -670,6 +965,8 @@ namespace ClubTimerXbox.Services
             public int PaidSalary { get; set; }
 
             public double WorkHours { get; set; }
+
+            public List<PaidInterval> PaidIntervals { get; set; } = new();
 
             public List<AutoSalaryBonusItem> Bonuses { get; set; } =
                 new List<AutoSalaryBonusItem>();
@@ -683,6 +980,8 @@ namespace ClubTimerXbox.Services
             public string EmployeeName { get; set; } = "";
 
             public double WorkHours { get; set; }
+
+            public List<PaidInterval> PaidIntervals { get; set; } = new();
 
             public List<AutoSalaryBonusItem> Bonuses { get; set; } =
                 new List<AutoSalaryBonusItem>();
@@ -702,6 +1001,21 @@ namespace ClubTimerXbox.Services
                 day = day.Date;
                 return _dailyHours.TryGetValue(day, out double hours) ? hours : 0;
             }
+
+            public void AddPaidInterval(DateTime start, DateTime end)
+            {
+                if (end > start)
+                    PaidIntervals.Add(new PaidInterval(start, end));
+            }
         }
+
+        private readonly record struct PaidInterval(DateTime Start, DateTime End);
+
+        private readonly record struct TimeAccrualGroupKey(
+            Guid PolicyId,
+            string RatingSignature,
+            int MonthlyFund,
+            int PlannedHours,
+            int Rating);
     }
 }

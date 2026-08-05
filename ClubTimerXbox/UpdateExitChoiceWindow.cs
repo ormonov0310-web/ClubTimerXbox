@@ -10,7 +10,8 @@ namespace ClubTimerXbox
         {
             Title = "Завершение работы";
             Width = 540;
-            Height = 330;
+            Height = 390;
+            MaxHeight = SystemParameters.WorkArea.Height - 24;
             ResizeMode = ResizeMode.NoResize;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
@@ -76,10 +77,15 @@ namespace ClubTimerXbox
             };
             card.SetResourceReference(Border.BackgroundProperty, "Theme.CardBrush");
             card.SetResourceReference(Border.BorderBrushProperty, "Theme.BorderBrush");
-            Content = new Grid
+            Content = new ScrollViewer
             {
-                Margin = new Thickness(18),
-                Children = { card }
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Content = new Grid
+                {
+                    Margin = new Thickness(18),
+                    Children = { card }
+                }
             };
         }
     }

@@ -44,6 +44,14 @@ namespace ClubTimerXbox.Services
                     placeChanged = true;
                 }
 
+                if (EmployeeReferenceRenameService.Matches(
+                        place.ExpiredPenaltyEmployeeName,
+                        oldEmployeeName))
+                {
+                    place.ExpiredPenaltyEmployeeName = newEmployeeName;
+                    placeChanged = true;
+                }
+
                 if (placeChanged)
                     changed++;
             }

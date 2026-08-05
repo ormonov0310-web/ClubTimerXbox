@@ -109,7 +109,8 @@ namespace ClubTimerXbox.Services
                         actualAmount,
                         checkedByEmployeeName,
                         note,
-                        investigationId
+                        investigationId,
+                        responsibleEmployeeName
                     );
                 }
             }
@@ -1137,7 +1138,8 @@ namespace ClubTimerXbox.Services
             int actualAmount,
             string checkedBy,
             string note,
-            Guid? investigationId = null)
+            Guid? investigationId = null,
+            string employeeName = "")
         {
             var pool = CurrentOpen(items, fromInclusive, toExclusive)
                 .FirstOrDefault(IsExtra);
@@ -1175,6 +1177,7 @@ namespace ClubTimerXbox.Services
                 Id = Guid.NewGuid(),
                 InvestigationId = investigationId ?? Guid.NewGuid(),
                 CreatedAt = now,
+                EmployeeName = employeeName.Trim(),
                 Kind = kind,
                 Origin = origin,
                 Stage = stage,

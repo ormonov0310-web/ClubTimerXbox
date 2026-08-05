@@ -18,6 +18,8 @@ namespace ClubTimerXbox
         private int _elapsedSeconds;
         private bool _isSoundActive = true;
         private bool _isExpired;
+        private int _expiredElapsedSeconds;
+        private int _expiredPenaltyAmount;
 
         public string PlaceName { get; }
         public event EventHandler? Acknowledged;
@@ -114,7 +116,26 @@ namespace ClubTimerXbox
         {
             if (_isExpired)
             {
-                MessageText.Text = "Тариф закончился. Нажмите «Понятно», чтобы освободить место.";
+                if (_expiredPenaltyAmount > 0)
+                {
+                    MessageText.Text =
+                        $"Тариф закончился. Просрочка: {FormatElapsed(_expiredElapsedSeconds)}.\n" +
+                        $"Штраф сотруднику: {_expiredPenaltyAmount} сом.";
+                }
+                else
+                {
+                    int firstChargeAtSeconds =
+                        (ExpiredSessionPenaltyService.GraceMinutes + 1) * 60;
+                    int secondsUntilCharge = Math.Max(
+                        0,
+                        firstChargeAtSeconds - _expiredElapsedSeconds);
+                    MessageText.Text = secondsUntilCharge > 0
+                        ? $"Тариф закончился. До первого штрафа: " +
+                          $"{secondsUntilCharge / 60:00}:{secondsUntilCharge % 60:00}.\n" +
+                          "Нажмите «Понятно», чтобы освободить место."
+                        : "Тариф закончился. Началась первая штрафная минута.\n" +
+                          "Нажмите «Понятно», чтобы освободить место.";
+                }
                 return;
             }
 
@@ -142,6 +163,16 @@ namespace ClubTimerXbox
             UpdateMessageText();
         }
 
+        public void UpdateExpiredPenalty(int elapsedSeconds, int penaltyAmount)
+        {
+            if (!_isExpired)
+                MarkExpired();
+
+            _expiredElapsedSeconds = Math.Max(0, elapsedSeconds);
+            _expiredPenaltyAmount = Math.Max(0, penaltyAmount);
+            UpdateMessageText();
+        }
+
         private static string FormatRemainingTime(int seconds)
         {
             if (seconds <= 0)
@@ -156,6 +187,16 @@ namespace ClubTimerXbox
             return restSeconds == 0
                 ? $"{minutes} мин."
                 : $"{minutes} мин. {restSeconds} сек.";
+        }
+
+        private static string FormatElapsed(int seconds)
+        {
+            int hours = seconds / 3600;
+            int minutes = seconds % 3600 / 60;
+            int restSeconds = seconds % 60;
+            return hours > 0
+                ? $"{hours:00}:{minutes:00}:{restSeconds:00}"
+                : $"{minutes:00}:{restSeconds:00}";
         }
     }
 }

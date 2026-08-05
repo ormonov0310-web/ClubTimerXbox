@@ -26,6 +26,17 @@ namespace ClubTimerXbox.Models
         // Owner-confirmed losses should not be changed by later automatic reconciliation caps.
         public bool IsFixed { get; set; }
 
+        // Some domain events, such as opening lateness, create their rating event separately.
+        public bool SuppressAutomaticRating { get; set; }
+
+        public string SourceCode { get; set; } = "";
+
+        public string ResolutionStatus { get; set; } = "";
+
+        public DateTime? DecisionDueAt { get; set; }
+
+        public DateTime? ResolvedAt { get; set; }
+
         public string Title { get; set; } = "";
 
         public string Description { get; set; } = "";

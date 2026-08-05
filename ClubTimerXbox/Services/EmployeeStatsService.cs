@@ -93,6 +93,9 @@ namespace ClubTimerXbox.Services
         public string Description { get; set; } = "";
         public int Amount { get; set; }
         public bool IsFixed { get; set; }
+        public bool IsPaid { get; set; }
+        public string ResolutionStatus { get; set; } = "";
+        public string SourceCode { get; set; } = "";
     }
 
     public static class EmployeeStatsService
@@ -412,7 +415,10 @@ namespace ClubTimerXbox.Services
                     Title = record.Title,
                     Description = record.Description,
                     Amount = record.Amount,
-                    IsFixed = record.IsFixed
+                    IsFixed = record.IsFixed,
+                    IsPaid = record.IsPaid,
+                    ResolutionStatus = record.ResolutionStatus,
+                    SourceCode = record.SourceCode
                 });
             }
         }

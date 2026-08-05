@@ -34,6 +34,9 @@ namespace ClubTimerXbox.Services
             changed += ShiftAcceptanceService.RenameEmployeeReferences(oldEmployeeName, newEmployeeName);
             changed += AutoSalaryService.RenameEmployeeReferences(oldEmployeeName, newEmployeeName);
             changed += ActiveSessionStorageService.RenameEmployeeReferences(oldEmployeeName, newEmployeeName);
+            changed += ExpiredSessionViolationService.RenameEmployeeReferences(
+                oldEmployeeName,
+                newEmployeeName);
 
             if (places != null)
             {
@@ -50,6 +53,12 @@ namespace ClubTimerXbox.Services
                     if (Matches(place.IncomeEmployeeName, oldEmployeeName))
                     {
                         place.IncomeEmployeeName = newEmployeeName;
+                        placeChanged = true;
+                    }
+
+                    if (Matches(place.ExpiredPenaltyEmployeeName, oldEmployeeName))
+                    {
+                        place.ExpiredPenaltyEmployeeName = newEmployeeName;
                         placeChanged = true;
                     }
 

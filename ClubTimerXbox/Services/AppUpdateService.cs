@@ -103,7 +103,9 @@ namespace ClubTimerXbox.Services
             AppUpdateInfo info = BuildUpdateInfo(manifest, places);
             _lastInfo = info;
 
-            if (manifest != null && info.HasUpdate)
+            if (manifest != null &&
+                info.HasUpdate &&
+                !AppVersionService.IsLocalDevelopmentBuild)
                 StartBackgroundPreparation(manifest);
             else if (!info.HasUpdate)
                 ClearPreparationForInstalledVersion();
@@ -257,7 +259,8 @@ namespace ClubTimerXbox.Services
 
         public static async Task<bool> TryInstallPreparedUpdateAtStartupAsync()
         {
-            if (!AppUpdateRuntimeGuard.WasLastShutdownClean() ||
+            if (AppVersionService.IsLocalDevelopmentBuild ||
+                !AppUpdateRuntimeGuard.WasLastShutdownClean() ||
                 ActiveSessionStorageService.Load().Any(item => item.IsBusy))
             {
                 return false;
@@ -453,6 +456,22 @@ namespace ClubTimerXbox.Services
                 string packagePath = Path.Combine(updateDir, $"ClubTimerXbox-{version}.zip");
                 string partialPath = packagePath + ".partial";
 
+                if (await IsExistingPackageValidAsync(packagePath, manifest))
+                {
+                    TryDelete(partialPath);
+                    UpdatePreparationState recovered = UpdatePreparationState.FromManifest(
+                        manifest,
+                        AppUpdateStage.Ready,
+                        packagePath,
+                        100,
+                        "Готовый пакет найден и повторно проверен.");
+                    recovered.SizeBytes = new FileInfo(packagePath).Length;
+                    SavePreparationState(recovered);
+                    progress?.Report(AppUpdateProgress.Preparing(100, recovered.Message));
+                    CleanupOldDirectories(UpdatesRoot, KeepLocalUpdateCopies, updateDir);
+                    return packagePath;
+                }
+
                 SavePreparationState(UpdatePreparationState.FromManifest(
                     manifest,
                     AppUpdateStage.Downloading,
@@ -551,6 +570,40 @@ namespace ClubTimerXbox.Services
             finally
             {
                 PreparationLock.Release();
+            }
+        }
+
+        private static async Task<bool> IsExistingPackageValidAsync(
+            string packagePath,
+            UpdateManifest manifest)
+        {
+            return await IsReusablePreparedPackageAsync(
+                packagePath,
+                manifest.SizeBytes,
+                manifest.Sha256);
+        }
+
+        public static async Task<bool> IsReusablePreparedPackageAsync(
+            string packagePath,
+            long expectedSizeBytes,
+            string expectedSha256)
+        {
+            try
+            {
+                if (!File.Exists(packagePath))
+                    return false;
+                if (expectedSizeBytes > 0 &&
+                    new FileInfo(packagePath).Length != expectedSizeBytes)
+                {
+                    return false;
+                }
+
+                await VerifySha256FileAsync(packagePath, expectedSha256);
+                return true;
+            }
+            catch
+            {
+                return false;
             }
         }
 

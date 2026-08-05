@@ -6,7 +6,326 @@ using System.Text.Json;
 var suite = new CashConstitutionTestSuite();
 suite.Run();
 new BusinessCalendarTestSuite().Run();
+new EmployeeSalaryRuleTestSuite().Run();
 new AppUpdateTestSuite().Run();
+
+internal sealed class EmployeeSalaryRuleTestSuite
+{
+    private int _passed;
+    private static readonly DateTime Start = new(2026, 8, 5, 6, 0, 0);
+
+    public void Run()
+    {
+        Test("overall rating rounds .5 upward", OverallRatingRounding);
+        Test("strongest overlapping penalty wins", StrongestPenaltyWins);
+        Test("time and revenue ratings stay independent", BranchesStayIndependent);
+        Test("forgiveness preserves past and restores future", ForgivenessIsProspective);
+        Test("rating changes only future game earnings", RatingChangeIsProspective);
+        Test("club policy changes only future earnings", PolicyChangeIsProspective);
+        Test("product bonus ignores employee rating", ProductBonusIgnoresRating);
+        Test("rating is capped at 120 percent", RatingCap);
+        Test("closed month archive detects later changes", ArchiveDetectsTampering);
+        Test("raw history deletion waits six months", ArchiveRetentionGate);
+        Test("penalty never raises a lower base rating", PenaltyNeverRaisesBase);
+        Test("reward raises rating and expiry restores base", RewardExpiresWithoutReverseMath);
+        Test("penalty wins over overlapping reward", PenaltyWinsReward);
+        Test("opening penalty uses current 50 som steps", OpeningPenaltySteps);
+        Test("one-minute late session does not earn bonus", LateSessionRequiresTwentyMinutes);
+        Test("unattended timer follows 01:00 and last client", UnattendedTimerFollowsLastClient);
+        Test("expired TV keeps five complete grace minutes", ExpiredTvGraceBoundary);
+        Test("expired TV charges one som per completed late minute", ExpiredTvMinuteCharge);
+        Test("simultaneous expired TVs charge independently", ExpiredTvParallelCharge);
+        Test("expired TV penalty is a violation, not a cash loss", ExpiredTvIsViolation);
+        Console.WriteLine();
+        Console.WriteLine($"PASS: {_passed} individual salary and rating scenarios.");
+    }
+
+    private void OverallRatingRounding()
+    {
+        Equal(96, EmployeeSalaryRuleEngine.CalculateOverallRating(91, 100), "overall");
+    }
+
+    private void StrongestPenaltyWins()
+    {
+        var profile = Profile(100, 100);
+        var events = new[]
+        {
+            Event(EmployeeRatingBranch.Time, 90, Start, Start.AddDays(3)),
+            Event(EmployeeRatingBranch.Time, 80, Start.AddHours(1), Start.AddDays(1))
+        };
+        Equal(80, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, events, EmployeeRatingBranch.Time, Start.AddHours(2)), "strongest");
+    }
+
+    private void BranchesStayIndependent()
+    {
+        var profile = Profile(100, 100);
+        var events = new[]
+        {
+            Event(EmployeeRatingBranch.Time, 90, Start, Start.AddDays(3))
+        };
+        Equal(90, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, events, EmployeeRatingBranch.Time, Start.AddHours(1)), "time");
+        Equal(100, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, events, EmployeeRatingBranch.Revenue, Start.AddHours(1)), "revenue");
+    }
+
+    private void ForgivenessIsProspective()
+    {
+        var profile = Profile(100, 100);
+        var item = Event(EmployeeRatingBranch.Time, 90, Start, Start.AddDays(3));
+        item.EndedAt = Start.AddHours(6);
+        item.Status = EmployeeRatingEventStatus.Forgiven;
+        Equal(90, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, new[] { item }, EmployeeRatingBranch.Time, Start.AddHours(5)), "past");
+        Equal(100, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, new[] { item }, EmployeeRatingBranch.Time, Start.AddHours(7)), "future");
+    }
+
+    private void RatingChangeIsProspective()
+    {
+        var settings = Settings(47, 25, 30, 2);
+        double earnedBefore = EmployeeSalaryRuleEngine.CalculateGameAccrual(1000, settings, 100);
+        double earnedAfter = EmployeeSalaryRuleEngine.CalculateGameAccrual(1000, settings, 90);
+        Equal(175d, earnedBefore, "old earning");
+        Equal(157.5d, earnedAfter, "new earning");
+        Equal(332.5d, earnedBefore + earnedAfter, "fixed total");
+    }
+
+    private void PolicyChangeIsProspective()
+    {
+        var oldSettings = Settings(47, 25, 30, 2);
+        var newSettings = Settings(60, 20, 30, 2);
+        double oldTime = EmployeeSalaryRuleEngine.CalculateTimeAccrual(2, oldSettings, 100);
+        double newTime = EmployeeSalaryRuleEngine.CalculateTimeAccrual(2, newSettings, 100);
+        Equal(94d, oldTime, "old rate");
+        Equal(120d, newTime, "new rate");
+        Equal(214d, oldTime + newTime, "combined");
+    }
+
+    private void ExpiredTvGraceBoundary()
+    {
+        Equal(0, ExpiredSessionPenaltyService.CalculateChargeableMinutes(
+            Start, Start.AddMinutes(5).AddSeconds(59)), "5:59");
+        Equal(1, ExpiredSessionPenaltyService.CalculateChargeableMinutes(
+            Start, Start.AddMinutes(6)), "6:00");
+    }
+
+    private void ExpiredTvMinuteCharge()
+    {
+        Equal(2, ExpiredSessionPenaltyService.CalculateChargeableMinutes(
+            Start, Start.AddMinutes(7).AddSeconds(59)), "7:59");
+        Equal(3, ExpiredSessionPenaltyService.CalculateChargeableMinutes(
+            Start, Start.AddMinutes(8)), "8:00");
+    }
+
+    private void ExpiredTvParallelCharge()
+    {
+        int tv1 = ExpiredSessionPenaltyService.CalculateChargeableMinutes(
+            Start, Start.AddMinutes(8));
+        int tv2 = ExpiredSessionPenaltyService.CalculateChargeableMinutes(
+            Start.AddMinutes(1), Start.AddMinutes(8));
+        Equal(5, tv1 + tv2, "two TVs");
+    }
+
+    private void ExpiredTvIsViolation()
+    {
+        var item = new EmployeeLossItem
+        {
+            LossKind = "violation",
+            LossType = "Нарушение правил",
+            Title = "ТВ 2: не остановлен после тарифа",
+            Amount = 3,
+            IsFixed = true
+        };
+        True(EmployeeLossService.IsViolationLoss(item), "violation branch");
+        True(!EmployeeLossService.IsMoneyLoss(item), "cash branch isolated");
+    }
+
+    private void ProductBonusIgnoresRating()
+    {
+        var settings = Settings(47, 25, 30, 2);
+        Equal(20d, EmployeeSalaryRuleEngine.CalculateProductBonus(1000, settings), "product bonus");
+    }
+
+    private void RatingCap()
+    {
+        var profile = Profile(150, 150);
+        Equal(120, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, Array.Empty<EmployeeRatingEvent>(), EmployeeRatingBranch.Time, Start), "cap");
+    }
+
+    private void PenaltyNeverRaisesBase()
+    {
+        var profile = Profile(90, 100);
+        var penalty = Event(
+            EmployeeRatingBranch.Time,
+            95,
+            Start,
+            Start.AddDays(1),
+            EmployeeRatingEffectDirection.Penalty);
+        Equal(90, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, new[] { penalty }, EmployeeRatingBranch.Time, Start.AddHours(1)), "penalty cap");
+    }
+
+    private void RewardExpiresWithoutReverseMath()
+    {
+        var profile = Profile(100, 100);
+        var reward = Event(
+            EmployeeRatingBranch.Time,
+            105,
+            Start,
+            Start.AddHours(12),
+            EmployeeRatingEffectDirection.Reward);
+        Equal(105, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, new[] { reward }, EmployeeRatingBranch.Time, Start.AddHours(1)), "reward");
+        Equal(100, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, new[] { reward }, EmployeeRatingBranch.Time, Start.AddHours(13)), "expired");
+    }
+
+    private void PenaltyWinsReward()
+    {
+        var profile = Profile(100, 100);
+        var events = new[]
+        {
+            Event(EmployeeRatingBranch.Time, 105, Start, Start.AddDays(1), EmployeeRatingEffectDirection.Reward),
+            Event(EmployeeRatingBranch.Time, 97, Start, Start.AddHours(6), EmployeeRatingEffectDirection.Penalty)
+        };
+        Equal(97, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, events, EmployeeRatingBranch.Time, Start.AddHours(1)), "penalty priority");
+    }
+
+    private void OpeningPenaltySteps()
+    {
+        var settings = new AutoSalarySettings
+        {
+            LateOpeningGraceMinutes = 30,
+            LateOpeningPenaltyStepMinutes = 30,
+            LateOpeningPenaltyStepAmount = 50,
+            LateOpeningMaxAutoMinutes = 150
+        };
+        DateTime opening = new(2026, 8, 5, 11, 0, 0);
+        Equal(0, LateOpeningPenaltyService.CalculatePenaltyAmount(
+            opening.AddMinutes(30), opening, settings), "11:30");
+        Equal(50, LateOpeningPenaltyService.CalculatePenaltyAmount(
+            opening.AddMinutes(31), opening, settings), "11:31");
+        Equal(200, LateOpeningPenaltyService.CalculatePenaltyAmount(
+            opening.AddHours(5), opening, settings), "cap");
+    }
+
+    private void LateSessionRequiresTwentyMinutes()
+    {
+        DateTime oneAm = new(2026, 8, 6, 1, 0, 0);
+        True(!EmployeeNightRatingService.IsQualifiedLateSession(
+            oneAm.AddMinutes(-1), oneAm.AddMinutes(1), oneAm), "00:59 exploit");
+        True(EmployeeNightRatingService.IsQualifiedLateSession(
+            oneAm.AddMinutes(-20), oneAm.AddMinutes(1), oneAm), "twenty minutes");
+    }
+
+    private void UnattendedTimerFollowsLastClient()
+    {
+        DateTime oneAm = new(2026, 8, 6, 1, 0, 0);
+        Equal(new DateTime(2026, 8, 6, 3, 0, 0),
+            EmployeeNightRatingService.CalculateUnattendedViolationAt(
+                oneAm, oneAm.AddHours(-10), oneAm.AddHours(-2)), "client left at 23");
+        Equal(new DateTime(2026, 8, 6, 4, 0, 0),
+            EmployeeNightRatingService.CalculateUnattendedViolationAt(
+                oneAm, oneAm.AddHours(-10), oneAm.AddHours(1)), "client left at 02");
+    }
+
+    private void ArchiveDetectsTampering()
+    {
+        var month = ArchivedMonth();
+        BusinessArchiveService.Seal(month, new DateTime(2026, 9, 1, 6, 0, 0));
+        True(BusinessArchiveService.Verify(month), "sealed");
+        month.GameRevenue++;
+        True(!BusinessArchiveService.Verify(month), "tampered");
+    }
+
+    private void ArchiveRetentionGate()
+    {
+        var month = ArchivedMonth();
+        BusinessArchiveService.Seal(month, new DateTime(2026, 9, 1, 6, 0, 0));
+        True(!BusinessArchiveService.CanDeleteRawMonth(
+            month, new DateTime(2027, 1, 1), new DateTime(2026, 8, 1)), "five months");
+        True(BusinessArchiveService.CanDeleteRawMonth(
+            month, new DateTime(2027, 2, 1), new DateTime(2026, 8, 1)), "six months");
+    }
+
+    private static BusinessMonthLedger ArchivedMonth() => new()
+    {
+        MonthKey = "2026-08",
+        IsClosed = true,
+        GameRevenue = 1000,
+        Payroll = new List<EmployeePayrollObligation>
+        {
+            new() { EmployeeId = "emp_test", EmployeeName = "Test", AccruedAmount = 100 }
+        }
+    };
+
+    private static EmployeeRatingProfile Profile(int time, int revenue) => new()
+    {
+        EmployeeId = "emp_test",
+        EmployeeName = "Test",
+        BaseVersions = new List<EmployeeRatingBaseVersion>
+        {
+            new()
+            {
+                EffectiveFrom = DateTime.MinValue,
+                TimePercent = time,
+                RevenuePercent = revenue
+            }
+        }
+    };
+
+    private static EmployeeRatingEvent Event(
+        EmployeeRatingBranch branch,
+        int target,
+        DateTime from,
+        DateTime until,
+        EmployeeRatingEffectDirection direction = EmployeeRatingEffectDirection.Penalty) => new()
+    {
+        EmployeeId = "emp_test",
+        EmployeeName = "Test",
+        Branch = branch,
+        Direction = direction,
+        TargetPercent = target,
+        EffectiveFrom = from,
+        ScheduledUntil = until
+    };
+
+    private static AutoSalarySettings Settings(
+        int hourlyRate,
+        int salaryPercent,
+        int reservePercent,
+        int productPercent) => new()
+    {
+        TimeMonthlyFundAmount = hourlyRate * 420,
+        TimeMonthlyPlannedHours = 420,
+        SalaryFundPercent = salaryPercent,
+        ExpenseReservePercent = reservePercent,
+        ProductBonusPercent = productPercent
+    };
+
+    private void Test(string name, Action action)
+    {
+        action();
+        _passed++;
+        Console.WriteLine($"PASS: {name}");
+    }
+
+    private static void Equal<T>(T expected, T actual, string label)
+    {
+        if (!EqualityComparer<T>.Default.Equals(expected, actual))
+            throw new InvalidOperationException($"{label}: expected {expected}, actual {actual}");
+    }
+
+    private static void True(bool value, string label)
+    {
+        if (!value)
+            throw new InvalidOperationException($"{label}: expected true");
+    }
+}
 
 internal sealed class AppUpdateTestSuite
 {
@@ -19,6 +338,7 @@ internal sealed class AppUpdateTestSuite
         Test("Ошибка во время замены возвращает старую версию", CommitFailureRollsBack);
         Test("Более новая версия вытесняет скачанный пакет", NewerReleaseReplacesPrepared);
         Test("Новый SHA той же версии вытесняет скачанный пакет", RepackedReleaseReplacesPrepared);
+        Test("Готовый пакет используется после оборванного состояния", ExistingPackageSurvivesInterruptedState);
         Console.WriteLine();
         Console.WriteLine($"PASS: {_passed} сценариев безопасного обновления.");
     }
@@ -96,6 +416,25 @@ internal sealed class AppUpdateTestSuite
             "1.4.2", "new-sha", "same-url", "1.4.2", "old-sha", "same-url"), "новый SHA");
         True(!AppUpdateService.ShouldReplacePreparedPackage(
             "1.4.2", "same", "same-url", "1.4.2", "same", "same-url"), "тот же пакет");
+    }
+
+    private void ExistingPackageSurvivesInterruptedState()
+    {
+        using var sandbox = new UpdateSandbox();
+        long size = new FileInfo(sandbox.PackagePath).Length;
+
+        True(AppUpdateService.IsReusablePreparedPackageAsync(
+            sandbox.PackagePath,
+            size,
+            sandbox.PackageSha256).GetAwaiter().GetResult(), "целый пакет используется повторно");
+        True(!AppUpdateService.IsReusablePreparedPackageAsync(
+            sandbox.PackagePath,
+            size + 1,
+            sandbox.PackageSha256).GetAwaiter().GetResult(), "неверный размер отклонён");
+        True(!AppUpdateService.IsReusablePreparedPackageAsync(
+            sandbox.PackagePath,
+            size,
+            "wrong-sha").GetAwaiter().GetResult(), "неверный SHA отклонён");
     }
 
     private void Test(string title, Action action)

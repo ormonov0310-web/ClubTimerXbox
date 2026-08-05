@@ -879,6 +879,21 @@ namespace ClubTimerXbox.Services
 
                     cashReconciliation,
 
+                    lateOpeningPenalties = LateOpeningPenaltyService
+                        .GetPendingRecommendations()
+                        .Select(item => new
+                        {
+                            id = item.Id.ToString(),
+                            createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                            employeeName = item.ResponsibleEmployeeName,
+                            title = item.Title,
+                            description = item.Description,
+                            amount = item.Amount,
+                            decisionDueAt = item.DecisionDueAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
+                            status = item.ResolutionStatus
+                        })
+                        .ToList(),
+
                     places = places.Select(place => new
                     {
                         name = place.Name,
@@ -934,7 +949,10 @@ namespace ClubTimerXbox.Services
                                 title = item.Title,
                                 description = item.Description,
                                 amount = item.Amount,
-                                isFixed = item.IsFixed
+                                isFixed = item.IsFixed,
+                                isPaid = item.IsPaid,
+                                resolutionStatus = item.ResolutionStatus,
+                                sourceCode = item.SourceCode
                             })
                             .ToList();
 
@@ -953,7 +971,10 @@ namespace ClubTimerXbox.Services
                                 title = item.Title,
                                 description = item.Description,
                                 amount = item.Amount,
-                                isFixed = item.IsFixed
+                                isFixed = item.IsFixed,
+                                isPaid = item.IsPaid,
+                                resolutionStatus = item.ResolutionStatus,
+                                sourceCode = item.SourceCode
                             })
                             .ToList();
 
@@ -971,9 +992,17 @@ namespace ClubTimerXbox.Services
                                 title = item.Title,
                                 description = item.Description,
                                 amount = item.Amount,
-                                isFixed = item.IsFixed
+                                isFixed = item.IsFixed,
+                                isPaid = item.IsPaid,
+                                resolutionStatus = item.ResolutionStatus,
+                                sourceCode = item.SourceCode
                             })
                             .ToList();
+
+                        var employeeSalaryHistory = BuildEmployeeSalaryHistory(
+                            monthStart,
+                            nextMonthStart,
+                            employee.Name);
 
                         return new
                         {
@@ -1024,7 +1053,12 @@ namespace ClubTimerXbox.Services
                                     productLossesAmount = autoSalary.ProductLossesAmount,
                                     violationLossesAmount = autoSalary.ViolationLossesAmount,
                                     paidAmount = autoSalary.PaidAmount,
-                                    remainingAmount = autoSalary.RemainingAmount
+                                    remainingAmount = autoSalary.RemainingAmount,
+                                    timeRatingPercent = autoSalary.TimeRatingPercent,
+                                    revenueRatingPercent = autoSalary.RevenueRatingPercent,
+                                    overallRatingPercent = autoSalary.OverallRatingPercent,
+                                    ratingHasWarning = autoSalary.RatingHasWarning,
+                                    ratingEvents = BuildRatingEventsPayload(autoSalary)
                                 },
 
                             closedGameSessionsCount = summary.ClosedGameSessionsCount,
@@ -1033,7 +1067,8 @@ namespace ClubTimerXbox.Services
 
                             journal = allJournal,
                             incomeJournal = incomeJournal,
-                            shortageJournal = shortageJournal
+                            shortageJournal = shortageJournal,
+                            salaryHistory = employeeSalaryHistory
                         };
                     }).ToList(),
 
@@ -1555,6 +1590,8 @@ namespace ClubTimerXbox.Services
             return new
             {
                 monthKey = report.MonthKey,
+                settingsEffectiveFrom = report.SettingsEffectiveFrom.ToString("O"),
+                hasPendingSettings = report.HasPendingSettings,
                 settings = new
                 {
                     expenseReservePercent = report.Settings.ExpenseReservePercent,
@@ -1589,6 +1626,7 @@ namespace ClubTimerXbox.Services
                 bonusTotalAmount = report.BonusTotalAmount,
                 employees = report.Employees.Select(employee => new
                 {
+                    employeeId = employee.EmployeeId,
                     employeeName = employee.EmployeeName,
                     workHours = employee.WorkHours,
                     gameRevenue = employee.GameRevenue,
@@ -1598,6 +1636,30 @@ namespace ClubTimerXbox.Services
                     productShareAmount = employee.ProductShareAmount,
                     productBonusAmount = employee.ProductBonusAmount,
                     bonusAmount = employee.BonusAmount,
+                    timeRatingPercent = employee.TimeRatingPercent,
+                    revenueRatingPercent = employee.RevenueRatingPercent,
+                    overallRatingPercent = employee.OverallRatingPercent,
+                    ratingHasWarning = employee.RatingHasWarning,
+                    ratingEvents = employee.RatingEvents.Select(item => new
+                    {
+                        id = item.Id.ToString(),
+                        branch = item.Branch.ToString(),
+                        ruleCode = item.RuleCode,
+                        ruleVersion = item.RuleVersion,
+                        direction = item.Direction.ToString(),
+                        changePercent = item.ChangePercent,
+                        basePercentAtCreation = item.BasePercentAtCreation,
+                        sourceType = item.SourceType,
+                        title = item.Title,
+                        description = item.Description,
+                        createdAt = item.CreatedAt.ToString("O"),
+                        effectiveFrom = item.EffectiveFrom.ToString("O"),
+                        effectiveUntil = item.EffectiveUntil.ToString("O"),
+                        targetPercent = item.TargetPercent,
+                        status = item.Status.ToString(),
+                        compensationAmount = item.CompensationAmount,
+                        resolutionNote = item.ResolutionNote
+                    }).ToList(),
                     bonuses = employee.Bonuses.Select(bonus => new
                     {
                         createdAt = bonus.CreatedAt.ToString("O"),
@@ -1617,6 +1679,30 @@ namespace ClubTimerXbox.Services
                     remainingAmount = employee.RemainingAmount
                 }).ToList()
             };
+        }
+
+        private static object BuildRatingEventsPayload(AutoSalaryEmployeeResult employee)
+        {
+            return employee.RatingEvents.Select(item => new
+            {
+                id = item.Id.ToString(),
+                branch = item.Branch.ToString(),
+                ruleCode = item.RuleCode,
+                ruleVersion = item.RuleVersion,
+                direction = item.Direction.ToString(),
+                changePercent = item.ChangePercent,
+                basePercentAtCreation = item.BasePercentAtCreation,
+                sourceType = item.SourceType,
+                title = item.Title,
+                description = item.Description,
+                createdAt = item.CreatedAt.ToString("O"),
+                effectiveFrom = item.EffectiveFrom.ToString("O"),
+                effectiveUntil = item.EffectiveUntil.ToString("O"),
+                targetPercent = item.TargetPercent,
+                status = item.Status.ToString(),
+                compensationAmount = item.CompensationAmount,
+                resolutionNote = item.ResolutionNote
+            }).ToList();
         }
 
         private static ProductServiceMonthSummary BuildProductServiceMonthSummary(
@@ -2434,7 +2520,10 @@ namespace ClubTimerXbox.Services
                             title = item.Title,
                             description = item.Description,
                             amount = item.Amount,
-                            isFixed = item.IsFixed
+                            isFixed = item.IsFixed,
+                            isPaid = item.IsPaid,
+                            resolutionStatus = item.ResolutionStatus,
+                            sourceCode = item.SourceCode
                         })
                         .ToList();
 
@@ -2453,7 +2542,10 @@ namespace ClubTimerXbox.Services
                             title = item.Title,
                             description = item.Description,
                             amount = item.Amount,
-                            isFixed = item.IsFixed
+                            isFixed = item.IsFixed,
+                            isPaid = item.IsPaid,
+                            resolutionStatus = item.ResolutionStatus,
+                            sourceCode = item.SourceCode
                         })
                         .ToList();
 
@@ -2471,9 +2563,17 @@ namespace ClubTimerXbox.Services
                             title = item.Title,
                             description = item.Description,
                             amount = item.Amount,
-                            isFixed = item.IsFixed
+                            isFixed = item.IsFixed,
+                            isPaid = item.IsPaid,
+                            resolutionStatus = item.ResolutionStatus,
+                            sourceCode = item.SourceCode
                         })
                         .ToList();
+
+                    var employeeSalaryHistory = BuildEmployeeSalaryHistory(
+                        monthStart,
+                        nextMonthStart,
+                        employee.Name);
 
                     return new
                     {
@@ -2515,17 +2615,67 @@ namespace ClubTimerXbox.Services
                                 productLossesAmount = autoSalary.ProductLossesAmount,
                                 violationLossesAmount = autoSalary.ViolationLossesAmount,
                                 paidAmount = autoSalary.PaidAmount,
-                                remainingAmount = autoSalary.RemainingAmount
+                                remainingAmount = autoSalary.RemainingAmount,
+                                timeRatingPercent = autoSalary.TimeRatingPercent,
+                                revenueRatingPercent = autoSalary.RevenueRatingPercent,
+                                overallRatingPercent = autoSalary.OverallRatingPercent,
+                                ratingHasWarning = autoSalary.RatingHasWarning,
+                                ratingEvents = BuildRatingEventsPayload(autoSalary)
                             },
                         closedGameSessionsCount = summary.ClosedGameSessionsCount,
                         productServiceOperationsCount = summary.ProductServiceOperationsCount,
                         shortageCount = summary.ShortageCount,
                         journal = allJournal,
                         incomeJournal = incomeJournal,
-                        shortageJournal = shortageJournal
+                        shortageJournal = shortageJournal,
+                        salaryHistory = employeeSalaryHistory
                     };
                 })
                 .Cast<object>()
+                .ToArray();
+        }
+
+        private static object[] BuildEmployeeSalaryHistory(
+            DateTime monthStart,
+            DateTime nextMonthStart,
+            string employeeName)
+        {
+            return CashService
+                .GetSalaryRecordsByPeriod(monthStart, nextMonthStart)
+                .Where(record => string.Equals(
+                    record.RelatedEmployeeName,
+                    employeeName,
+                    StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(record => record.CreatedAt)
+                .Take(150)
+                .Select(record =>
+                {
+                    bool employeeTookSalary = string.Equals(
+                        record.EmployeeName,
+                        record.RelatedEmployeeName,
+                        StringComparison.OrdinalIgnoreCase);
+                    string source = employeeTookSalary
+                        ? "EmployeeSelf"
+                        : string.Equals(
+                            record.EmployeeName,
+                            "Владелец",
+                            StringComparison.OrdinalIgnoreCase)
+                            ? "Owner"
+                            : "Other";
+
+                    return (object)new
+                    {
+                        id = record.Id.ToString(),
+                        createdAt = record.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                        amount = record.Amount,
+                        paymentMethod = record.PaymentMethod,
+                        source,
+                        addedBy = record.EmployeeName,
+                        employeeName = record.RelatedEmployeeName,
+                        salaryMonthKey = record.SalaryMonthKey,
+                        description = record.Description
+                    };
+                })
                 .ToArray();
         }
 
@@ -2962,6 +3112,30 @@ namespace ClubTimerXbox.Services
                     return;
                 }
 
+                if (command.Type == "FormalizeLateOpeningPenalty")
+                {
+                    ApplyFormalizeLateOpeningPenalty(command);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        "Штраф за опоздание оформлен владельцем.");
+
+                    return;
+                }
+
+                if (command.Type == "CancelLateOpeningPenalty")
+                {
+                    ApplyCancelLateOpeningPenalty(command);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        "Рекомендация штрафа за опоздание отменена.");
+
+                    return;
+                }
+
                 if (command.Type == "VerifyCashlessActual")
                 {
                     string message = ApplyVerifyCashlessActual(commandId, command);
@@ -3040,6 +3214,36 @@ namespace ClubTimerXbox.Services
                         $"Настройки авто ЗП сохранены: резерв {settings.ExpenseReservePercent}%, фонд выручки {settings.SalaryFundPercent}%, ставка времени {GetAutoSalaryHourlyRate(settings)} сом/ч, график {settings.WorkDayStartHour:00}:00-{settings.WorkDayEndHour:00}:00."
                     );
 
+                    return;
+                }
+
+                if (command.Type == "UpdateEmployeeRating")
+                {
+                    var rating = ApplyUpdateEmployeeRating(command);
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Рейтинг сохранён: {command.EmployeeName}, время {rating.TimePercent}%, игры {rating.RevenuePercent}%.");
+                    return;
+                }
+
+                if (command.Type == "AddEmployeeRatingEvent")
+                {
+                    var item = ApplyAddEmployeeRatingEvent(command);
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Временное изменение рейтинга добавлено: {item.EmployeeName}, {item.TargetPercent}% до {item.EffectiveUntil:dd.MM.yyyy HH:mm}.");
+                    return;
+                }
+
+                if (command.Type == "EndEmployeeRatingEvent")
+                {
+                    var item = ApplyEndEmployeeRatingEvent(command);
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Изменение рейтинга завершено: {item.EmployeeName}, статус {item.Status}.");
                     return;
                 }
 
@@ -3857,6 +4061,7 @@ namespace ClubTimerXbox.Services
             if (!Guid.TryParse(command.RecordId, out Guid lossId))
                 throw new Exception("Не указан корректный id штрафа.");
 
+            string sourceId = "loss:" + lossId.ToString("N");
             bool deleted = EmployeeLossService.DeleteFixedViolation(lossId);
 
             if (!deleted)
@@ -3866,6 +4071,31 @@ namespace ClubTimerXbox.Services
                     "Кассовые потери, товарные потери и рекомендации этим действием не удаляются."
                 );
             }
+
+            EmployeeRatingService.EndBySource(
+                sourceId,
+                cancelAsError: true,
+                compensationAmount: Math.Max(0, command.CompensationAmount),
+                note: "Штраф удалён владельцем как ошибочный.");
+            ExpiredSessionViolationService.MarkPenaltyCancelled(
+                lossId,
+                ClubClock.Current.LocalNow);
+        }
+
+        private static void ApplyFormalizeLateOpeningPenalty(FirebaseCommand command)
+        {
+            if (!Guid.TryParse(command.RecordId, out Guid id))
+                throw new Exception("Не указан корректный id рекомендации опоздания.");
+            if (!LateOpeningPenaltyService.FormalizeNow(id))
+                throw new Exception("Рекомендация уже оформлена, отменена или не найдена.");
+        }
+
+        private static void ApplyCancelLateOpeningPenalty(FirebaseCommand command)
+        {
+            if (!Guid.TryParse(command.RecordId, out Guid id))
+                throw new Exception("Не указан корректный id рекомендации опоздания.");
+            if (!LateOpeningPenaltyService.Cancel(id, command.Reason))
+                throw new Exception("Рекомендация уже оформлена, отменена или не найдена.");
         }
 
         private static string ApplyVerifyCashlessActual(
@@ -4571,9 +4801,60 @@ namespace ClubTimerXbox.Services
                 LateOpeningMaxAutoMinutes = command.LateOpeningMaxAutoMinutes
             };
 
-            AutoSalaryService.UpdateSettings(settings);
+            return AutoSalaryService.UpdateSettings(settings).Settings;
+        }
 
-            return AutoSalaryService.Settings;
+        private static EmployeeRatingSnapshot ApplyUpdateEmployeeRating(
+            FirebaseCommand command)
+        {
+            var employee = EmployeeService.FindByName(command.EmployeeName)
+                ?? throw new Exception("Сотрудник не найден.");
+            if (command.TimeRatingPercent == 100 &&
+                command.RevenueRatingPercent == 100 &&
+                command.Reason.Contains("восстанов", StringComparison.OrdinalIgnoreCase))
+            {
+                EmployeeRatingService.ResetTo100(employee.Name, command.Reason);
+            }
+            else
+            {
+                EmployeeRatingService.SetBaseRatings(
+                    employee.Name,
+                    command.TimeRatingPercent,
+                    command.RevenueRatingPercent,
+                    command.Reason);
+            }
+            return EmployeeRatingService.GetSnapshot(
+                employee.Name,
+                ClubClock.Current.LocalNow);
+        }
+
+        private static EmployeeRatingEvent ApplyAddEmployeeRatingEvent(
+            FirebaseCommand command)
+        {
+            var branch = command.RatingBranch.Equals(
+                "Time",
+                StringComparison.OrdinalIgnoreCase)
+                ? EmployeeRatingBranch.Time
+                : EmployeeRatingBranch.Revenue;
+            return EmployeeRatingService.AddManualEvent(
+                command.EmployeeName,
+                branch,
+                command.TargetPercent,
+                command.DurationDays,
+                command.Title,
+                command.Description);
+        }
+
+        private static EmployeeRatingEvent ApplyEndEmployeeRatingEvent(
+            FirebaseCommand command)
+        {
+            if (!Guid.TryParse(command.RatingEventId, out Guid eventId))
+                throw new Exception("Не указан корректный id записи рейтинга.");
+            return EmployeeRatingService.EndEvent(
+                eventId,
+                command.CancelAsError,
+                command.CompensationAmount,
+                command.Reason);
         }
 
         private static int GetAutoSalaryHourlyRate(AutoSalarySettings settings)
@@ -4611,6 +4892,7 @@ namespace ClubTimerXbox.Services
             CashAcceptanceService.Clear();
             CashReconciliationService.Clear();
             EmployeeLossService.Clear();
+            ExpiredSessionViolationService.Clear();
             EmployeeBonusService.Clear();
             PaymentService.Clear();
             ProductIncomingService.Clear();
@@ -4910,6 +5192,16 @@ namespace ClubTimerXbox.Services
             public string NewEmployeeName { get; set; } = "";
             public string EmployeeId { get; set; } = "";
             public string PinCode { get; set; } = "";
+
+            public int TimeRatingPercent { get; set; } = 100;
+            public int RevenueRatingPercent { get; set; } = 100;
+            public string RatingBranch { get; set; } = "";
+            public int TargetPercent { get; set; } = 100;
+            public int DurationDays { get; set; } = 1;
+            public string RatingEventId { get; set; } = "";
+            public bool CancelAsError { get; set; }
+            public int CompensationAmount { get; set; }
+            public string Reason { get; set; } = "";
 
             public int ExpenseReservePercent { get; set; }
             public int SalaryFundPercent { get; set; }

@@ -7,6 +7,9 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Shapes;
+using System.Windows.Threading;
 using ClubTimerXbox.Models;
 using ClubTimerXbox.Services;
 
@@ -19,6 +22,7 @@ namespace ClubTimerXbox
             TakenHistory,
             Salary,
             Bonuses,
+            Rating,
             Time,
             Income,
             ProductsServices,
@@ -29,18 +33,32 @@ namespace ClubTimerXbox
         private readonly TextBlock _monthText = new TextBlock();
         private readonly TextBlock _grossValueText = new TextBlock();
         private readonly TextBlock _salaryValueText = new TextBlock();
-        private readonly TextBlock _incomeValueText = new TextBlock();
         private readonly TextBlock _timeValueText = new TextBlock();
+        private readonly TextBlock _ratingValueText = new TextBlock();
+        private readonly TextBlock _workValueText = new TextBlock();
+        private readonly TextBlock _gameIncomeValueText = new TextBlock();
+        private readonly TextBlock _productsIncomeValueText = new TextBlock();
         private readonly TextBlock _lossValueText = new TextBlock();
+        private readonly TextBlock _sectionTitleText = new TextBlock();
         private readonly TextBlock _sectionInfoText = new TextBlock();
         private readonly StackPanel _contentPanel = new StackPanel();
-
-        private Button _salaryButton = null!;
-        private Button _bonusesButton = null!;
-        private Button _timeButton = null!;
-        private Button _incomeButton = null!;
-        private Button _productsButton = null!;
-        private Button _lossesButton = null!;
+        private readonly Canvas _ratingBoostCanvas = new Canvas
+        {
+            IsHitTestVisible = false,
+            ClipToBounds = true
+        };
+        private readonly Dictionary<StatsSection, List<Border>> _summaryCards = new();
+        private readonly DispatcherTimer _ratingBoostDelayTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        private readonly DispatcherTimer _ratingBorderAnimationTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(80)
+        };
+        private Border _ratingCard = null!;
+        private int _currentOverallRating = 100;
+        private bool _ratingBoostPlayed;
 
         private DateTime _monthStart = BusinessCalendarService
             .GetBusinessMonth(ClubClock.Current.LocalNow)
@@ -61,6 +79,22 @@ namespace ClubTimerXbox
 
             Content = CreateContent();
             Render();
+            _ratingBoostDelayTimer.Tick += (_, _) =>
+            {
+                _ratingBoostDelayTimer.Stop();
+                PlayRatingBoostIfNeeded();
+            };
+            _ratingBorderAnimationTimer.Tick += (_, _) =>
+            {
+                if (_currentOverallRating > 100 && _ratingCard != null)
+                    _ratingCard.BorderBrush = CreateRotatingRatingBrush();
+            };
+            Loaded += (_, _) => ScheduleRatingBoost();
+            Closed += (_, _) =>
+            {
+                _ratingBoostDelayTimer.Stop();
+                _ratingBorderAnimationTimer.Stop();
+            };
         }
 
         private UIElement CreateContent()
@@ -70,7 +104,6 @@ namespace ClubTimerXbox
                 Margin = new Thickness(20)
             };
 
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -116,25 +149,17 @@ namespace ClubTimerXbox
             Grid.SetRow(monthPanel, 1);
             root.Children.Add(monthPanel);
 
-            var sectionButtons = CreateSectionButtons();
-            Grid.SetRow(sectionButtons, 2);
-            root.Children.Add(sectionButtons);
-
             var summaryPanel = CreateSummaryPanel();
-            Grid.SetRow(summaryPanel, 3);
+            Grid.SetRow(summaryPanel, 2);
             root.Children.Add(summaryPanel);
 
-            var listTitle = new TextBlock
-            {
-                Text = "Список",
-                Foreground = Brushes.White,
-                FontSize = 18,
-                FontWeight = FontWeights.Bold,
-                Margin = new Thickness(0, 0, 0, 6)
-            };
+            _sectionTitleText.Foreground = Brushes.White;
+            _sectionTitleText.FontSize = 18;
+            _sectionTitleText.FontWeight = FontWeights.Bold;
+            _sectionTitleText.Margin = new Thickness(0, 0, 0, 6);
 
-            Grid.SetRow(listTitle, 4);
-            root.Children.Add(listTitle);
+            Grid.SetRow(_sectionTitleText, 3);
+            root.Children.Add(_sectionTitleText);
 
             _sectionInfoText.Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184));
             _sectionInfoText.FontSize = 14;
@@ -142,7 +167,7 @@ namespace ClubTimerXbox
             _sectionInfoText.LineHeight = 21;
             _sectionInfoText.Margin = new Thickness(0, 0, 0, 10);
 
-            Grid.SetRow(_sectionInfoText, 5);
+            Grid.SetRow(_sectionInfoText, 4);
             root.Children.Add(_sectionInfoText);
 
             var listBorder = new Border
@@ -159,8 +184,12 @@ namespace ClubTimerXbox
                 }
             };
 
-            Grid.SetRow(listBorder, 6);
+            Grid.SetRow(listBorder, 5);
             root.Children.Add(listBorder);
+
+            Grid.SetRowSpan(_ratingBoostCanvas, 6);
+            Panel.SetZIndex(_ratingBoostCanvas, 100);
+            root.Children.Add(_ratingBoostCanvas);
 
             return root;
         }
@@ -223,20 +252,22 @@ namespace ClubTimerXbox
         {
             var grid = new UniformGrid
             {
-                Columns = 5,
+                Columns = 4,
                 Margin = new Thickness(0, 0, 0, 14)
             };
 
-            grid.Children.Add(CreateSummaryCard("Общий", _grossValueText, Color.FromRgb(248, 250, 252)));
+            grid.Children.Add(CreateSummaryCard(
+                "Общая",
+                _grossValueText,
+                Color.FromRgb(248, 250, 252),
+                StatsSection.Salary));
             grid.Children.Add(CreateSummaryCard(
                 "Взял",
                 _salaryValueText,
                 Color.FromRgb(96, 165, 250),
+                StatsSection.TakenHistory,
                 () =>
                 {
-                    _section = StatsSection.TakenHistory;
-                    Render();
-
                     var window = new EmployeeSalaryTakenWindow(
                         _employeeName,
                         _monthStart,
@@ -248,9 +279,37 @@ namespace ClubTimerXbox
                     window.ShowDialog();
                     Render();
                 }));
-            grid.Children.Add(CreateSummaryCard("Осталось", _incomeValueText, Color.FromRgb(74, 222, 128)));
-            grid.Children.Add(CreateSummaryCard("Премия/бонусы", _timeValueText, Color.FromRgb(250, 204, 21)));
-            grid.Children.Add(CreateSummaryCard("Штрафы", _lossValueText, Color.FromRgb(248, 113, 113)));
+            grid.Children.Add(CreateSummaryCard(
+                "Премии/бонусы",
+                _timeValueText,
+                Color.FromRgb(250, 204, 21),
+                StatsSection.Bonuses));
+            grid.Children.Add(CreateSummaryCard(
+                "Штрафы",
+                _lossValueText,
+                Color.FromRgb(248, 113, 113),
+                StatsSection.Losses));
+            _ratingCard = CreateSummaryCard(
+                "Рейтинг",
+                _ratingValueText,
+                Color.FromRgb(248, 250, 252),
+                StatsSection.Rating);
+            grid.Children.Add(_ratingCard);
+            grid.Children.Add(CreateSummaryCard(
+                "Время",
+                _workValueText,
+                Color.FromRgb(167, 139, 250),
+                StatsSection.Time));
+            grid.Children.Add(CreateSummaryCard(
+                "Выручка",
+                _gameIncomeValueText,
+                Color.FromRgb(74, 222, 128),
+                StatsSection.Income));
+            grid.Children.Add(CreateSummaryCard(
+                "Товары/услуги",
+                _productsIncomeValueText,
+                Color.FromRgb(45, 212, 191),
+                StatsSection.ProductsServices));
 
             return grid;
         }
@@ -259,87 +318,76 @@ namespace ClubTimerXbox
             string title,
             TextBlock valueText,
             Color valueColor,
+            StatsSection section,
             Action? onClick = null)
         {
             var panel = new StackPanel();
+            panel.Children.Add(CreateSummaryTitle(title));
 
-            panel.Children.Add(new TextBlock
+            ConfigureSummaryValue(valueText, valueColor, 22);
+
+            panel.Children.Add(valueText);
+
+            return CreateSummaryCardContainer(panel, section, onClick);
+        }
+
+        private static TextBlock CreateSummaryTitle(string title)
+        {
+            return new TextBlock
             {
                 Text = title,
-                Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
-                FontSize = 14
-            });
+                Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+                FontSize = 14,
+                FontWeight = FontWeights.SemiBold
+            };
+        }
 
+        private static void ConfigureSummaryValue(
+            TextBlock valueText,
+            Color valueColor,
+            double fontSize)
+        {
             valueText.Foreground = new SolidColorBrush(valueColor);
-            valueText.FontSize = 22;
+            valueText.FontSize = fontSize;
             valueText.FontWeight = FontWeights.Bold;
             valueText.TextWrapping = TextWrapping.Wrap;
             valueText.Margin = new Thickness(0, 6, 0, 0);
+        }
 
-            panel.Children.Add(valueText);
+        private Border CreateSummaryCardContainer(
+            UIElement content,
+            StatsSection section,
+            Action? onClick = null)
+        {
 
             var border = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(24, 32, 43)),
-                CornerRadius = new CornerRadius(14),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(51, 65, 85)),
+                BorderThickness = new Thickness(2),
+                CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(16),
-                Margin = new Thickness(0, 0, 10, 0),
-                Child = panel
+                Margin = new Thickness(0, 0, 10, 10),
+                MinHeight = 92,
+                Cursor = Cursors.Hand,
+                Child = content
             };
 
-            if (onClick != null)
+            if (!_summaryCards.TryGetValue(section, out var cards))
             {
-                border.Cursor = Cursors.Hand;
-                border.MouseLeftButtonUp += (_, _) => onClick();
+                cards = new List<Border>();
+                _summaryCards[section] = cards;
             }
 
-            return border;
-        }
-
-        private UIElement CreateSectionButtons()
-        {
-            var panel = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 0, 0, 14)
-            };
-
-            _salaryButton = CreateSectionButton("Зарплата", StatsSection.Salary);
-            _bonusesButton = CreateSectionButton("Бонусы", StatsSection.Bonuses);
-            _timeButton = CreateSectionButton("Время", StatsSection.Time);
-            _incomeButton = CreateSectionButton("Выручка", StatsSection.Income);
-            _productsButton = CreateSectionButton("Товары/услуги", StatsSection.ProductsServices);
-            _lossesButton = CreateSectionButton("Штрафы", StatsSection.Losses);
-
-            panel.Children.Add(_salaryButton);
-            panel.Children.Add(_bonusesButton);
-            panel.Children.Add(_timeButton);
-            panel.Children.Add(_incomeButton);
-            panel.Children.Add(_productsButton);
-            panel.Children.Add(_lossesButton);
-
-            return panel;
-        }
-
-        private Button CreateSectionButton(string text, StatsSection section)
-        {
-            var button = new Button
-            {
-                Content = text,
-                Width = section == StatsSection.ProductsServices ? 170 : 130,
-                Height = 40,
-                FontSize = 15,
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 0, 8, 0)
-            };
-
-            button.Click += (_, _) =>
+            cards.Add(border);
+            border.MouseLeftButtonUp += (_, _) =>
             {
                 _section = section;
                 Render();
+                onClick?.Invoke();
             };
 
-            return button;
+            return border;
         }
 
         private void Render()
@@ -353,12 +401,22 @@ namespace ClubTimerXbox
             _monthText.Text = GetMonthTitle(_monthStart);
             _grossValueText.Text = $"{autoSalary?.GrossAmount ?? 0} сом";
             _salaryValueText.Text = $"{autoSalary?.PaidAmount ?? 0} сом";
-            _incomeValueText.Text = $"{autoSalary?.RemainingAmount ?? 0} сом";
             _timeValueText.Text = $"{(autoSalary?.ProductBonusAmount ?? 0) + (autoSalary?.BonusAmount ?? 0)} сом";
+            int overallRating = autoSalary?.OverallRatingPercent ?? 100;
+            _currentOverallRating = overallRating;
+            _ratingValueText.Text = overallRating > 100
+                ? $"{overallRating}% ↑"
+                : $"{overallRating}%";
+            _ratingValueText.Foreground = new SolidColorBrush(GetRatingColor(overallRating));
+            UpdateRatingBorderAnimationState();
+            _workValueText.Text = EmployeeStatsService.FormatTime(GetDisplayedWorkTime(summary, autoSalary));
+            _gameIncomeValueText.Text = $"{summary.MonthGameIncome} сом";
+            _productsIncomeValueText.Text = $"{summary.MonthProductsIncome} сом";
             _lossValueText.Text = $"{autoSalary?.LossesAmount ?? summary.MonthUnpaidLosses} сом";
+            _sectionTitleText.Text = GetSectionTitle();
             _sectionInfoText.Text = GetSectionInfoText(summary, autoSalary);
 
-            UpdateSectionButtonStyles();
+            UpdateSummaryCardStyles();
 
             _contentPanel.Children.Clear();
 
@@ -377,6 +435,12 @@ namespace ClubTimerXbox
             if (_section == StatsSection.Bonuses)
             {
                 RenderBonusesSection(autoSalary);
+                return;
+            }
+
+            if (_section == StatsSection.Rating)
+            {
+                RenderRatingSection(autoSalary);
                 return;
             }
 
@@ -401,6 +465,21 @@ namespace ClubTimerXbox
             RenderLossesSection();
         }
 
+        private string GetSectionTitle()
+        {
+            return _section switch
+            {
+                StatsSection.TakenHistory => "История выдач",
+                StatsSection.Salary => "Зарплата",
+                StatsSection.Bonuses => "Премии и бонусы",
+                StatsSection.Rating => "Рейтинг",
+                StatsSection.Time => "Время",
+                StatsSection.Income => "Выручка",
+                StatsSection.ProductsServices => "Товары и услуги",
+                _ => "Штрафы"
+            };
+        }
+
         private string GetSectionInfoText(EmployeeStatsSummary summary, AutoSalaryEmployeeResult? autoSalary)
         {
             if (_section == StatsSection.TakenHistory)
@@ -411,6 +490,9 @@ namespace ClubTimerXbox
 
             if (_section == StatsSection.Bonuses)
                 return $"Бонусы за выбранный месяц: {(autoSalary?.BonusAmount ?? 0) + (autoSalary?.ProductBonusAmount ?? 0)} сом.";
+
+            if (_section == StatsSection.Rating)
+                return "Рейтинг времени и игр влияет только на будущие начисления сотрудника.";
 
             if (_section == StatsSection.Time)
                 return $"Общее время смен: {EmployeeStatsService.FormatTime(GetDisplayedWorkTime(summary, autoSalary))}.";
@@ -424,23 +506,253 @@ namespace ClubTimerXbox
             return $"К удержанию: {summary.MonthUnpaidLosses} сом. Оплачено: {summary.MonthPaidLosses} сом.";
         }
 
-        private void UpdateSectionButtonStyles()
+        private void UpdateSummaryCardStyles()
         {
-            SetButtonActive(_salaryButton, _section == StatsSection.Salary || _section == StatsSection.TakenHistory);
-            SetButtonActive(_bonusesButton, _section == StatsSection.Bonuses);
-            SetButtonActive(_timeButton, _section == StatsSection.Time);
-            SetButtonActive(_incomeButton, _section == StatsSection.Income);
-            SetButtonActive(_productsButton, _section == StatsSection.ProductsServices);
-            SetButtonActive(_lossesButton, _section == StatsSection.Losses);
+            foreach (var pair in _summaryCards)
+            {
+                bool isActive = pair.Key == _section;
+                foreach (var card in pair.Value)
+                {
+                    bool isRatingBoost = pair.Key == StatsSection.Rating &&
+                                         _currentOverallRating > 100;
+                    card.Background = new SolidColorBrush(isActive
+                        ? Color.FromRgb(30, 58, 88)
+                        : Color.FromRgb(24, 32, 43));
+                    card.BorderBrush = new SolidColorBrush(isRatingBoost
+                        ? Color.FromRgb(74, 222, 128)
+                        : isActive
+                            ? Color.FromRgb(96, 165, 250)
+                        : Color.FromRgb(51, 65, 85));
+                    card.BorderThickness = new Thickness(2);
+                }
+            }
         }
 
-        private void SetButtonActive(Button button, bool isActive)
+        private void UpdateRatingBorderAnimationState()
         {
-            button.Background = new SolidColorBrush(isActive
-                ? Color.FromRgb(37, 99, 235)
-                : Color.FromRgb(51, 65, 85));
-            button.Foreground = Brushes.White;
-            button.FontWeight = isActive ? FontWeights.Bold : FontWeights.SemiBold;
+            if (_currentOverallRating > 100)
+            {
+                if (!_ratingBorderAnimationTimer.IsEnabled)
+                    _ratingBorderAnimationTimer.Start();
+                return;
+            }
+
+            _ratingBorderAnimationTimer.Stop();
+        }
+
+        private static Brush CreateRotatingRatingBrush()
+        {
+            double angle = Environment.TickCount64 % 3200 / 3200.0 * 360.0;
+            var brush = new LinearGradientBrush
+            {
+                StartPoint = new Point(0, 0.5),
+                EndPoint = new Point(1, 0.5),
+                RelativeTransform = new RotateTransform(angle, 0.5, 0.5)
+            };
+            brush.GradientStops.Add(new GradientStop(Color.FromRgb(20, 83, 45), 0));
+            brush.GradientStops.Add(new GradientStop(Color.FromRgb(134, 239, 172), 0.48));
+            brush.GradientStops.Add(new GradientStop(Color.FromRgb(20, 83, 45), 1));
+            return brush;
+        }
+
+        private void ScheduleRatingBoost()
+        {
+            if (_ratingBoostPlayed || _currentOverallRating <= 100)
+                return;
+
+            _ratingBoostDelayTimer.Stop();
+            _ratingBoostDelayTimer.Start();
+        }
+
+        private void PlayRatingBoostIfNeeded()
+        {
+            if (_ratingBoostPlayed ||
+                _currentOverallRating <= 100 ||
+                _ratingCard.ActualWidth <= 0 ||
+                _ratingCard.ActualHeight <= 0)
+            {
+                return;
+            }
+
+            _ratingBoostPlayed = true;
+            Point origin = _ratingCard.TranslatePoint(
+                new Point(_ratingCard.ActualWidth / 2, _ratingCard.ActualHeight / 2),
+                _ratingBoostCanvas);
+
+            PlayRatingCardPulse();
+            AddRatingBoostRing(origin);
+            AddRatingBoostLabel(origin);
+            AddRatingBoostParticles(origin);
+        }
+
+        private void PlayRatingCardPulse()
+        {
+            var scale = new ScaleTransform(1, 1);
+            _ratingCard.RenderTransformOrigin = new Point(0.5, 0.5);
+            _ratingCard.RenderTransform = scale;
+
+            var pulse = new DoubleAnimationUsingKeyFrames
+            {
+                Duration = TimeSpan.FromSeconds(1.5)
+            };
+            pulse.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+            pulse.KeyFrames.Add(new EasingDoubleKeyFrame(
+                1.055,
+                KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(280)),
+                new CubicEase { EasingMode = EasingMode.EaseOut }));
+            pulse.KeyFrames.Add(new EasingDoubleKeyFrame(
+                1,
+                KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(1180)),
+                new CubicEase { EasingMode = EasingMode.EaseInOut }));
+
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty, pulse);
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, pulse.Clone());
+        }
+
+        private void AddRatingBoostRing(Point origin)
+        {
+            var ring = new Ellipse
+            {
+                Width = 32,
+                Height = 32,
+                Stroke = new SolidColorBrush(Color.FromRgb(74, 222, 128)),
+                StrokeThickness = 3,
+                Opacity = 0.9,
+                RenderTransformOrigin = new Point(0.5, 0.5)
+            };
+            var scale = new ScaleTransform(1, 1);
+            ring.RenderTransform = scale;
+            Canvas.SetLeft(ring, origin.X - 16);
+            Canvas.SetTop(ring, origin.Y - 16);
+            _ratingBoostCanvas.Children.Add(ring);
+
+            var duration = TimeSpan.FromMilliseconds(1320);
+            scale.BeginAnimation(
+                ScaleTransform.ScaleXProperty,
+                new DoubleAnimation(1, 7, duration)
+                {
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                });
+            scale.BeginAnimation(
+                ScaleTransform.ScaleYProperty,
+                new DoubleAnimation(1, 7, duration)
+                {
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                });
+            var fade = new DoubleAnimation(0.9, 0, duration);
+            fade.Completed += (_, _) => _ratingBoostCanvas.Children.Remove(ring);
+            ring.BeginAnimation(OpacityProperty, fade);
+        }
+
+        private void AddRatingBoostLabel(Point origin)
+        {
+            var label = new Border
+            {
+                Width = 128,
+                Height = 34,
+                Background = new SolidColorBrush(Color.FromArgb(235, 22, 101, 52)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(134, 239, 172)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Child = new TextBlock
+                {
+                    Text = $"Отлично! +{_currentOverallRating - 100}%",
+                    Foreground = Brushes.White,
+                    FontSize = 14,
+                    FontWeight = FontWeights.Bold,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            var move = new TranslateTransform();
+            label.RenderTransform = move;
+            Canvas.SetLeft(label, origin.X - 64);
+            Canvas.SetTop(label, origin.Y - 24);
+            _ratingBoostCanvas.Children.Add(label);
+
+            var duration = TimeSpan.FromSeconds(1.5);
+            move.BeginAnimation(
+                TranslateTransform.YProperty,
+                new DoubleAnimation(0, -46, duration)
+                {
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                });
+            var fade = new DoubleAnimationUsingKeyFrames { Duration = duration };
+            fade.KeyFrames.Add(new DiscreteDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+            fade.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(90))));
+            fade.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(1050))));
+            fade.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(duration)));
+            fade.Completed += (_, _) => _ratingBoostCanvas.Children.Remove(label);
+            label.BeginAnimation(OpacityProperty, fade);
+        }
+
+        private void AddRatingBoostParticles(Point origin)
+        {
+            Color[] colors =
+            {
+                Color.FromRgb(74, 222, 128),
+                Color.FromRgb(250, 204, 21),
+                Color.FromRgb(96, 165, 250),
+                Color.FromRgb(248, 250, 252)
+            };
+            var random = new Random(_employeeName.GetHashCode() ^ _currentOverallRating);
+
+            for (int index = 0; index < 24; index++)
+            {
+                double angle = (Math.PI * 2 * index / 24) +
+                               ((random.NextDouble() - 0.5) * 0.28);
+                double distance = 75 + (random.NextDouble() * 125);
+                var particle = new Border
+                {
+                    Width = 4 + random.Next(0, 4),
+                    Height = 7 + random.Next(0, 6),
+                    Background = new SolidColorBrush(colors[index % colors.Length]),
+                    CornerRadius = new CornerRadius(2),
+                    RenderTransformOrigin = new Point(0.5, 0.5)
+                };
+                var transforms = new TransformGroup();
+                var rotate = new RotateTransform(random.Next(0, 180));
+                var move = new TranslateTransform();
+                transforms.Children.Add(rotate);
+                transforms.Children.Add(move);
+                particle.RenderTransform = transforms;
+                Canvas.SetLeft(particle, origin.X - (particle.Width / 2));
+                Canvas.SetTop(particle, origin.Y - (particle.Height / 2));
+                _ratingBoostCanvas.Children.Add(particle);
+
+                var duration = TimeSpan.FromMilliseconds(1260 + random.Next(0, 240));
+                var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
+                move.BeginAnimation(
+                    TranslateTransform.XProperty,
+                    new DoubleAnimation(0, Math.Cos(angle) * distance, duration)
+                    {
+                        EasingFunction = easing
+                    });
+                move.BeginAnimation(
+                    TranslateTransform.YProperty,
+                    new DoubleAnimation(
+                        0,
+                        (Math.Sin(angle) * distance) + 18,
+                        duration)
+                    {
+                        EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                    });
+                rotate.BeginAnimation(
+                    RotateTransform.AngleProperty,
+                    new DoubleAnimation(
+                        rotate.Angle,
+                        rotate.Angle + random.Next(160, 480),
+                        duration));
+
+                var fade = new DoubleAnimationUsingKeyFrames { Duration = duration };
+                fade.KeyFrames.Add(new DiscreteDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+                fade.KeyFrames.Add(new EasingDoubleKeyFrame(
+                    1,
+                    KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.55))));
+                fade.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(duration)));
+                fade.Completed += (_, _) => _ratingBoostCanvas.Children.Remove(particle);
+                particle.BeginAnimation(OpacityProperty, fade);
+            }
         }
 
         private void RenderSalarySection(
@@ -526,6 +838,206 @@ namespace ClubTimerXbox
                     }
                 }));
             }
+        }
+
+        private void RenderRatingSection(AutoSalaryEmployeeResult? autoSalary)
+        {
+            DateTime now = ClubClock.Current.LocalNow;
+            DateTime nextMonthStart = _monthStart.AddMonths(1);
+            DateTime ratingAt = nextMonthStart <= now
+                ? nextMonthStart.AddTicks(-1)
+                : now;
+            var snapshot = EmployeeRatingService.GetSnapshot(_employeeName, ratingAt);
+
+            int overall = autoSalary?.OverallRatingPercent ?? snapshot.OverallPercent;
+            int time = autoSalary?.TimeRatingPercent ?? snapshot.TimePercent;
+            int revenue = autoSalary?.RevenueRatingPercent ?? snapshot.RevenuePercent;
+
+            _contentPanel.Children.Add(CreateCard(new StackPanel
+            {
+                Children =
+                {
+                    CreateRatingLine("Рейтинг", overall, true),
+                    CreateRatingLine("За время", time),
+                    CreateRatingLine("За игры", revenue)
+                }
+            }));
+
+            _contentPanel.Children.Add(CreateBigLine("События рейтинга"));
+
+            var events = (autoSalary?.RatingEvents ?? snapshot.History
+                    .Where(item =>
+                        item.EffectiveFrom < nextMonthStart &&
+                        item.EffectiveUntil > _monthStart)
+                    .ToList())
+                .OrderByDescending(item => IsRatingEventActive(item, now))
+                .ThenByDescending(item => item.EffectiveFrom)
+                .ToList();
+
+            if (events.Count == 0)
+            {
+                _contentPanel.Children.Add(CreateMutedText(
+                    "За выбранный месяц изменений рейтинга нет."));
+                return;
+            }
+
+            foreach (var item in events)
+            {
+                bool isActive = IsRatingEventActive(item, now);
+                string branch = item.Branch == EmployeeRatingBranch.Time
+                    ? "время"
+                    : "игры";
+                int magnitude = item.ChangePercent > 0
+                    ? item.ChangePercent
+                    : Math.Abs(item.TargetPercent - item.BasePercentAtCreation);
+                int difference = item.Direction == EmployeeRatingEffectDirection.Reward
+                    ? magnitude
+                    : -magnitude;
+                string differenceText = difference > 0
+                    ? $"+{difference}%"
+                    : $"{difference}%";
+                string title = difference == 0
+                    ? $"100% за {branch}"
+                    : $"{differenceText} за {branch}";
+
+                var panel = new StackPanel
+                {
+                    Children =
+                    {
+                        CreateBigLine(title),
+                        CreateLine($"Рейтинг установлен на {item.TargetPercent}%"),
+                        CreateLine($"Причина: {GetRatingReason(item)}"),
+                        CreateLine($"Дата события: {item.EffectiveFrom:dd.MM.yyyy HH:mm}"),
+                        CreateLine($"Срок изменения: {FormatRatingDuration(item)}")
+                    }
+                };
+
+                if (!string.IsNullOrWhiteSpace(item.Description) &&
+                    !item.Description.Equals(item.Title, StringComparison.OrdinalIgnoreCase))
+                {
+                    panel.Children.Add(CreateDescription(item.Description));
+                }
+
+                panel.Children.Add(isActive
+                    ? CreateRatingStatusLine(
+                        $"Осталось: {FormatRatingRemaining(item.EffectiveUntil - now)}",
+                        Color.FromRgb(250, 204, 21))
+                    : CreateRatingStatusLine(
+                        GetRatingEventStatus(item),
+                        Color.FromRgb(148, 163, 184)));
+
+                _contentPanel.Children.Add(CreateCard(panel));
+            }
+        }
+
+        private static bool IsRatingEventActive(
+            EmployeeRatingEvent item,
+            DateTime now)
+        {
+            return item.Status == EmployeeRatingEventStatus.Active &&
+                   item.EffectiveFrom <= now &&
+                   now < item.EffectiveUntil;
+        }
+
+        private static string FormatRatingDuration(EmployeeRatingEvent item)
+        {
+            TimeSpan duration = item.ScheduledUntil - item.EffectiveFrom;
+            if (duration.TotalHours < 24)
+                return $"{Math.Max(1, (int)Math.Round(duration.TotalHours))} ч";
+            return FormatDayCount(Math.Max(1, (int)Math.Round(duration.TotalDays)));
+        }
+
+        private static string GetRatingReason(EmployeeRatingEvent item)
+        {
+            return string.IsNullOrWhiteSpace(item.Title)
+                ? "Причина не указана"
+                : item.Title.Trim();
+        }
+
+        private static string GetRatingEventStatus(EmployeeRatingEvent item)
+        {
+            return item.Status switch
+            {
+                EmployeeRatingEventStatus.Forgiven =>
+                    $"Снято владельцем: {item.EffectiveUntil:dd.MM.yyyy HH:mm}",
+                EmployeeRatingEventStatus.CancelledAsError =>
+                    $"Удалено как ошибочное: {item.EffectiveUntil:dd.MM.yyyy HH:mm}",
+                _ => $"Срок завершён: {item.EffectiveUntil:dd.MM.yyyy HH:mm}"
+            };
+        }
+
+        private static string FormatRatingRemaining(TimeSpan remaining)
+        {
+            if (remaining <= TimeSpan.Zero)
+                return "срок завершён";
+
+            int days = (int)remaining.TotalDays;
+            int hours = remaining.Hours;
+            int minutes = remaining.Minutes;
+            var parts = new List<string>();
+
+            if (days > 0)
+                parts.Add(FormatDayCount(days));
+            if (hours > 0 || days > 0)
+                parts.Add($"{hours} ч");
+            parts.Add($"{minutes} мин");
+
+            return string.Join(" ", parts);
+        }
+
+        private static string FormatDayCount(int days)
+        {
+            int lastTwo = days % 100;
+            int last = days % 10;
+            string suffix = lastTwo is >= 11 and <= 14
+                ? "дней"
+                : last switch
+                {
+                    1 => "день",
+                    2 or 3 or 4 => "дня",
+                    _ => "дней"
+                };
+            return $"{days} {suffix}";
+        }
+
+        private TextBlock CreateRatingLine(
+            string title,
+            int percent,
+            bool isMain = false)
+        {
+            return new TextBlock
+            {
+                Text = $"{title}: {percent}%",
+                Foreground = new SolidColorBrush(GetRatingColor(percent)),
+                FontSize = isMain ? 22 : 17,
+                FontWeight = isMain ? FontWeights.Bold : FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, isMain ? 9 : 6)
+            };
+        }
+
+        private TextBlock CreateRatingStatusLine(string text, Color color)
+        {
+            return new TextBlock
+            {
+                Text = text,
+                Foreground = new SolidColorBrush(color),
+                FontSize = 15,
+                FontWeight = FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 10, 0, 0)
+            };
+        }
+
+        private static Color GetRatingColor(int percent)
+        {
+            if (percent >= 101)
+                return Color.FromRgb(74, 222, 128);
+            if (percent >= 92)
+                return Color.FromRgb(229, 231, 235);
+            if (percent >= 82)
+                return Color.FromRgb(250, 204, 21);
+            return Color.FromRgb(248, 113, 113);
         }
 
         private void RenderSalaryAdvanceHistory()

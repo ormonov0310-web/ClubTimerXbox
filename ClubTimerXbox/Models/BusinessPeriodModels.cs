@@ -16,6 +16,8 @@ namespace ClubTimerXbox.Models
 
     public sealed class EmployeePayrollObligation
     {
+        public string EmployeeId { get; set; } = "";
+
         public string EmployeeName { get; set; } = "";
 
         public string MonthKey { get; set; } = "";
@@ -27,6 +29,18 @@ namespace ClubTimerXbox.Models
         public int PenaltyAmount { get; set; }
 
         public int PaidAmount { get; set; }
+
+        public int TimeAmount { get; set; }
+
+        public int GameRevenueAmount { get; set; }
+
+        public int ProductBonusAmount { get; set; }
+
+        public int TimeRatingPercent { get; set; } = 100;
+
+        public int RevenueRatingPercent { get; set; } = 100;
+
+        public int OverallRatingPercent { get; set; } = 100;
 
         public int RemainingAmount =>
             AccruedAmount + BonusAmount - PenaltyAmount - PaidAmount;
@@ -137,10 +151,35 @@ namespace ClubTimerXbox.Models
 
         public bool IsClosed { get; set; }
 
+        public DateTime? ArchivedAt { get; set; }
+
+        public string ArchiveChecksum { get; set; } = "";
+
+        public bool IsArchiveVerified { get; set; }
+
         public Dictionary<string, double> WorkedHours { get; set; } =
             new(StringComparer.OrdinalIgnoreCase);
 
         public List<EmployeePayrollObligation> Payroll { get; set; } = new();
+
+        public List<SalaryPolicyVersion> SalaryPolicyVersions { get; set; } = new();
+
+        public List<EmployeeRatingArchiveItem> EmployeeRatings { get; set; } = new();
+    }
+
+    public sealed class EmployeeRatingArchiveItem
+    {
+        public string EmployeeId { get; set; } = "";
+
+        public string EmployeeName { get; set; } = "";
+
+        public int TimePercent { get; set; } = 100;
+
+        public int RevenuePercent { get; set; } = 100;
+
+        public int OverallPercent { get; set; } = 100;
+
+        public List<EmployeeRatingEvent> Events { get; set; } = new();
     }
 
     public sealed class BusinessLedgerState

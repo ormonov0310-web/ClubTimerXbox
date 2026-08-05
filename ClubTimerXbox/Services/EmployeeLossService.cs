@@ -177,6 +177,7 @@ namespace ClubTimerXbox.Services
                 .Where(item =>
                     !item.IsPaid &&
                     !item.IsFixed &&
+                    !item.SuppressAutomaticRating &&
                     item.Amount > 0 &&
                     IsInPeriod(item, fromInclusive, toExclusive) &&
                     item.ResponsibleEmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase) &&
@@ -356,7 +357,11 @@ namespace ClubTimerXbox.Services
             string note = "",
             string lossKind = "",
             bool isFixed = false,
-            string salaryMonthKey = "")
+            string salaryMonthKey = "",
+            bool suppressAutomaticRating = false,
+            string sourceCode = "",
+            string resolutionStatus = "",
+            DateTime? decisionDueAt = null)
         {
             if (amount < 0)
                 amount = 0;
@@ -375,6 +380,10 @@ namespace ClubTimerXbox.Services
                 Amount = amount,
                 IsPaid = false,
                 IsFixed = isFixed,
+                SuppressAutomaticRating = suppressAutomaticRating,
+                SourceCode = sourceCode.Trim(),
+                ResolutionStatus = resolutionStatus.Trim(),
+                DecisionDueAt = decisionDueAt,
                 PaidAt = null,
                 Note = note.Trim()
             };
@@ -383,6 +392,45 @@ namespace ClubTimerXbox.Services
             Save();
 
             return item;
+        }
+
+        public static bool TryFormalizeViolationRecommendation(Guid id, string note)
+        {
+            var item = Items.FirstOrDefault(loss => loss.Id == id);
+            if (item == null || item.IsPaid || item.IsFixed || !IsViolationLoss(item))
+                return false;
+
+            item.IsFixed = true;
+            item.ResolutionStatus = "Confirmed";
+            item.ResolvedAt = ClubClock.Current.LocalNow;
+            if (!string.IsNullOrWhiteSpace(note))
+            {
+                item.Note = string.IsNullOrWhiteSpace(item.Note)
+                    ? note.Trim()
+                    : $"{item.Note.Trim()}\n{note.Trim()}";
+            }
+            Save();
+            return true;
+        }
+
+        public static bool TryCancelViolationRecommendation(Guid id, string note)
+        {
+            var item = Items.FirstOrDefault(loss => loss.Id == id);
+            if (item == null || item.IsPaid || item.IsFixed || !IsViolationLoss(item))
+                return false;
+
+            item.IsPaid = true;
+            item.PaidAt = ClubClock.Current.LocalNow;
+            item.ResolutionStatus = "Cancelled";
+            item.ResolvedAt = ClubClock.Current.LocalNow;
+            if (!string.IsNullOrWhiteSpace(note))
+            {
+                item.Note = string.IsNullOrWhiteSpace(item.Note)
+                    ? note.Trim()
+                    : $"{item.Note.Trim()}\n{note.Trim()}";
+            }
+            Save();
+            return true;
         }
 
         public static bool TryCorrectKnownFixedLoss(
@@ -412,6 +460,42 @@ namespace ClubTimerXbox.Services
                 ? "Исправлена ошибочная повторная месячная автокоррекция."
                 : item.Note.Trim() + "\nИсправлена ошибочная повторная месячная автокоррекция.";
             Save();
+            return true;
+        }
+
+        public static bool TryIncreaseFixedViolation(
+            Guid id,
+            int amount,
+            string description)
+        {
+            var item = Items.FirstOrDefault(loss => loss.Id == id);
+
+            if (item == null ||
+                item.IsPaid ||
+                !item.IsFixed ||
+                !IsViolationLoss(item) ||
+                amount < item.Amount)
+            {
+                return false;
+            }
+
+            bool changed = false;
+            if (item.Amount != amount)
+            {
+                item.Amount = amount;
+                changed = true;
+            }
+
+            description = description.Trim();
+            if (!item.Description.Equals(description, StringComparison.Ordinal))
+            {
+                item.Description = description;
+                changed = true;
+            }
+
+            if (changed)
+                Save();
+
             return true;
         }
 

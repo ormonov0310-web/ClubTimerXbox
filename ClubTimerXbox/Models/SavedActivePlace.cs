@@ -12,6 +12,13 @@ namespace ClubTimerXbox.Models
         public bool IsNewBranchPromoSession { get; set; }
         public bool IsCalculating { get; set; }
         public bool IsTimeExpiredAwaitingAcknowledgement { get; set; }
+        public DateTime? TimeExpiredAt { get; set; }
+        public Guid? ExpiredGameSessionId { get; set; }
+        public Guid? ExpiredPenaltyLossId { get; set; }
+        public string ExpiredPenaltyLossMonthKey { get; set; } = "";
+        public int ExpiredPenaltyLossBaseMinutes { get; set; }
+        public string? ExpiredPenaltyEmployeeName { get; set; }
+        public int ExpiredPenaltyChargedMinutes { get; set; }
 
         public int PaidAmount { get; set; }
         public int PrepaidCashAmount { get; set; }

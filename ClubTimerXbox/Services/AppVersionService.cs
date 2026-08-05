@@ -7,6 +7,18 @@ namespace ClubTimerXbox.Services
     {
         public const string UpdateChannel = "stable";
 
+        public static bool IsLocalDevelopmentBuild
+        {
+            get
+            {
+#if DEBUG
+                return true;
+#else
+                return false;
+#endif
+            }
+        }
+
         public static string Version
         {
             get

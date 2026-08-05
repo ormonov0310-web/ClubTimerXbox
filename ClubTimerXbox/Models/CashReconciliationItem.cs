@@ -94,6 +94,8 @@ namespace ClubTimerXbox.Models
 
         public DateTime CreatedAt { get; set; } = DateTime.Now;
 
+        public string EmployeeName { get; set; } = "";
+
         public CashReconciliationKind Kind { get; set; } =
             CashReconciliationKind.CashExtra;
 

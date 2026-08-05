@@ -59,6 +59,8 @@ namespace ClubTimerXbox.Models
 
     public class AutoSalaryEmployeeResult
     {
+        public string EmployeeId { get; set; } = "";
+
         public string EmployeeName { get; set; } = "";
 
         public double WorkHours { get; set; }
@@ -99,6 +101,16 @@ namespace ClubTimerXbox.Models
         public int CurrentPeriodRemainingAmount { get; set; }
 
         public int RemainingAmount { get; set; }
+
+        public int TimeRatingPercent { get; set; } = 100;
+
+        public int RevenueRatingPercent { get; set; } = 100;
+
+        public int OverallRatingPercent { get; set; } = 100;
+
+        public bool RatingHasWarning { get; set; }
+
+        public List<EmployeeRatingEvent> RatingEvents { get; set; } = new();
     }
 
     public class AutoSalaryReport
@@ -106,6 +118,10 @@ namespace ClubTimerXbox.Models
         public string MonthKey { get; set; } = "";
 
         public AutoSalarySettings Settings { get; set; } = new AutoSalarySettings();
+
+        public DateTime SettingsEffectiveFrom { get; set; }
+
+        public bool HasPendingSettings { get; set; }
 
         public int GameRevenue { get; set; }
 
