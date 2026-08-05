@@ -35,7 +35,7 @@ namespace ClubTimerXbox.Services
         private static CancellationTokenSource? _preparationCancellation;
         private static int _preparationGeneration;
         private static bool _backgroundPreparationActive;
-        private const int KeepLocalUpdateCopies = 2;
+        private const int KeepLocalUpdateCopies = 1;
 
         public static event EventHandler? StateChanged;
 
@@ -135,6 +135,30 @@ namespace ClubTimerXbox.Services
                     : state.UpdatedAtUtc.ToLocalTime()
             };
             return ApplyPreparationState(info);
+        }
+
+        public static async Task<UpdateCleanupResult> CleanupDownloadedUpdatesAsync()
+        {
+            await PreparationLock.WaitAsync();
+            try
+            {
+                UpdatePreparationState state = LoadPreparationState();
+                string? protectedDirectory = IsNewerVersion(
+                        state.Version,
+                        AppVersionService.Version) &&
+                    state.Stage is AppUpdateStage.Downloading or
+                        AppUpdateStage.Verifying or
+                        AppUpdateStage.Ready or
+                        AppUpdateStage.Installing
+                        ? Path.GetDirectoryName(state.PackagePath)
+                        : null;
+
+                return CleanupDownloadDirectories(UpdatesRoot, protectedDirectory);
+            }
+            finally
+            {
+                PreparationLock.Release();
+            }
         }
 
         public static async Task<string> PrepareLatestUpdateAsync()
@@ -480,60 +504,45 @@ namespace ClubTimerXbox.Services
                     "Скачивание обновления."));
 
                 TryDelete(partialPath);
-                using HttpResponseMessage response = await HttpClient.GetAsync(
-                    manifest.DownloadUrl,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    cancellationToken);
-                response.EnsureSuccessStatusCode();
-
-                long? totalBytes = response.Content.Headers.ContentLength;
-                await using Stream source = await response.Content.ReadAsStreamAsync(cancellationToken);
-                await using var destination = new FileStream(
-                    partialPath,
-                    FileMode.CreateNew,
-                    FileAccess.Write,
-                    FileShare.Read,
-                    128 * 1024,
-                    useAsync: true);
-
-                byte[] buffer = new byte[128 * 1024];
                 long receivedBytes = 0;
-                int lastSavedPercent = -1;
-
-                while (true)
                 {
-                    int read = await source.ReadAsync(
-                        buffer.AsMemory(0, buffer.Length),
+                    using HttpResponseMessage response = await HttpClient.GetAsync(
+                        manifest.DownloadUrl,
+                        HttpCompletionOption.ResponseHeadersRead,
                         cancellationToken);
-                    if (read == 0)
-                        break;
+                    response.EnsureSuccessStatusCode();
 
-                    await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                    receivedBytes += read;
-                    int percent = totalBytes.HasValue && totalBytes.Value > 0
-                        ? Math.Min(99, (int)(receivedBytes * 100 / totalBytes.Value))
-                        : 0;
+                    long? totalBytes = response.Content.Headers.ContentLength;
+                    await using Stream source = await response.Content.ReadAsStreamAsync(cancellationToken);
+                    int lastSavedPercent = -1;
+                    receivedBytes = await WritePackageFileAsync(
+                        source,
+                        partialPath,
+                        currentBytes =>
+                        {
+                            int percent = totalBytes.HasValue && totalBytes.Value > 0
+                                ? Math.Min(99, (int)(currentBytes * 100 / totalBytes.Value))
+                                : 0;
 
-                    progress?.Report(AppUpdateProgress.Downloading(
-                        percent,
-                        totalBytes.HasValue
-                            ? $"Скачиваем: {FormatBytes(receivedBytes)} / {FormatBytes(totalBytes.Value)}"
-                            : $"Скачиваем: {FormatBytes(receivedBytes)}"));
+                            progress?.Report(AppUpdateProgress.Downloading(
+                                percent,
+                                totalBytes.HasValue
+                                    ? $"Скачиваем: {FormatBytes(currentBytes)} / {FormatBytes(totalBytes.Value)}"
+                                    : $"Скачиваем: {FormatBytes(currentBytes)}"));
 
-                    if (percent != lastSavedPercent && (percent == 0 || percent % 2 == 0))
-                    {
-                        lastSavedPercent = percent;
-                        SavePreparationState(UpdatePreparationState.FromManifest(
-                            manifest,
-                            AppUpdateStage.Downloading,
-                            packagePath,
-                            percent,
-                            "Скачивание обновления."));
-                    }
+                            if (percent != lastSavedPercent && (percent == 0 || percent % 2 == 0))
+                            {
+                                lastSavedPercent = percent;
+                                SavePreparationState(UpdatePreparationState.FromManifest(
+                                    manifest,
+                                    AppUpdateStage.Downloading,
+                                    packagePath,
+                                    percent,
+                                    "Скачивание обновления."));
+                            }
+                        },
+                        cancellationToken);
                 }
-
-                await destination.FlushAsync(cancellationToken);
-                destination.Flush(flushToDisk: true);
 
                 if (manifest.SizeBytes > 0 && receivedBytes != manifest.SizeBytes)
                     throw new InvalidOperationException("Размер скачанного пакета не совпадает с манифестом.");
@@ -581,6 +590,40 @@ namespace ClubTimerXbox.Services
                 packagePath,
                 manifest.SizeBytes,
                 manifest.Sha256);
+        }
+
+        public static async Task<long> WritePackageFileAsync(
+            Stream source,
+            string partialPath,
+            Action<long>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            await using var destination = new FileStream(
+                partialPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.Read,
+                128 * 1024,
+                useAsync: true);
+
+            byte[] buffer = new byte[128 * 1024];
+            long receivedBytes = 0;
+            while (true)
+            {
+                int read = await source.ReadAsync(
+                    buffer.AsMemory(0, buffer.Length),
+                    cancellationToken);
+                if (read == 0)
+                    break;
+
+                await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                receivedBytes += read;
+                progress?.Invoke(receivedBytes);
+            }
+
+            await destination.FlushAsync(cancellationToken);
+            destination.Flush(flushToDisk: true);
+            return receivedBytes;
         }
 
         public static async Task<bool> IsReusablePreparedPackageAsync(
@@ -894,13 +937,12 @@ namespace ClubTimerXbox.Services
         private static void ClearPreparationForInstalledVersion()
         {
             UpdatePreparationState state = LoadPreparationState();
-            if (string.IsNullOrWhiteSpace(state.Version) ||
+            if (!string.IsNullOrWhiteSpace(state.Version) &&
                 IsNewerVersion(state.Version, AppVersionService.Version))
-            {
                 return;
-            }
 
             TryDelete(PreparationStatePath);
+            CleanupDownloadDirectories(UpdatesRoot, protectedDirectory: null);
             StateChanged?.Invoke(null, EventArgs.Empty);
         }
 
@@ -977,6 +1019,58 @@ namespace ClubTimerXbox.Services
                    state.Equals("rolled_back", StringComparison.OrdinalIgnoreCase) ||
                    state.Equals("failed", StringComparison.OrdinalIgnoreCase) ||
                    state.Equals("recovery_required", StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static UpdateCleanupResult CleanupDownloadDirectories(
+            string root,
+            string? protectedDirectory)
+        {
+            var result = new UpdateCleanupResult();
+            if (!Directory.Exists(root))
+                return result;
+
+            string rootFullPath = Path.GetFullPath(root)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string? protectedFullPath = string.IsNullOrWhiteSpace(protectedDirectory)
+                ? null
+                : Path.GetFullPath(protectedDirectory)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            foreach (string path in Directory.GetDirectories(rootFullPath))
+            {
+                string fullPath = Path.GetFullPath(path)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string? parent = Path.GetDirectoryName(fullPath)?.TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+                if (!string.Equals(parent, rootFullPath, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (protectedFullPath != null && string.Equals(
+                        fullPath,
+                        protectedFullPath,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    result.ProtectedDirectories++;
+                    continue;
+                }
+
+                try
+                {
+                    var directory = new DirectoryInfo(fullPath);
+                    FileInfo[] files = directory.GetFiles("*", SearchOption.AllDirectories);
+                    long bytes = files.Sum(file => file.Length);
+                    directory.Delete(recursive: true);
+                    result.DeletedDirectories++;
+                    result.DeletedFiles += files.Length;
+                    result.FreedBytes += bytes;
+                }
+                catch
+                {
+                    result.FailedDirectories++;
+                }
+            }
+
+            return result;
         }
 
         private static void CleanupOldDirectories(
@@ -1093,6 +1187,16 @@ namespace ClubTimerXbox.Services
             Installing,
             Recovering,
             Failed
+        }
+
+        public sealed class UpdateCleanupResult
+        {
+            public int DeletedDirectories { get; internal set; }
+            public int DeletedFiles { get; internal set; }
+            public int ProtectedDirectories { get; internal set; }
+            public int FailedDirectories { get; internal set; }
+            public long FreedBytes { get; internal set; }
+            public string FreedSize => FormatBytes(FreedBytes);
         }
 
         public sealed class InstallUpdateResult

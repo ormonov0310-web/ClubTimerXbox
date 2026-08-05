@@ -24,6 +24,10 @@
     <None Include="Assets\Themes\*.*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="ClubTimerXbox.RegressionTests" />
+  </ItemGroup>
+
   <Target Name="CopyUpdaterToOutput" AfterTargets="Build" Condition="'$(SkipCopyUpdater)' != 'true'">
     <MSBuild Projects="..\ClubTimerUpdater\ClubTimerUpdater.csproj" Targets="Build" Properties="Configuration=$(Configuration);OutDir=$(MSBuildProjectDirectory)\.updater-build\" />
     <ItemGroup>

@@ -25,6 +25,7 @@ namespace ClubTimerXbox
         private Border? _updateCard;
         private TextBlock? _updateTitleText;
         private TextBlock? _updateSubtitleText;
+        private TextBlock? _updateCleanupSubtitleText;
         private TextBlock? _themeSubtitleText;
         private Button? _updateButton;
         private bool _isInstallingUpdate;
@@ -117,6 +118,13 @@ namespace ClubTimerXbox
 
             _updateCard = CreateUpdateCard();
             root.Children.Add(_updateCard);
+
+            root.Children.Add(CreateSettingsButton(
+                "Очистить старые обновления",
+                "Удаляет ненужные скачанные пакеты. Активное обновление сохраняется.",
+                CleanupDownloadedUpdates,
+                subtitle => _updateCleanupSubtitleText = subtitle
+            ));
 
             root.Children.Add(CreateSettingsButton(
                 "Тарифы / места",
@@ -425,6 +433,35 @@ namespace ClubTimerXbox
                 return;
             _updateCard.BorderBrush = new SolidColorBrush(border);
             _updateCard.Background = new SolidColorBrush(background);
+        }
+
+        private async void CleanupDownloadedUpdates()
+        {
+            if (_updateCleanupSubtitleText == null)
+                return;
+
+            _updateCleanupSubtitleText.Text = "Проверяем кэш обновлений...";
+            try
+            {
+                AppUpdateService.UpdateCleanupResult result =
+                    await AppUpdateService.CleanupDownloadedUpdatesAsync();
+                _updateCleanupSubtitleText.Text = result.DeletedDirectories == 0
+                    ? result.ProtectedDirectories > 0
+                        ? "Старых пакетов нет. Активное обновление сохранено."
+                        : "Кэш обновлений уже пуст."
+                    : $"Удалено папок: {result.DeletedDirectories}, файлов: " +
+                      $"{result.DeletedFiles}. Освобождено: {result.FreedSize}.";
+
+                if (result.FailedDirectories > 0)
+                {
+                    _updateCleanupSubtitleText.Text +=
+                        $" Не удалось удалить папок: {result.FailedDirectories}.";
+                }
+            }
+            catch (Exception ex)
+            {
+                _updateCleanupSubtitleText.Text = $"Не удалось очистить кэш: {ex.Message}";
+            }
         }
 
         private async Task InstallUpdateFromSettingsAsync()

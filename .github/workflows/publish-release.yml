@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Individual employee salary policies and ratings, opening and night rules, expired-TV violation tracking, and owner salary history." `
+            -Notes "Fixes repeated update downloads by releasing package files before verification, and adds automatic plus manual cleanup of obsolete update packages." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,12 +66,13 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Adds individual employee salary policies and two-branch ratings with
-          immutable event history. Opening, late-night and expired-TV rules now
-          create auditable violations without mixing them into cash losses.
+          Fixes the repeated update-download loop caused by a locked temporary
+          package file. Download streams are now closed before SHA-256 verification
+          and package promotion.
 
-          The owner app receives detailed salary payment history, including who
-          paid or took salary, payment method, amount and date.
+          Obsolete downloaded packages are removed automatically after a successful
+          update and can also be cleared manually from owner settings. The active
+          package, rollback backups and club data remain protected.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {

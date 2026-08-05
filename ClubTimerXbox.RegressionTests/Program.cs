@@ -339,6 +339,8 @@ internal sealed class AppUpdateTestSuite
         Test("Более новая версия вытесняет скачанный пакет", NewerReleaseReplacesPrepared);
         Test("Новый SHA той же версии вытесняет скачанный пакет", RepackedReleaseReplacesPrepared);
         Test("Готовый пакет используется после оборванного состояния", ExistingPackageSurvivesInterruptedState);
+        Test("Скачанный пакет освобождается перед публикацией", DownloadedPackageIsReleasedBeforePromotion);
+        Test("Старые пакеты удаляются, активный сохраняется", OldDownloadsAreRemovedButActivePackageIsKept);
         Console.WriteLine();
         Console.WriteLine($"PASS: {_passed} сценариев безопасного обновления.");
     }
@@ -435,6 +437,70 @@ internal sealed class AppUpdateTestSuite
             sandbox.PackagePath,
             size,
             "wrong-sha").GetAwaiter().GetResult(), "неверный SHA отклонён");
+    }
+
+    private void DownloadedPackageIsReleasedBeforePromotion()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "ClubTimerDownloadTests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string partialPath = Path.Combine(root, "update.zip.partial");
+            string packagePath = Path.Combine(root, "update.zip");
+            byte[] payload = new byte[512 * 1024];
+            Random.Shared.NextBytes(payload);
+            using var source = new MemoryStream(payload);
+
+            long written = AppUpdateService.WritePackageFileAsync(
+                source,
+                partialPath).GetAwaiter().GetResult();
+            File.Move(partialPath, packagePath);
+
+            Equal((long)payload.Length, written, "размер записанного пакета");
+            True(File.Exists(packagePath), "временный файл переименован без блокировки");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private void OldDownloadsAreRemovedButActivePackageIsKept()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "ClubTimerCleanupTests",
+            Guid.NewGuid().ToString("N"));
+        string oldOne = Path.Combine(root, "1.4.1");
+        string oldTwo = Path.Combine(root, "1.4.2");
+        string active = Path.Combine(root, "1.4.4");
+        Directory.CreateDirectory(oldOne);
+        Directory.CreateDirectory(oldTwo);
+        Directory.CreateDirectory(active);
+        File.WriteAllBytes(Path.Combine(oldOne, "old-one.zip"), new byte[10]);
+        File.WriteAllBytes(Path.Combine(oldTwo, "old-two.zip"), new byte[20]);
+        File.WriteAllBytes(Path.Combine(active, "active.zip"), new byte[30]);
+
+        try
+        {
+            AppUpdateService.UpdateCleanupResult result =
+                AppUpdateService.CleanupDownloadDirectories(root, active);
+
+            Equal(2, result.DeletedDirectories, "удалённые папки");
+            Equal(2, result.DeletedFiles, "удалённые файлы");
+            Equal(30L, result.FreedBytes, "освобождённые байты");
+            Equal(1, result.ProtectedDirectories, "защищённые папки");
+            True(!Directory.Exists(oldOne), "первый старый пакет удалён");
+            True(!Directory.Exists(oldTwo), "второй старый пакет удалён");
+            True(Directory.Exists(active), "активный пакет сохранён");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     private void Test(string title, Action action)
