@@ -19,44 +19,44 @@ namespace ClubTimerXbox.Services
             new Dictionary<string, EmployeeRatingRuleDefinition>(StringComparer.OrdinalIgnoreCase)
             {
                 ["TIME_FIRST_OPEN_PUNCTUAL"] = new(
-                    "TIME_FIRST_OPEN_PUNCTUAL", 1, EmployeeRatingBranch.Time,
-                    EmployeeRatingEffectDirection.Reward, 5, TimeSpan.FromHours(12),
+                    "TIME_FIRST_OPEN_PUNCTUAL", 2, EmployeeRatingBranch.Time,
+                    EmployeeRatingEffectDirection.Reward, 5, TimeSpan.FromHours(24),
                     "Пунктуальное открытие клуба"),
                 ["TIME_FIRST_OPEN_SLIGHTLY_LATE"] = new(
-                    "TIME_FIRST_OPEN_SLIGHTLY_LATE", 1, EmployeeRatingBranch.Time,
-                    EmployeeRatingEffectDirection.Penalty, 3, TimeSpan.FromHours(6),
+                    "TIME_FIRST_OPEN_SLIGHTLY_LATE", 2, EmployeeRatingBranch.Time,
+                    EmployeeRatingEffectDirection.Penalty, 3, TimeSpan.FromHours(12),
                     "Небольшое опоздание при открытии"),
                 ["TIME_FIRST_OPEN_LATE"] = new(
-                    "TIME_FIRST_OPEN_LATE", 1, EmployeeRatingBranch.Time,
-                    EmployeeRatingEffectDirection.Penalty, 5, TimeSpan.FromHours(12),
+                    "TIME_FIRST_OPEN_LATE", 2, EmployeeRatingBranch.Time,
+                    EmployeeRatingEffectDirection.Penalty, 5, TimeSpan.FromHours(24),
                     "Позднее открытие клуба"),
                 ["TIME_PC_LEFT_UNATTENDED"] = new(
-                    "TIME_PC_LEFT_UNATTENDED", 1, EmployeeRatingBranch.Time,
-                    EmployeeRatingEffectDirection.Penalty, 7, TimeSpan.FromDays(2),
+                    "TIME_PC_LEFT_UNATTENDED", 2, EmployeeRatingBranch.Time,
+                    EmployeeRatingEffectDirection.Penalty, 7, TimeSpan.FromDays(4),
                     "ПК оставлен без клиентов"),
                 ["TIME_EXPIRED_TV_UNATTENDED"] = new(
-                    "TIME_EXPIRED_TV_UNATTENDED", 1, EmployeeRatingBranch.Time,
-                    EmployeeRatingEffectDirection.Penalty, 5, TimeSpan.FromDays(1),
+                    "TIME_EXPIRED_TV_UNATTENDED", 2, EmployeeRatingBranch.Time,
+                    EmployeeRatingEffectDirection.Penalty, 5, TimeSpan.FromDays(2),
                     "ТВ оставлен после окончания тарифа"),
                 ["TIME_LATE_CLIENT_REWARD"] = new(
-                    "TIME_LATE_CLIENT_REWARD", 1, EmployeeRatingBranch.Time,
-                    EmployeeRatingEffectDirection.Reward, 3, TimeSpan.FromDays(1),
+                    "TIME_LATE_CLIENT_REWARD", 2, EmployeeRatingBranch.Time,
+                    EmployeeRatingEffectDirection.Reward, 3, TimeSpan.FromDays(2),
                     "Работа с клиентом после 01:00"),
                 ["REVENUE_CONFIRMED_LOSS_SMALL"] = new(
-                    "REVENUE_CONFIRMED_LOSS_SMALL", 1, EmployeeRatingBranch.Revenue,
-                    EmployeeRatingEffectDirection.Penalty, 3, TimeSpan.FromDays(2),
+                    "REVENUE_CONFIRMED_LOSS_SMALL", 2, EmployeeRatingBranch.Revenue,
+                    EmployeeRatingEffectDirection.Penalty, 3, TimeSpan.FromDays(4),
                     "Подтверждённая потеря до 100 сом"),
                 ["REVENUE_CONFIRMED_LOSS_LARGE"] = new(
-                    "REVENUE_CONFIRMED_LOSS_LARGE", 1, EmployeeRatingBranch.Revenue,
-                    EmployeeRatingEffectDirection.Penalty, 5, TimeSpan.FromDays(2),
+                    "REVENUE_CONFIRMED_LOSS_LARGE", 2, EmployeeRatingBranch.Revenue,
+                    EmployeeRatingEffectDirection.Penalty, 5, TimeSpan.FromDays(4),
                     "Подтверждённая потеря свыше 100 сом"),
                 ["REVENUE_CONFIRMED_EXTRA"] = new(
-                    "REVENUE_CONFIRMED_EXTRA", 1, EmployeeRatingBranch.Revenue,
-                    EmployeeRatingEffectDirection.Reward, 5, TimeSpan.FromDays(1),
+                    "REVENUE_CONFIRMED_EXTRA", 2, EmployeeRatingBranch.Revenue,
+                    EmployeeRatingEffectDirection.Reward, 5, TimeSpan.FromDays(2),
                     "Подтверждённый излишек"),
                 ["TIME_OTHER_VIOLATION"] = new(
-                    "TIME_OTHER_VIOLATION", 1, EmployeeRatingBranch.Time,
-                    EmployeeRatingEffectDirection.Penalty, 5, TimeSpan.FromDays(1),
+                    "TIME_OTHER_VIOLATION", 2, EmployeeRatingBranch.Time,
+                    EmployeeRatingEffectDirection.Penalty, 5, TimeSpan.FromDays(2),
                     "Подтверждённое нарушение правил")
             };
 

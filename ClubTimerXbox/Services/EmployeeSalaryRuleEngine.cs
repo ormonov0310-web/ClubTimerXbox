@@ -28,20 +28,26 @@ namespace ClubTimerXbox.Services
                                item.EffectiveFrom <= at &&
                                at < item.EffectiveUntil)
                 .ToList();
-            var penalties = activeEvents
-                .Where(item => item.Direction == EmployeeRatingEffectDirection.Penalty)
-                .Select(item => Math.Clamp(item.TargetPercent, 0, 120))
-                .ToList();
-            if (penalties.Count > 0)
-                return Math.Min(Math.Clamp(basePercent, 0, 120), penalties.Min());
-
-            var rewards = activeEvents
+            int rewardPercent = activeEvents
                 .Where(item => item.Direction == EmployeeRatingEffectDirection.Reward)
-                .Select(item => Math.Clamp(item.TargetPercent, 0, 120))
-                .ToList();
-            return rewards.Count > 0
-                ? Math.Max(Math.Clamp(basePercent, 0, 120), rewards.Max())
-                : Math.Clamp(basePercent, 0, 120);
+                .Sum(ResolveChangePercent);
+            int penaltyPercent = activeEvents
+                .Where(item => item.Direction == EmployeeRatingEffectDirection.Penalty)
+                .Sum(ResolveChangePercent);
+
+            return Math.Clamp(
+                Math.Clamp(basePercent, 0, 120) + rewardPercent - penaltyPercent,
+                0,
+                120);
+        }
+
+        private static int ResolveChangePercent(EmployeeRatingEvent item)
+        {
+            if (item.ChangePercent > 0)
+                return item.ChangePercent;
+
+            int baseAtCreation = Math.Clamp(item.BasePercentAtCreation, 0, 120);
+            return Math.Abs(Math.Clamp(item.TargetPercent, 0, 120) - baseAtCreation);
         }
 
         public static int CalculateOverallRating(int timePercent, int revenuePercent)

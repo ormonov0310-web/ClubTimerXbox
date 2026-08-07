@@ -135,6 +135,57 @@
                                 Margin="0,0,8,0"
                                 Click="CurrentEmployeeButton_Click"/>
 
+                        <Grid x:Name="EmployeeRatingLikeHost"
+                              Width="46"
+                              Height="34"
+                              Margin="0,0,8,0"
+                              Opacity="0"
+                              IsHitTestVisible="False"
+                              ClipToBounds="False">
+                            <Ellipse x:Name="EmployeeRatingLikeRing"
+                                     Width="28"
+                                     Height="28"
+                                     Stroke="#86EFAC"
+                                     StrokeThickness="1.5"
+                                     Opacity="0"
+                                     HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"
+                                     RenderTransformOrigin="0.5,0.5">
+                                <Ellipse.RenderTransform>
+                                    <ScaleTransform x:Name="EmployeeRatingLikeRingScale"
+                                                    ScaleX="0.5"
+                                                    ScaleY="0.5"/>
+                                </Ellipse.RenderTransform>
+                            </Ellipse>
+
+                            <TextBlock x:Name="EmployeeRatingLikeGlyph"
+                                       Text="&#xE8E1;"
+                                       FontFamily="Segoe MDL2 Assets"
+                                       FontSize="24"
+                                       Foreground="#4ADE80"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <TextBlock.Effect>
+                                    <DropShadowEffect Color="#4ADE80"
+                                                      BlurRadius="12"
+                                                      ShadowDepth="0"
+                                                      Opacity="0.8"/>
+                                </TextBlock.Effect>
+                                <TextBlock.RenderTransform>
+                                    <TransformGroup>
+                                        <ScaleTransform x:Name="EmployeeRatingLikeGlyphScale"
+                                                        ScaleX="0.55"
+                                                        ScaleY="0.55"/>
+                                        <RotateTransform x:Name="EmployeeRatingLikeGlyphRotate"
+                                                         Angle="-12"/>
+                                        <TranslateTransform x:Name="EmployeeRatingLikeGlyphMove"
+                                                            Y="6"/>
+                                    </TransformGroup>
+                                </TextBlock.RenderTransform>
+                            </TextBlock>
+                        </Grid>
+
                         <Button x:Name="PlacesViewButton"
                                 Content="ТВ / Рули"
                                 Width="110"

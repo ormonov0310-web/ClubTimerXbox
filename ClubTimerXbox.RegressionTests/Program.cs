@@ -17,7 +17,9 @@ internal sealed class EmployeeSalaryRuleTestSuite
     public void Run()
     {
         Test("overall rating rounds .5 upward", OverallRatingRounding);
-        Test("strongest overlapping penalty wins", StrongestPenaltyWins);
+        Test("overlapping penalties add together", OverlappingPenaltiesAdd);
+        Test("overlapping rewards add together", OverlappingRewardsAdd);
+        Test("expired event leaves the longer event active", ExpiredEventLeavesLongerEventActive);
         Test("time and revenue ratings stay independent", BranchesStayIndependent);
         Test("forgiveness preserves past and restores future", ForgivenessIsProspective);
         Test("rating changes only future game earnings", RatingChangeIsProspective);
@@ -26,9 +28,10 @@ internal sealed class EmployeeSalaryRuleTestSuite
         Test("rating is capped at 120 percent", RatingCap);
         Test("closed month archive detects later changes", ArchiveDetectsTampering);
         Test("raw history deletion waits six months", ArchiveRetentionGate);
-        Test("penalty never raises a lower base rating", PenaltyNeverRaisesBase);
+        Test("penalty reduces a lower base rating by its own value", PenaltyReducesLowerBase);
         Test("reward raises rating and expiry restores base", RewardExpiresWithoutReverseMath);
-        Test("penalty wins over overlapping reward", PenaltyWinsReward);
+        Test("overlapping reward and penalty use their net value", RewardAndPenaltyNet);
+        Test("automatic rating rule durations are doubled in version two", AutomaticRuleDurationsAreDoubled);
         Test("opening penalty uses current 50 som steps", OpeningPenaltySteps);
         Test("one-minute late session does not earn bonus", LateSessionRequiresTwentyMinutes);
         Test("unattended timer follows 01:00 and last client", UnattendedTimerFollowsLastClient);
@@ -45,16 +48,42 @@ internal sealed class EmployeeSalaryRuleTestSuite
         Equal(96, EmployeeSalaryRuleEngine.CalculateOverallRating(91, 100), "overall");
     }
 
-    private void StrongestPenaltyWins()
+    private void OverlappingPenaltiesAdd()
     {
         var profile = Profile(100, 100);
         var events = new[]
         {
-            Event(EmployeeRatingBranch.Time, 90, Start, Start.AddDays(3)),
-            Event(EmployeeRatingBranch.Time, 80, Start.AddHours(1), Start.AddDays(1))
+            Event(EmployeeRatingBranch.Time, 97, Start, Start.AddDays(1)),
+            Event(EmployeeRatingBranch.Time, 95, Start.AddHours(1), Start.AddDays(3))
         };
-        Equal(80, EmployeeSalaryRuleEngine.ResolveRating(
-            profile, events, EmployeeRatingBranch.Time, Start.AddHours(2)), "strongest");
+        Equal(92, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, events, EmployeeRatingBranch.Time, Start.AddHours(2)), "sum");
+    }
+
+    private void OverlappingRewardsAdd()
+    {
+        var profile = Profile(100, 100);
+        var events = new[]
+        {
+            Event(EmployeeRatingBranch.Time, 103, Start, Start.AddDays(1), EmployeeRatingEffectDirection.Reward),
+            Event(EmployeeRatingBranch.Time, 105, Start.AddHours(1), Start.AddDays(3), EmployeeRatingEffectDirection.Reward)
+        };
+        Equal(108, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, events, EmployeeRatingBranch.Time, Start.AddHours(2)), "sum");
+    }
+
+    private void ExpiredEventLeavesLongerEventActive()
+    {
+        var profile = Profile(100, 100);
+        var events = new[]
+        {
+            Event(EmployeeRatingBranch.Time, 97, Start, Start.AddDays(1)),
+            Event(EmployeeRatingBranch.Time, 95, Start, Start.AddDays(3))
+        };
+        Equal(92, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, events, EmployeeRatingBranch.Time, Start.AddHours(12)), "first day");
+        Equal(95, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, events, EmployeeRatingBranch.Time, Start.AddDays(2)), "second day");
     }
 
     private void BranchesStayIndependent()
@@ -155,7 +184,7 @@ internal sealed class EmployeeSalaryRuleTestSuite
             profile, Array.Empty<EmployeeRatingEvent>(), EmployeeRatingBranch.Time, Start), "cap");
     }
 
-    private void PenaltyNeverRaisesBase()
+    private void PenaltyReducesLowerBase()
     {
         var profile = Profile(90, 100);
         var penalty = Event(
@@ -164,8 +193,8 @@ internal sealed class EmployeeSalaryRuleTestSuite
             Start,
             Start.AddDays(1),
             EmployeeRatingEffectDirection.Penalty);
-        Equal(90, EmployeeSalaryRuleEngine.ResolveRating(
-            profile, new[] { penalty }, EmployeeRatingBranch.Time, Start.AddHours(1)), "penalty cap");
+        Equal(85, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, new[] { penalty }, EmployeeRatingBranch.Time, Start.AddHours(1)), "penalty value");
     }
 
     private void RewardExpiresWithoutReverseMath()
@@ -183,16 +212,40 @@ internal sealed class EmployeeSalaryRuleTestSuite
             profile, new[] { reward }, EmployeeRatingBranch.Time, Start.AddHours(13)), "expired");
     }
 
-    private void PenaltyWinsReward()
+    private void RewardAndPenaltyNet()
     {
         var profile = Profile(100, 100);
         var events = new[]
         {
-            Event(EmployeeRatingBranch.Time, 105, Start, Start.AddDays(1), EmployeeRatingEffectDirection.Reward),
-            Event(EmployeeRatingBranch.Time, 97, Start, Start.AddHours(6), EmployeeRatingEffectDirection.Penalty)
+            Event(EmployeeRatingBranch.Time, 103, Start, Start.AddDays(1), EmployeeRatingEffectDirection.Reward),
+            Event(EmployeeRatingBranch.Time, 95, Start, Start.AddHours(6), EmployeeRatingEffectDirection.Penalty)
         };
-        Equal(97, EmployeeSalaryRuleEngine.ResolveRating(
-            profile, events, EmployeeRatingBranch.Time, Start.AddHours(1)), "penalty priority");
+        Equal(98, EmployeeSalaryRuleEngine.ResolveRating(
+            profile, events, EmployeeRatingBranch.Time, Start.AddHours(1)), "net value");
+    }
+
+    private void AutomaticRuleDurationsAreDoubled()
+    {
+        var expected = new Dictionary<string, TimeSpan>
+        {
+            ["TIME_FIRST_OPEN_PUNCTUAL"] = TimeSpan.FromHours(24),
+            ["TIME_FIRST_OPEN_SLIGHTLY_LATE"] = TimeSpan.FromHours(12),
+            ["TIME_FIRST_OPEN_LATE"] = TimeSpan.FromHours(24),
+            ["TIME_PC_LEFT_UNATTENDED"] = TimeSpan.FromDays(4),
+            ["TIME_EXPIRED_TV_UNATTENDED"] = TimeSpan.FromDays(2),
+            ["TIME_LATE_CLIENT_REWARD"] = TimeSpan.FromDays(2),
+            ["REVENUE_CONFIRMED_LOSS_SMALL"] = TimeSpan.FromDays(4),
+            ["REVENUE_CONFIRMED_LOSS_LARGE"] = TimeSpan.FromDays(4),
+            ["REVENUE_CONFIRMED_EXTRA"] = TimeSpan.FromDays(2),
+            ["TIME_OTHER_VIOLATION"] = TimeSpan.FromDays(2)
+        };
+
+        foreach (var pair in expected)
+        {
+            EmployeeRatingRuleDefinition rule = EmployeeRatingRuleCatalog.Get(pair.Key);
+            Equal(2, rule.Version, $"{pair.Key} version");
+            Equal(pair.Value, rule.Duration, $"{pair.Key} duration");
+        }
     }
 
     private void OpeningPenaltySteps()
@@ -289,6 +342,8 @@ internal sealed class EmployeeSalaryRuleTestSuite
         EmployeeName = "Test",
         Branch = branch,
         Direction = direction,
+        ChangePercent = Math.Abs(target - 100),
+        BasePercentAtCreation = 100,
         TargetPercent = target,
         EffectiveFrom = from,
         ScheduledUntil = until
@@ -598,10 +653,14 @@ internal sealed class BusinessCalendarTestSuite
         Test("Убыток уменьшает накопленный доход владельца", LossReducesRetainedIncome);
         Test("Миграционный снимок не удваивает прибыль месяца", ActivationSnapshotPreventsDoubleProfit);
         Test("Отрицательный остаток сотрудника переносится", NegativeEmployeeBalanceSurvivesClose);
+        Test("Снятие владельца сначала использует текущий месяц", OwnerWithdrawalUsesCurrentMonthFirst);
+        Test("Снятие владельца затем использует переходящий остаток", OwnerWithdrawalThenUsesCarriedBalance);
+        Test("Прошлый месяц снимает только перенесённый остаток", OwnerWithdrawalCarryOnlyUsesPreviousMonth);
+        Test("Снятие сверх физически доступной суммы запрещено", OwnerWithdrawalOverBalanceIsBlocked);
 #if DEBUG
         Test("DEBUG-стенд полностью изолирован от Firebase и AppData", DebugHarnessIsIsolated);
         Test("Выплата зарплаты физически уменьшает выбранную кассу", SalaryPaymentMovesMoney);
-        Test("Вывод владельца ограничен закрытым доходом", OwnerWithdrawalUsesRetainedIncome);
+        Test("Вывод владельца не ограничен закрытой прибылью", OwnerWithdrawalCanPrecedeMonthClose);
 #endif
 
         Console.WriteLine();
@@ -818,6 +877,83 @@ internal sealed class BusinessCalendarTestSuite
         Equal(16000, state.RetainedOwnerIncome, "накопленный доход");
     }
 
+    private void OwnerWithdrawalUsesCurrentMonthFirst()
+    {
+        OwnerWithdrawalAvailability availability =
+            OwnerWithdrawalAvailability.FromBalances(2000, 1500);
+        Equal(500, availability.CurrentMonthAmount, "деньги сентября");
+        Equal(1500, availability.CarriedAmount, "остаток августа");
+
+        IReadOnlyList<OwnerWithdrawalAllocation> allocations =
+            OwnerWithdrawalAllocator.Allocate(
+                500,
+                availability,
+                "2026-09",
+                "2026-08");
+        Equal(1, allocations.Count, "количество проводок");
+        Equal("2026-09", allocations[0].SourceMonthKey, "месяц проводки");
+        Equal(500, allocations[0].Amount, "сумма сентября");
+        True(!allocations[0].IsCarriedBalance, "текущий источник");
+    }
+
+    private void OwnerWithdrawalThenUsesCarriedBalance()
+    {
+        OwnerWithdrawalAvailability availability =
+            OwnerWithdrawalAvailability.FromBalances(2000, 1500);
+        IReadOnlyList<OwnerWithdrawalAllocation> allocations =
+            OwnerWithdrawalAllocator.Allocate(
+                2000,
+                availability,
+                "2026-09",
+                "2026-08");
+
+        Equal(2, allocations.Count, "количество проводок");
+        Equal("2026-09", allocations[0].SourceMonthKey, "текущий месяц");
+        Equal(500, allocations[0].Amount, "часть сентября");
+        Equal("2026-08", allocations[1].SourceMonthKey, "месяц остатка");
+        Equal(1500, allocations[1].Amount, "часть остатка");
+        True(allocations[1].IsCarriedBalance, "переходящий источник");
+    }
+
+    private void OwnerWithdrawalOverBalanceIsBlocked()
+    {
+        OwnerWithdrawalAvailability availability =
+            OwnerWithdrawalAvailability.FromBalances(2000, 1500);
+        bool blocked = false;
+        try
+        {
+            OwnerWithdrawalAllocator.Allocate(
+                2001,
+                availability,
+                "2026-09",
+                "2026-08");
+        }
+        catch (InvalidOperationException)
+        {
+            blocked = true;
+        }
+
+        True(blocked, "лимит физического баланса");
+    }
+
+    private void OwnerWithdrawalCarryOnlyUsesPreviousMonth()
+    {
+        OwnerWithdrawalAvailability availability =
+            OwnerWithdrawalAvailability.FromBalances(2000, 1500);
+        IReadOnlyList<OwnerWithdrawalAllocation> allocations =
+            OwnerWithdrawalAllocator.Allocate(
+                1000,
+                availability,
+                "2026-09",
+                "2026-08",
+                carriedOnly: true);
+
+        Equal(1, allocations.Count, "количество проводок");
+        Equal("2026-08", allocations[0].SourceMonthKey, "прошлый месяц");
+        Equal(1000, allocations[0].Amount, "часть остатка");
+        True(allocations[0].IsCarriedBalance, "только переходящий источник");
+    }
+
 #if DEBUG
     private void DebugHarnessIsIsolated()
     {
@@ -849,7 +985,7 @@ internal sealed class BusinessCalendarTestSuite
         Equal(10000, harness.State.CashlessBalance, "безнал не изменился");
     }
 
-    private void OwnerWithdrawalUsesRetainedIncome()
+    private void OwnerWithdrawalCanPrecedeMonthClose()
     {
         using var harness = new BusinessScenarioHarness(
             new DateTime(2026, 8, 1, 7, 0, 0));
@@ -859,16 +995,9 @@ internal sealed class BusinessCalendarTestSuite
         Equal(400, harness.State.RetainedOwnerIncome, "остаток дохода");
         Equal(9400, harness.State.CashlessBalance, "остаток безнала");
 
-        bool blocked = false;
-        try
-        {
-            harness.WithdrawOwnerIncome(401, "Наличные");
-        }
-        catch (InvalidOperationException)
-        {
-            blocked = true;
-        }
-        True(blocked, "сверхдоход заблокирован");
+        harness.WithdrawOwnerIncome(401, "Наличные");
+        Equal(-1, harness.State.RetainedOwnerIncome, "аванс открытого месяца");
+        Equal(9599, harness.State.CashBalance, "наличка после аванса");
     }
 #endif
 

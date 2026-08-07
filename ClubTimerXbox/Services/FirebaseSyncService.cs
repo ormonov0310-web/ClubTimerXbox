@@ -574,6 +574,14 @@ namespace ClubTimerXbox.Services
                     "Безнал",
                     nextMonthStart
                 );
+                OwnerWithdrawalAvailability ownerCashAvailabilityMonth =
+                    OwnerWithdrawalAvailability.FromBalances(
+                        ownerAvailableCashBalanceMonth,
+                        openingCashBalanceMonth);
+                OwnerWithdrawalAvailability ownerCashlessAvailabilityMonth =
+                    OwnerWithdrawalAvailability.FromBalances(
+                        ownerAvailableCashlessBalanceMonth,
+                        openingCashlessBalanceMonth);
 
                 var expenseCategories = CashService.GetDefaultExpenseCategories()
                     .Where(IsOwnerReportExpenseCategory)
@@ -810,6 +818,10 @@ namespace ClubTimerXbox.Services
                         ownerAvailableCashBalanceMonth,
                         ownerAvailableCashlessBalanceMonth,
                         ownerAvailableMoneyBalanceMonth = ownerAvailableCashBalanceMonth + ownerAvailableCashlessBalanceMonth,
+                        ownerCurrentCashAvailableMonth = ownerCashAvailabilityMonth.CurrentMonthAmount,
+                        ownerCurrentCashlessAvailableMonth = ownerCashlessAvailabilityMonth.CurrentMonthAmount,
+                        ownerCarriedCashAvailableMonth = ownerCashAvailabilityMonth.CarriedAmount,
+                        ownerCarriedCashlessAvailableMonth = ownerCashlessAvailabilityMonth.CarriedAmount,
                         cashlessVerifiedMonth,
                         expensesMonth,
                         cashExpenseMonth,
@@ -2036,7 +2048,7 @@ namespace ClubTimerXbox.Services
             return Math.Max(0, baseBalance - postMonthWithdrawals);
         }
 
-        private static int CalculateOwnerAvailableBalanceForPayment(
+        private static OwnerWithdrawalAvailability CalculateOwnerWithdrawalAvailabilityForPayment(
             DateTime monthStart,
             DateTime nextMonthStart,
             string paymentMethod)
@@ -2068,7 +2080,7 @@ namespace ClubTimerXbox.Services
                     "Наличные"
                 );
 
-                return Math.Max(0, available - opening);
+                return OwnerWithdrawalAvailability.FromBalances(available, opening);
             }
 
             if (paymentMethod.Equals("Безнал", StringComparison.OrdinalIgnoreCase))
@@ -2093,7 +2105,7 @@ namespace ClubTimerXbox.Services
                     "Безнал"
                 );
 
-                return Math.Max(0, available - opening);
+                return OwnerWithdrawalAvailability.FromBalances(available, opening);
             }
 
             throw new Exception("Для забора владельца выберите Наличные или Безнал.");
@@ -2354,6 +2366,14 @@ namespace ClubTimerXbox.Services
                 "Безнал",
                 nextMonthStart
             );
+            OwnerWithdrawalAvailability ownerCashAvailability =
+                OwnerWithdrawalAvailability.FromBalances(
+                    ownerAvailableCashBalance,
+                    openingCashBalance);
+            OwnerWithdrawalAvailability ownerCashlessAvailability =
+                OwnerWithdrawalAvailability.FromBalances(
+                    ownerAvailableCashlessBalance,
+                    openingCashlessBalance);
 
             var expenseRecords = BuildCashRecordItems(monthStart, nextMonthStart, "Расходы");
             var expensesByCategory = CashService
@@ -2425,6 +2445,10 @@ namespace ClubTimerXbox.Services
                     ownerAvailableCashBalanceMonth = ownerAvailableCashBalance,
                     ownerAvailableCashlessBalanceMonth = ownerAvailableCashlessBalance,
                     ownerAvailableMoneyBalanceMonth = ownerAvailableCashBalance + ownerAvailableCashlessBalance,
+                    ownerCurrentCashAvailableMonth = ownerCashAvailability.CurrentMonthAmount,
+                    ownerCurrentCashlessAvailableMonth = ownerCashlessAvailability.CurrentMonthAmount,
+                    ownerCarriedCashAvailableMonth = ownerCashAvailability.CarriedAmount,
+                    ownerCarriedCashlessAvailableMonth = ownerCashlessAvailability.CarriedAmount,
                     cashExpenseMonth = cashExpense,
                     cashlessExpenseMonth = cashlessExpense
                 },
@@ -3706,7 +3730,6 @@ namespace ClubTimerXbox.Services
             string title = string.IsNullOrWhiteSpace(command.Title)
                 ? expenseCategory
                 : command.Title.Trim();
-            string accountingMonthKey = "";
             string paymentMethod = NormalizePaymentMethod(command.PaymentMethod);
             bool isOwnerWithdrawal = expenseCategory.Equals(
                 "Владелец",
@@ -3719,42 +3742,51 @@ namespace ClubTimerXbox.Services
                     "OpeningBalance",
                     StringComparison.OrdinalIgnoreCase
                 );
-                accountingMonthKey = openingBalanceMode
-                    ? monthStart.AddMonths(-1).ToString("yyyy-MM")
-                    : monthStart.ToString("yyyy-MM");
+                OwnerWithdrawalAvailability availability =
+                    CalculateOwnerWithdrawalAvailabilityForPayment(
+                        monthStart,
+                        nextMonthStart,
+                        paymentMethod);
                 int available = openingBalanceMode
-                    ? CalculateOwnerOpeningBalanceAvailableForPayment(
-                        monthStart,
-                        nextMonthStart,
-                        paymentMethod
-                    )
-                    : CalculateOwnerAvailableBalanceForPayment(
-                        monthStart,
-                        nextMonthStart,
-                        paymentMethod
-                    );
-                available = Math.Min(
-                    available,
-                    Math.Max(0, BusinessAccountingService.RetainedOwnerIncome));
+                    ? availability.CarriedAmount
+                    : availability.TotalAmount;
 
                 if (command.Amount > available)
                 {
                     throw new Exception(
-                        $"Недостаточно остатка за {accountingMonthKey}. " +
+                        $"Недостаточно денег за {monthStart:yyyy-MM}. " +
                         $"Доступно: {available} сом, запрошено: {command.Amount} сом."
                     );
                 }
-            }
 
-            if (isOwnerWithdrawal)
-            {
-                BusinessAccountingService.WithdrawOwnerIncome(
-                    command.Amount,
-                    paymentMethod,
-                    accountingMonthKey,
-                    title,
-                    command.Description,
-                    $"firebase:{commandId}");
+                string currentMonthKey = monthStart.ToString("yyyy-MM");
+                string carriedMonthKey = monthStart.AddMonths(-1).ToString("yyyy-MM");
+                IReadOnlyList<OwnerWithdrawalAllocation> allocations =
+                    OwnerWithdrawalAllocator.Allocate(
+                        command.Amount,
+                        availability,
+                        currentMonthKey,
+                        carriedMonthKey,
+                        openingBalanceMode);
+                for (int index = 0; index < allocations.Count; index++)
+                {
+                    OwnerWithdrawalAllocation allocation = allocations[index];
+                    string sourceTitle = allocation.IsCarriedBalance
+                        ? "Владелец забрал остаток"
+                        : title;
+                    string sourceDescription =
+                        $"{command.Description}\n" +
+                        (allocation.IsCarriedBalance
+                            ? $"Источник: переходящий остаток {allocation.SourceMonthKey}."
+                            : $"Источник: доход {allocation.SourceMonthKey}.");
+                    BusinessAccountingService.WithdrawOwnerIncome(
+                        allocation.Amount,
+                        paymentMethod,
+                        allocation.SourceMonthKey,
+                        sourceTitle,
+                        sourceDescription,
+                        $"firebase:{commandId}:{index}");
+                }
                 return;
             }
 
@@ -3765,7 +3797,7 @@ namespace ClubTimerXbox.Services
                 amount: command.Amount,
                 paymentMethod: paymentMethod,
                 expenseCategory: expenseCategory,
-                accountingMonthKey: accountingMonthKey
+                accountingMonthKey: ""
             );
         }
 

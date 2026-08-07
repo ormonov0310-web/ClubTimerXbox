@@ -113,8 +113,8 @@ namespace ClubTimerXbox.Services
 
         public void WithdrawOwnerIncome(int amount, string paymentMethod = "Наличные")
         {
-            if (amount <= 0 || amount > Math.Max(0, State.RetainedOwnerIncome))
-                throw new InvalidOperationException("Insufficient retained owner income.");
+            if (amount <= 0)
+                throw new InvalidOperationException("Owner withdrawal must be positive.");
 
             if (paymentMethod == "Безнал")
             {

@@ -48,6 +48,7 @@ namespace ClubTimerXbox
             AppUpdateRuntimeGuard.MarkRunning();
             VisualThemeService.ThemeChanged += VisualThemeService_ThemeChanged;
             AppUpdateService.StateChanged += AppUpdateService_StateChanged;
+            InitializeEmployeeRatingLikeAnimation();
 
             UpdateCurrentEmployeeText();
 
@@ -105,6 +106,8 @@ namespace ClubTimerXbox
                 {
                     ShowExpiredAlarmWindowIfAllowed(expiredPlace);
                 }
+
+                ScheduleEmployeeRatingLike();
             };
 
             Closing += MainWindow_UpdateClosing;
@@ -125,6 +128,7 @@ namespace ClubTimerXbox
             _updateAnimationTimer.Stop();
             _tuyaRefreshTimer.Stop();
             _tuyaInactivityTimer.Stop();
+            _employeeRatingLikeDelayTimer.Stop();
 
             CloseAllAlarmWindows();
             SaveActivePlacesToStorage();
@@ -175,7 +179,9 @@ namespace ClubTimerXbox
                 if (updateRequested != true)
                 {
                     _allowWindowClose = true;
-                    Close();
+                    _ = Dispatcher.BeginInvoke(
+                        new Action(Close),
+                        DispatcherPriority.Background);
                     return;
                 }
 

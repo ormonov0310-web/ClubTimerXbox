@@ -51,7 +51,6 @@ namespace ClubTimerXbox
             updateButton.Click += (_, _) =>
             {
                 DialogResult = true;
-                Close();
             };
             panel.Children.Add(updateButton);
 
@@ -64,7 +63,6 @@ namespace ClubTimerXbox
             closeButton.Click += (_, _) =>
             {
                 DialogResult = false;
-                Close();
             };
             panel.Children.Add(closeButton);
 

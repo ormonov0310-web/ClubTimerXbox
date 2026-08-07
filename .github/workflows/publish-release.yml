@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Fixes repeated update downloads by releasing package files before verification, and adds automatic plus manual cleanup of obsolete update packages." `
+            -Notes "Adds flexible owner withdrawals, additive employee ratings with longer durations, a high-rating like animation, and clean exit when an update is ready." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,13 +66,15 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Fixes the repeated update-download loop caused by a locked temporary
-          package file. Download streams are now closed before SHA-256 verification
-          and package promotion.
+          Owner withdrawals now use current-month funds first and then carried
+          balances, independently for cash and cashless money.
 
-          Obsolete downloaded packages are removed automatically after a successful
-          update and can also be cleared manually from owner settings. The active
-          package, rollback backups and club data remain protected.
+          Active employee rating rewards and penalties now add together. New
+          automatic events use doubled durations, and employees above 100% receive
+          a like animation on login or shift change.
+
+          Choosing "Finish work" while an update is ready now closes the program
+          directly without a second warning or nested window-close error.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {

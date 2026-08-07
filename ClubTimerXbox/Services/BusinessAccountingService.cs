@@ -356,13 +356,6 @@ namespace ClubTimerXbox.Services
 
                 if (amount <= 0)
                     throw new ArgumentOutOfRangeException(nameof(amount));
-                int available = Math.Max(0, State.RetainedOwnerIncome);
-                if (amount > available)
-                {
-                    throw new InvalidOperationException(
-                        $"Closed owner income is {available}, requested {amount}.");
-                }
-
                 var transaction = new OwnerIncomeWithdrawalTransaction
                 {
                     OperationId = operationId,
