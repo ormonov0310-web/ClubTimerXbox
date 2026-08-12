@@ -19,8 +19,8 @@ namespace ClubTimerXbox.Services
             new Dictionary<string, EmployeeRatingRuleDefinition>(StringComparer.OrdinalIgnoreCase)
             {
                 ["TIME_FIRST_OPEN_PUNCTUAL"] = new(
-                    "TIME_FIRST_OPEN_PUNCTUAL", 2, EmployeeRatingBranch.Time,
-                    EmployeeRatingEffectDirection.Reward, 5, TimeSpan.FromHours(24),
+                    "TIME_FIRST_OPEN_PUNCTUAL", 3, EmployeeRatingBranch.Time,
+                    EmployeeRatingEffectDirection.Reward, 5, TimeSpan.FromHours(36),
                     "Пунктуальное открытие клуба"),
                 ["TIME_FIRST_OPEN_SLIGHTLY_LATE"] = new(
                     "TIME_FIRST_OPEN_SLIGHTLY_LATE", 2, EmployeeRatingBranch.Time,
@@ -39,9 +39,13 @@ namespace ClubTimerXbox.Services
                     EmployeeRatingEffectDirection.Penalty, 5, TimeSpan.FromDays(2),
                     "ТВ оставлен после окончания тарифа"),
                 ["TIME_LATE_CLIENT_REWARD"] = new(
-                    "TIME_LATE_CLIENT_REWARD", 2, EmployeeRatingBranch.Time,
-                    EmployeeRatingEffectDirection.Reward, 3, TimeSpan.FromDays(2),
+                    "TIME_LATE_CLIENT_REWARD", 3, EmployeeRatingBranch.Time,
+                    EmployeeRatingEffectDirection.Reward, 3, TimeSpan.FromDays(3),
                     "Работа с клиентом после 01:00"),
+                ["TIME_CONFIRMED_SHIFT_EXTRA"] = new(
+                    "TIME_CONFIRMED_SHIFT_EXTRA", 3, EmployeeRatingBranch.Time,
+                    EmployeeRatingEffectDirection.Reward, 3, TimeSpan.FromHours(36),
+                    "Подтверждённый излишек смены"),
                 ["REVENUE_CONFIRMED_LOSS_SMALL"] = new(
                     "REVENUE_CONFIRMED_LOSS_SMALL", 2, EmployeeRatingBranch.Revenue,
                     EmployeeRatingEffectDirection.Penalty, 3, TimeSpan.FromDays(4),
@@ -51,8 +55,8 @@ namespace ClubTimerXbox.Services
                     EmployeeRatingEffectDirection.Penalty, 5, TimeSpan.FromDays(4),
                     "Подтверждённая потеря свыше 100 сом"),
                 ["REVENUE_CONFIRMED_EXTRA"] = new(
-                    "REVENUE_CONFIRMED_EXTRA", 2, EmployeeRatingBranch.Revenue,
-                    EmployeeRatingEffectDirection.Reward, 5, TimeSpan.FromDays(2),
+                    "REVENUE_CONFIRMED_EXTRA", 3, EmployeeRatingBranch.Revenue,
+                    EmployeeRatingEffectDirection.Reward, 5, TimeSpan.FromDays(3),
                     "Подтверждённый излишек"),
                 ["TIME_OTHER_VIOLATION"] = new(
                     "TIME_OTHER_VIOLATION", 2, EmployeeRatingBranch.Time,

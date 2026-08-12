@@ -14,6 +14,8 @@ namespace ClubTimerXbox.Services
         private const string RenamedEmployeeId = "emp_b50acc8d89e3452486c3600a32b6188b";
         private const string PreviousEmployeeName = "\u041c\u0438\u0440\u0431\u0435\u043a";
         private const string CurrentEmployeeName = "\u041c\u0443\u0445\u0430\u043c\u043c\u0435\u0434";
+        private const int SalikhovIncorrectExtraAmount = 1330;
+        private const int SalikhovIncorrectFormalizedAmount = 28;
 
         private static readonly Guid IncorrectLossId =
             Guid.Parse("12f5de06-13c9-44a5-aac4-103435ad79c6");
@@ -35,6 +37,15 @@ namespace ClubTimerXbox.Services
 
         private static readonly Guid TelecomMirroredShortageId =
             Guid.Parse("10949a13-94a0-4bbb-8f68-b02e37fd8564");
+
+        private static readonly Guid SalikhovIncorrectExtraId =
+            Guid.Parse("d3d067c5-3446-476d-9731-d834354eaae0");
+
+        private static readonly Guid SalikhovCashlessShortageId =
+            Guid.Parse("02819463-ea62-4e0c-86dc-62d9cdf64a38");
+
+        private static readonly Guid SalikhovIncorrectAllocationId =
+            Guid.Parse("714c64e8-be5f-46f2-87f5-3463a4d7614b");
 
         private static readonly TelecomMirroredLoss[] TelecomMirroredLosses =
         {
@@ -68,7 +79,22 @@ namespace ClubTimerXbox.Services
             }
 
             if (clubId.Equals(EmployeeRenameClubId, StringComparison.OrdinalIgnoreCase))
+            {
                 ApplyEmployeeRenameRepair();
+                ApplySalikhovAccumulatedCashlessRepair();
+            }
+        }
+
+        private static void ApplySalikhovAccumulatedCashlessRepair()
+        {
+            CashReconciliationService.TryRepairKnownAccumulatedCashlessSnapshots(
+                SalikhovIncorrectExtraId,
+                SalikhovCashlessShortageId,
+                SalikhovIncorrectAllocationId,
+                SalikhovIncorrectExtraAmount,
+                SalikhovIncorrectFormalizedAmount,
+                CurrentEmployeeName
+            );
         }
 
         private static void ApplyTelecomSalaryRepair(string installationId)

@@ -165,7 +165,12 @@ namespace ClubTimerXbox.Services
                         ProductBonusAmount = item.ProductBonusAmount,
                         TimeRatingPercent = item.TimeRatingPercent,
                         RevenueRatingPercent = item.RevenueRatingPercent,
-                        OverallRatingPercent = item.OverallRatingPercent
+                        OverallRatingPercent = item.OverallRatingPercent,
+                        TimeRatingEarnedAmount = item.TimeRatingEarnedAmount,
+                        TimeRatingLostAmount = item.TimeRatingLostAmount,
+                        GameRatingEarnedAmount = item.GameRatingEarnedAmount,
+                        GameRatingLostAmount = item.GameRatingLostAmount,
+                        RatingFinancialEffectCaptured = true
                     }).ToList();
                 ledger.SalaryPolicyVersions = SalaryPolicyHistoryService.GetVersions(
                     period.StartInclusive,

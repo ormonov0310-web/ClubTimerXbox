@@ -110,6 +110,22 @@ namespace ClubTimerXbox.Models
 
         public bool RatingHasWarning { get; set; }
 
+        public int TimeRatingEarnedAmount { get; set; }
+
+        public int TimeRatingLostAmount { get; set; }
+
+        public int GameRatingEarnedAmount { get; set; }
+
+        public int GameRatingLostAmount { get; set; }
+
+        public int RatingEarnedAmount =>
+            TimeRatingEarnedAmount + GameRatingEarnedAmount;
+
+        public int RatingLostAmount =>
+            TimeRatingLostAmount + GameRatingLostAmount;
+
+        public int RatingNetAmount => RatingEarnedAmount - RatingLostAmount;
+
         public List<EmployeeRatingEvent> RatingEvents { get; set; } = new();
     }
 

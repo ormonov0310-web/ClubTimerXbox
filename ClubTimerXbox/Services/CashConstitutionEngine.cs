@@ -161,7 +161,8 @@ namespace ClubTimerXbox.Services
                 Array.Empty<Guid>(),
                 expectedAmount,
                 actualAmount,
-                note
+                note,
+                responsibleEmployeeName: responsibleEmployeeName
             );
             return result;
         }
@@ -439,6 +440,79 @@ namespace ClubTimerXbox.Services
                 0,
                 settled,
                 assignments,
+                checkpointNumber
+            );
+        }
+
+        public static CashAccountingResult RecordCheckpoint(
+            IList<CashReconciliationItem> items,
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            DateTime now,
+            long checkpointNumber,
+            string operationId,
+            int? actualCashAtCheckpoint,
+            int? actualCashlessAtCheckpoint)
+        {
+            Normalize(items, fromInclusive, toExclusive);
+            if (HasAppliedOperation(items, operationId))
+            {
+                return BuildResult(
+                    items,
+                    fromInclusive,
+                    toExclusive,
+                    null,
+                    0,
+                    0,
+                    0,
+                    0,
+                    Array.Empty<CashAccountingAssignment>()
+                );
+            }
+
+            foreach (var item in CurrentOpen(items, fromInclusive, toExclusive))
+            {
+                item.CheckpointNumber = checkpointNumber;
+                item.AmountAtCheckpoint = item.Amount;
+            }
+
+            int checkpointBreakdown = GetBreakdown(
+                items,
+                fromInclusive,
+                toExclusive
+            );
+            items.Add(new CashReconciliationItem
+            {
+                AccountingSchemaVersion = 3,
+                Id = Guid.NewGuid(),
+                InvestigationId = Guid.NewGuid(),
+                IsTechnicalEvent = true,
+                OperationId = operationId.Trim(),
+                CreatedAt = now,
+                Kind = CashReconciliationKind.Other,
+                Origin = CashReconciliationOrigin.CorrectionCheckpoint,
+                Status = CashReconciliationStatus.Resolved,
+                Stage = CashReconciliationStage.Ready,
+                Resolution = CashReconciliationResolution.InputCorrection,
+                CheckpointNumber = checkpointNumber,
+                AmountAtCheckpoint = checkpointBreakdown,
+                ExpectedAmount = actualCashAtCheckpoint ?? -1,
+                ActualAmount = actualCashlessAtCheckpoint ?? -1,
+                ResolvedAt = now,
+                ResolvedBy = "System",
+                ResolutionNote = "Cash baseline checkpoint."
+            });
+
+            return BuildResult(
+                items,
+                fromInclusive,
+                toExclusive,
+                null,
+                0,
+                0,
+                0,
+                0,
+                Array.Empty<CashAccountingAssignment>(),
                 checkpointNumber
             );
         }
@@ -864,6 +938,128 @@ namespace ClubTimerXbox.Services
                             : 0);
         }
 
+        public static bool TryRepairKnownAccumulatedCashlessSnapshots(
+            IList<CashReconciliationItem> items,
+            Guid extraId,
+            Guid shortageId,
+            Guid allocationId,
+            int incorrectExtraAmount,
+            int incorrectFormalizedAmount,
+            string employeeName)
+        {
+            var extra = items.FirstOrDefault(item => item.Id == extraId);
+            var shortage = items.FirstOrDefault(item => item.Id == shortageId);
+            if (extra == null || shortage == null)
+                return false;
+
+            var checkpoint = items.FirstOrDefault(item =>
+                item.IsTechnicalEvent &&
+                item.Origin == CashReconciliationOrigin.CorrectionCheckpoint &&
+                item.CheckpointNumber == extra.CheckpointNumber);
+            if (checkpoint == null || extra.CheckpointNumber <= 0)
+                return false;
+
+            bool alreadyRepaired =
+                extra.Kind == CashReconciliationKind.CashlessExtra &&
+                extra.Origin == CashReconciliationOrigin.BalanceRawDifference &&
+                extra.Status == CashReconciliationStatus.Resolved &&
+                extra.Amount == 0 &&
+                extra.ResolvedAmount == incorrectExtraAmount &&
+                extra.AmountAtCheckpoint == 0 &&
+                checkpoint.AmountAtCheckpoint == 0 &&
+                shortage.Kind == CashReconciliationKind.CashlessShortage &&
+                shortage.Origin == CashReconciliationOrigin.CashlessVerification &&
+                shortage.Status == CashReconciliationStatus.Resolved &&
+                shortage.Amount == 0 &&
+                shortage.ResolvedAmount + incorrectFormalizedAmount ==
+                    shortage.OriginalAmount &&
+                shortage.FormalizedAmount == incorrectFormalizedAmount &&
+                shortage.PostedFormalizedAmount == incorrectFormalizedAmount &&
+                shortage.LossAllocations.Any(item => item.Id == allocationId);
+            if (alreadyRepaired)
+                return true;
+
+            var allocation = shortage.LossAllocations.FirstOrDefault(item =>
+                item.Id == allocationId);
+            bool originalStateMatches =
+                extra.Kind == CashReconciliationKind.CashlessExtra &&
+                extra.Origin == CashReconciliationOrigin.BalanceRawDifference &&
+                extra.Status == CashReconciliationStatus.Open &&
+                extra.Amount == incorrectExtraAmount &&
+                extra.OriginalAmount == incorrectExtraAmount &&
+                extra.AmountAtCheckpoint == incorrectExtraAmount &&
+                (extra.ExtraContributions.Count == 0 ||
+                 extra.ExtraContributions.Sum(item => Math.Max(0, item.Amount)) ==
+                    incorrectExtraAmount) &&
+                checkpoint.AmountAtCheckpoint == incorrectExtraAmount &&
+                shortage.Kind == CashReconciliationKind.CashlessShortage &&
+                shortage.Origin == CashReconciliationOrigin.CashlessVerification &&
+                shortage.Status == CashReconciliationStatus.Resolved &&
+                shortage.Amount == 0 &&
+                shortage.FormalizedAmount == incorrectFormalizedAmount &&
+                shortage.PostedFormalizedAmount == incorrectFormalizedAmount &&
+                shortage.ResolvedAmount + incorrectFormalizedAmount ==
+                    shortage.OriginalAmount &&
+                allocation != null &&
+                allocation.Amount == incorrectFormalizedAmount &&
+                allocation.PostedAmount == incorrectFormalizedAmount &&
+                allocation.EmployeeName.Equals(
+                    employeeName,
+                    StringComparison.OrdinalIgnoreCase);
+            if (!originalStateMatches)
+                return false;
+
+            extra.ExtraContributions ??= new List<CashExtraContribution>();
+            if (extra.ExtraContributions.Count == 0)
+            {
+                extra.ExtraContributions.Add(new CashExtraContribution
+                {
+                    InvestigationId = extra.InvestigationId,
+                    CreatedAt = extra.CreatedAt,
+                    Kind = extra.Kind,
+                    Origin = extra.Origin,
+                    Stage = CashReconciliationStage.Ready,
+                    OriginalAmount = incorrectExtraAmount,
+                    Amount = 0,
+                    ResolvedAmount = incorrectExtraAmount
+                });
+            }
+            else
+            {
+                var contributions = extra.ExtraContributions
+                    .Where(item =>
+                        item.Origin == CashReconciliationOrigin.BalanceRawDifference &&
+                        item.Amount == incorrectExtraAmount)
+                    .ToList();
+                if (contributions.Count != 1)
+                    return false;
+
+                var contribution = contributions[0];
+                contribution.Amount = 0;
+                contribution.ResolvedAmount = Math.Max(
+                    contribution.ResolvedAmount,
+                    contribution.OriginalAmount
+                );
+            }
+
+            extra.Amount = 0;
+            extra.ResolvedAmount = incorrectExtraAmount;
+            extra.AmountAtCheckpoint = 0;
+            extra.Status = CashReconciliationStatus.Resolved;
+            extra.Stage = CashReconciliationStage.Ready;
+            extra.Resolution = CashReconciliationResolution.InputCorrection;
+            extra.ResolvedAt = extra.ResolvedAt ?? DateTime.Now;
+            extra.ResolvedBy = "Система";
+            extra.Note =
+                $"Ошибочный излишек {incorrectExtraAmount} сом закрыт после проверки " +
+                $"итоговой корректировки. Подтверждённый штраф " +
+                $"{incorrectFormalizedAmount} сом сохранён.";
+            extra.ResolutionNote =
+                "Технический излишек отменён без изменения подтверждённого штрафа.";
+            checkpoint.AmountAtCheckpoint = 0;
+            return true;
+        }
+
         public static bool HasCurrentCashlessVerification(
             IEnumerable<CashReconciliationItem> items,
             DateTime fromInclusive,
@@ -871,10 +1067,16 @@ namespace ClubTimerXbox.Services
             int expectedAmount,
             int actualAmount)
         {
+            DateTime latestCheckpointAt = GetLatestCheckpointTime(
+                items,
+                fromInclusive,
+                toExclusive
+            );
             var latestVerification = items
                 .Where(item =>
                     item.CreatedAt >= fromInclusive &&
                     item.CreatedAt < toExclusive &&
+                    item.CreatedAt > latestCheckpointAt &&
                     item.Origin == CashReconciliationOrigin.CashlessVerification &&
                     (item.IsTechnicalEvent ||
                      item.Kind == CashReconciliationKind.CashlessShortage ||
@@ -892,9 +1094,25 @@ namespace ClubTimerXbox.Services
                 item.CreatedAt > latestVerification.CreatedAt &&
                 item.CreatedAt < toExclusive &&
                 item.Origin == CashReconciliationOrigin.CashAcceptance &&
-                (item.IsTechnicalEvent ||
-                 item.Kind == CashReconciliationKind.CashShortage ||
-                 item.Kind == CashReconciliationKind.CashExtra));
+                   (item.IsTechnicalEvent ||
+                    item.Kind == CashReconciliationKind.CashShortage ||
+                    item.Kind == CashReconciliationKind.CashExtra));
+        }
+
+        private static DateTime GetLatestCheckpointTime(
+            IEnumerable<CashReconciliationItem> items,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            return items
+                .Where(item =>
+                    item.IsTechnicalEvent &&
+                    item.Origin == CashReconciliationOrigin.CorrectionCheckpoint &&
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive)
+                .Select(item => item.CreatedAt)
+                .DefaultIfEmpty(DateTime.MinValue)
+                .Max();
         }
 
         public static bool HasAppliedOperation(
@@ -1050,7 +1268,8 @@ namespace ClubTimerXbox.Services
             int expectedAmount,
             int actualAmount,
             string note,
-            string operationId = "")
+            string operationId = "",
+            string responsibleEmployeeName = "")
         {
             items.Add(new CashReconciliationItem
             {
@@ -1073,6 +1292,7 @@ namespace ClubTimerXbox.Services
                 CheckedByEmployeeName = origin == CashReconciliationOrigin.CashAcceptance
                     ? "Сотрудник"
                     : "Владелец",
+                ResponsibleEmployeeName = responsibleEmployeeName.Trim(),
                 Note = note.Trim(),
                 OperationId = operationId.Trim(),
                 ResolvedAt = now,

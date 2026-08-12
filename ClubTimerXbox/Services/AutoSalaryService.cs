@@ -129,14 +129,20 @@ namespace ClubTimerXbox.Services
             {
                 var input = employeeInputs[index];
 
-                int timeAmount = CalculateTimeAmount(
+                RatingAccrualBreakdown timeAccrual = CalculateTimeAccrual(
                     input,
                     monthStart,
                     nextMonthStart);
-                int gameAmount = CalculateGameRevenueAmount(
+                RatingAccrualBreakdown gameAccrual = CalculateGameRevenueAccrual(
                     input.EmployeeName,
                     monthStart,
                     nextMonthStart);
+                int timeAmount = timeAccrual.Amount;
+                int gameAmount = gameAccrual.Amount;
+                int timeRatingEarnedAmount = timeAccrual.EarnedAmount;
+                int timeRatingLostAmount = timeAccrual.LostAmount;
+                int gameRatingEarnedAmount = gameAccrual.EarnedAmount;
+                int gameRatingLostAmount = gameAccrual.LostAmount;
                 int productBonus = CalculateProductBonusAmount(
                     input.EmployeeName,
                     monthStart,
@@ -154,6 +160,13 @@ namespace ClubTimerXbox.Services
                     gross = closedPayroll.AccruedAmount + closedPayroll.BonusAmount;
                     losses = closedPayroll.PenaltyAmount;
                     paid = closedPayroll.PaidAmount;
+                    if (closedPayroll.RatingFinancialEffectCaptured)
+                    {
+                        timeRatingEarnedAmount = closedPayroll.TimeRatingEarnedAmount;
+                        timeRatingLostAmount = closedPayroll.TimeRatingLostAmount;
+                        gameRatingEarnedAmount = closedPayroll.GameRatingEarnedAmount;
+                        gameRatingLostAmount = closedPayroll.GameRatingLostAmount;
+                    }
                 }
 
                 int currentRemaining = gross - losses - paid;
@@ -206,6 +219,10 @@ namespace ClubTimerXbox.Services
                     RevenueRatingPercent = rating.RevenuePercent,
                     OverallRatingPercent = rating.OverallPercent,
                     RatingHasWarning = rating.HasWarning,
+                    TimeRatingEarnedAmount = timeRatingEarnedAmount,
+                    TimeRatingLostAmount = timeRatingLostAmount,
+                    GameRatingEarnedAmount = gameRatingEarnedAmount,
+                    GameRatingLostAmount = gameRatingLostAmount,
                     RatingEvents = rating.History
                         .Where(item =>
                             item.EffectiveFrom < nextMonthStart &&
@@ -625,7 +642,7 @@ namespace ClubTimerXbox.Services
             return $"{NormalizeHour(hour):00}:00";
         }
 
-        private static int CalculateTimeAmount(
+        private static RatingAccrualBreakdown CalculateTimeAccrual(
             EmployeeSalaryInput input,
             DateTime monthStart,
             DateTime nextMonthStart)
@@ -689,22 +706,36 @@ namespace ClubTimerXbox.Services
                     : protectedExtraHours;
             }
 
-            int amount = groups.Sum(group =>
+            int amount = 0;
+            int earnedAmount = 0;
+            int lostAmount = 0;
+            foreach (var group in groups)
             {
                 var settings = new AutoSalarySettings
                 {
                     TimeMonthlyFundAmount = group.Key.MonthlyFund,
                     TimeMonthlyPlannedHours = group.Key.PlannedHours
                 };
-                return (int)Math.Round(EmployeeSalaryRuleEngine.CalculateTimeAccrual(
+                double baseline = EmployeeSalaryRuleEngine.CalculateTimeAccrual(
                     group.Value,
                     settings,
-                    group.Key.Rating));
-            });
-            return Math.Max(0, amount);
+                    100);
+                RatingFinancialEffect effect =
+                    EmployeeSalaryRuleEngine.CalculateRatingFinancialEffect(
+                        baseline,
+                        group.Key.Rating);
+                amount += effect.ActualAmount;
+                earnedAmount += effect.EarnedAmount;
+                lostAmount += effect.LostAmount;
+            }
+
+            return new RatingAccrualBreakdown(
+                Math.Max(0, amount),
+                earnedAmount,
+                lostAmount);
         }
 
-        private static int CalculateGameRevenueAmount(
+        private static RatingAccrualBreakdown CalculateGameRevenueAccrual(
             string employeeName,
             DateTime fromInclusive,
             DateTime toExclusive)
@@ -748,6 +779,9 @@ namespace ClubTimerXbox.Services
                 });
 
             double amount = 0;
+            double baselineAmount = 0;
+            double earnedAmount = 0;
+            double lostAmount = 0;
             foreach (var group in groups)
             {
                 int revenue = group.Sum(item => item.Amount);
@@ -755,10 +789,30 @@ namespace ClubTimerXbox.Services
                 int salaryBeforeRating = Percent(
                     Math.Max(0, revenue - reserve),
                     group.Key.SalaryFundPercent);
-                amount += salaryBeforeRating * group.Key.Rating / 100.0;
+                double ratedAmount = salaryBeforeRating * group.Key.Rating / 100.0;
+                amount += ratedAmount;
+                baselineAmount += salaryBeforeRating;
+                double difference = ratedAmount - salaryBeforeRating;
+                if (difference >= 0)
+                    earnedAmount += difference;
+                else
+                    lostAmount += -difference;
             }
 
-            return Math.Max(0, (int)Math.Round(amount));
+            int actual = Math.Max(0, (int)Math.Round(amount));
+            int baseline = Math.Max(0, (int)Math.Round(baselineAmount));
+            int earned = Math.Max(0, (int)Math.Round(earnedAmount));
+            int lost = Math.Max(0, (int)Math.Round(lostAmount));
+
+            // Separate rounding of gains and losses may differ by one som from
+            // the already fixed salary amount. Keep the displayed net exact.
+            int reconciliation = (actual - baseline) - (earned - lost);
+            if (reconciliation > 0)
+                earned += reconciliation;
+            else if (reconciliation < 0)
+                lost += -reconciliation;
+
+            return new RatingAccrualBreakdown(actual, earned, lost);
         }
 
         private static int CalculateProductBonusAmount(
@@ -1017,5 +1071,10 @@ namespace ClubTimerXbox.Services
             int MonthlyFund,
             int PlannedHours,
             int Rating);
+
+        private readonly record struct RatingAccrualBreakdown(
+            int Amount,
+            int EarnedAmount,
+            int LostAmount);
     }
 }

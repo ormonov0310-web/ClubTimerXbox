@@ -7,6 +7,14 @@ using ClubTimerXbox.Models;
 
 namespace ClubTimerXbox.Services
 {
+    public sealed record ConfirmedShiftExtraReward(
+        Guid InvestigationId,
+        string EmployeeName,
+        int CashDifference,
+        int CashlessDifference,
+        int NetExtraAmount,
+        DateTime ConfirmedAt);
+
     public static class EmployeeRatingService
     {
         private static readonly object Gate = new();
@@ -130,9 +138,136 @@ namespace ClubTimerXbox.Services
                     changed = true;
                 }
 
+                foreach (var reward in FindConfirmedShiftExtraRewards(
+                             CashReconciliationService.Items))
+                {
+                    string sourceId =
+                        "confirmed-shift-extra:" + reward.InvestigationId.ToString("N");
+                    if (State.Events.Any(item => item.SourceId.Equals(
+                            sourceId,
+                            StringComparison.OrdinalIgnoreCase)))
+                    {
+                        continue;
+                    }
+
+                    var employee = EmployeeService.FindByName(reward.EmployeeName);
+                    if (employee == null)
+                        continue;
+
+                    AddRuleEventUnsafe(
+                        employee,
+                        EmployeeRatingRuleCatalog.Get("TIME_CONFIRMED_SHIFT_EXTRA"),
+                        sourceId,
+                        "ConfirmedShiftExtra",
+                        "Подтверждённый излишек смены",
+                        $"Приёмка и сверка подтвердили излишек {reward.NetExtraAmount} сом. " +
+                        $"Наличка: {reward.CashDifference:+#;-#;0}, " +
+                        $"безнал: {reward.CashlessDifference:+#;-#;0} сом.",
+                        reward.ConfirmedAt);
+                    changed = true;
+                }
+
                 if (changed)
                     Save();
             }
+        }
+
+        public static IReadOnlyList<ConfirmedShiftExtraReward>
+            FindConfirmedShiftExtraRewards(
+                IEnumerable<CashReconciliationItem> sourceItems)
+        {
+            var items = sourceItems.ToList();
+            var result = new List<ConfirmedShiftExtraReward>();
+            var acceptances = items
+                .Where(item =>
+                    item.IsTechnicalEvent &&
+                    item.Origin == CashReconciliationOrigin.CashAcceptance &&
+                    item.InvestigationId != Guid.Empty)
+                .ToList();
+            var rewardedInvestigations = new HashSet<Guid>();
+
+            foreach (var verification in items
+                         .Where(item =>
+                             item.IsTechnicalEvent &&
+                             item.Origin == CashReconciliationOrigin.CashlessVerification)
+                         .OrderBy(item => item.CreatedAt)
+                         .ThenBy(item => item.Id))
+            {
+                var linkedAcceptances = acceptances
+                    .Where(item =>
+                        item.CreatedAt <= verification.CreatedAt &&
+                        (item.InvestigationId == verification.InvestigationId ||
+                         (verification.LinkedInvestigationIds ?? new List<Guid>())
+                            .Contains(item.InvestigationId)))
+                    .ToList();
+
+                // A shared cashless check cannot prove which of several
+                // acceptances earned the reward.
+                if (linkedAcceptances.Count != 1)
+                    continue;
+
+                var acceptance = linkedAcceptances[0];
+                if (!rewardedInvestigations.Add(acceptance.InvestigationId))
+                    continue;
+
+                int cashDifference = acceptance.ActualAmount - acceptance.ExpectedAmount;
+                if (cashDifference < -100)
+                    continue;
+
+                int cashlessDifference =
+                    verification.ActualAmount - verification.ExpectedAmount;
+                int netExtra = cashDifference + cashlessDifference;
+                if (netExtra < 50)
+                    continue;
+
+                string employeeName = ResolveCashAcceptanceEmployee(
+                    items,
+                    acceptance
+                );
+                if (string.IsNullOrWhiteSpace(employeeName))
+                    continue;
+
+                result.Add(new ConfirmedShiftExtraReward(
+                    acceptance.InvestigationId,
+                    employeeName,
+                    cashDifference,
+                    cashlessDifference,
+                    netExtra,
+                    verification.CreatedAt
+                ));
+            }
+
+            return result;
+        }
+
+        private static string ResolveCashAcceptanceEmployee(
+            IEnumerable<CashReconciliationItem> items,
+            CashReconciliationItem acceptance)
+        {
+            if (!string.IsNullOrWhiteSpace(acceptance.ResponsibleEmployeeName))
+                return acceptance.ResponsibleEmployeeName.Trim();
+
+            string responsible = items
+                .Where(item =>
+                    !item.IsTechnicalEvent &&
+                    item.InvestigationId == acceptance.InvestigationId &&
+                    item.Origin == CashReconciliationOrigin.CashAcceptance)
+                .Select(item => item.ResponsibleEmployeeName.Trim())
+                .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? "";
+            if (!string.IsNullOrWhiteSpace(responsible))
+                return responsible;
+
+            return items
+                .Where(item =>
+                    item.Kind == CashReconciliationKind.CashExtra ||
+                    item.Kind == CashReconciliationKind.CashlessExtra)
+                .SelectMany(item => item.ExtraContributions ??
+                    new List<CashExtraContribution>())
+                .Where(item =>
+                    item.InvestigationId == acceptance.InvestigationId &&
+                    item.Origin == CashReconciliationOrigin.CashAcceptance)
+                .Select(item => item.EmployeeName.Trim())
+                .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? "";
         }
 
         public static EmployeeRatingSnapshot GetSnapshot(

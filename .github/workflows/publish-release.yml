@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Adds flexible owner withdrawals, additive employee ratings with longer durations, a high-rating like animation, and clean exit when an update is ready." `
+            -Notes "Fixes sequential cash reconciliation, extends positive rating periods, rewards confirmed shift extras, and records the exact salary impact of ratings." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,15 +66,13 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Owner withdrawals now use current-month funds first and then carried
-          balances, independently for cash and cashless money.
+          Sequential cashless reconciliations now preserve only the real remaining
+          loss and cannot create a mirrored extra after final correction. Owner
+          checkpoints remain stable across later reconciliations and restarts.
 
-          Active employee rating rewards and penalties now add together. New
-          automatic events use doubled durations, and employees above 100% receive
-          a like animation on login or shift change.
-
-          Choosing "Finish work" while an update is ready now closes the program
-          directly without a second warning or nested window-close error.
+          Positive automatic rating periods are extended by 50 percent. A verified
+          shift extra can reward time rating, and the owner receives separate monthly
+          totals showing the actual salary gained or lost through time and game ratings.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {

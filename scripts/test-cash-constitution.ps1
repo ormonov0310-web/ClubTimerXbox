@@ -8,7 +8,9 @@ $projectPath = Join-Path `
 dotnet run `
     --project $projectPath `
     -c Debug `
-    -p:SkipCopyUpdater=true
+    -p:SkipCopyUpdater=true `
+    -- `
+    --cash
 
 if ($LASTEXITCODE -ne 0) {
     throw "Cash Constitution tests failed with exit code $LASTEXITCODE."

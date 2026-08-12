@@ -5,6 +5,14 @@ using ClubTimerXbox.Models;
 
 namespace ClubTimerXbox.Services
 {
+    public readonly record struct RatingFinancialEffect(
+        int ActualAmount,
+        int EarnedAmount,
+        int LostAmount)
+    {
+        public int NetAmount => EarnedAmount - LostAmount;
+    }
+
     public static class EmployeeSalaryRuleEngine
     {
         public static int ResolveRating(
@@ -88,6 +96,21 @@ namespace ClubTimerXbox.Services
             return productRevenue <= 0
                 ? 0
                 : productRevenue * Math.Clamp(settings.ProductBonusPercent, 0, 100) / 100.0;
+        }
+
+        public static RatingFinancialEffect CalculateRatingFinancialEffect(
+            double amountAtOneHundredPercent,
+            int ratingPercent)
+        {
+            double baseline = Math.Max(0, amountAtOneHundredPercent);
+            int baselineAmount = (int)Math.Round(baseline);
+            int actualAmount = (int)Math.Round(
+                baseline * Math.Clamp(ratingPercent, 0, 120) / 100.0);
+            int difference = actualAmount - baselineAmount;
+            return new RatingFinancialEffect(
+                actualAmount,
+                Math.Max(0, difference),
+                Math.Max(0, -difference));
         }
     }
 }

@@ -3,6 +3,12 @@ using ClubTimerXbox.Services;
 using ClubTimerUpdater;
 using System.Text.Json;
 
+if (args.Contains("--cash", StringComparer.OrdinalIgnoreCase))
+{
+    new CashConstitutionTestSuite().Run();
+    return;
+}
+
 var suite = new CashConstitutionTestSuite();
 suite.Run();
 new BusinessCalendarTestSuite().Run();
@@ -23,6 +29,7 @@ internal sealed class EmployeeSalaryRuleTestSuite
         Test("time and revenue ratings stay independent", BranchesStayIndependent);
         Test("forgiveness preserves past and restores future", ForgivenessIsProspective);
         Test("rating changes only future game earnings", RatingChangeIsProspective);
+        Test("rating financial effect keeps rewards and losses separate", RatingFinancialEffectIsExact);
         Test("club policy changes only future earnings", PolicyChangeIsProspective);
         Test("product bonus ignores employee rating", ProductBonusIgnoresRating);
         Test("rating is capped at 120 percent", RatingCap);
@@ -31,7 +38,8 @@ internal sealed class EmployeeSalaryRuleTestSuite
         Test("penalty reduces a lower base rating by its own value", PenaltyReducesLowerBase);
         Test("reward raises rating and expiry restores base", RewardExpiresWithoutReverseMath);
         Test("overlapping reward and penalty use their net value", RewardAndPenaltyNet);
-        Test("automatic rating rule durations are doubled in version two", AutomaticRuleDurationsAreDoubled);
+        Test("positive automatic ratings last 50 percent longer", PositiveRuleDurationsAreExtended);
+        Test("confirmed shift extra rewards all allowed cash combinations", ConfirmedShiftExtraQualification);
         Test("opening penalty uses current 50 som steps", OpeningPenaltySteps);
         Test("one-minute late session does not earn bonus", LateSessionRequiresTwentyMinutes);
         Test("unattended timer follows 01:00 and last client", UnattendedTimerFollowsLastClient);
@@ -119,6 +127,22 @@ internal sealed class EmployeeSalaryRuleTestSuite
         Equal(175d, earnedBefore, "old earning");
         Equal(157.5d, earnedAfter, "new earning");
         Equal(332.5d, earnedBefore + earnedAfter, "fixed total");
+    }
+
+    private void RatingFinancialEffectIsExact()
+    {
+        RatingFinancialEffect reward =
+            EmployeeSalaryRuleEngine.CalculateRatingFinancialEffect(1000, 108);
+        RatingFinancialEffect penalty =
+            EmployeeSalaryRuleEngine.CalculateRatingFinancialEffect(1000, 95);
+
+        Equal(1080, reward.ActualAmount, "rewarded actual amount");
+        Equal(80, reward.EarnedAmount, "rewarded extra amount");
+        Equal(0, reward.LostAmount, "rewarded lost amount");
+        Equal(950, penalty.ActualAmount, "penalized actual amount");
+        Equal(0, penalty.EarnedAmount, "penalized extra amount");
+        Equal(50, penalty.LostAmount, "penalized lost amount");
+        Equal(30, reward.NetAmount + penalty.NetAmount, "combined net effect");
     }
 
     private void PolicyChangeIsProspective()
@@ -224,28 +248,123 @@ internal sealed class EmployeeSalaryRuleTestSuite
             profile, events, EmployeeRatingBranch.Time, Start.AddHours(1)), "net value");
     }
 
-    private void AutomaticRuleDurationsAreDoubled()
+    private void PositiveRuleDurationsAreExtended()
     {
-        var expected = new Dictionary<string, TimeSpan>
+        var expected = new Dictionary<string, (int Version, TimeSpan Duration)>
         {
-            ["TIME_FIRST_OPEN_PUNCTUAL"] = TimeSpan.FromHours(24),
-            ["TIME_FIRST_OPEN_SLIGHTLY_LATE"] = TimeSpan.FromHours(12),
-            ["TIME_FIRST_OPEN_LATE"] = TimeSpan.FromHours(24),
-            ["TIME_PC_LEFT_UNATTENDED"] = TimeSpan.FromDays(4),
-            ["TIME_EXPIRED_TV_UNATTENDED"] = TimeSpan.FromDays(2),
-            ["TIME_LATE_CLIENT_REWARD"] = TimeSpan.FromDays(2),
-            ["REVENUE_CONFIRMED_LOSS_SMALL"] = TimeSpan.FromDays(4),
-            ["REVENUE_CONFIRMED_LOSS_LARGE"] = TimeSpan.FromDays(4),
-            ["REVENUE_CONFIRMED_EXTRA"] = TimeSpan.FromDays(2),
-            ["TIME_OTHER_VIOLATION"] = TimeSpan.FromDays(2)
+            ["TIME_FIRST_OPEN_PUNCTUAL"] = (3, TimeSpan.FromHours(36)),
+            ["TIME_FIRST_OPEN_SLIGHTLY_LATE"] = (2, TimeSpan.FromHours(12)),
+            ["TIME_FIRST_OPEN_LATE"] = (2, TimeSpan.FromHours(24)),
+            ["TIME_PC_LEFT_UNATTENDED"] = (2, TimeSpan.FromDays(4)),
+            ["TIME_EXPIRED_TV_UNATTENDED"] = (2, TimeSpan.FromDays(2)),
+            ["TIME_LATE_CLIENT_REWARD"] = (3, TimeSpan.FromDays(3)),
+            ["TIME_CONFIRMED_SHIFT_EXTRA"] = (3, TimeSpan.FromHours(36)),
+            ["REVENUE_CONFIRMED_LOSS_SMALL"] = (2, TimeSpan.FromDays(4)),
+            ["REVENUE_CONFIRMED_LOSS_LARGE"] = (2, TimeSpan.FromDays(4)),
+            ["REVENUE_CONFIRMED_EXTRA"] = (3, TimeSpan.FromDays(3)),
+            ["TIME_OTHER_VIOLATION"] = (2, TimeSpan.FromDays(2))
         };
 
         foreach (var pair in expected)
         {
             EmployeeRatingRuleDefinition rule = EmployeeRatingRuleCatalog.Get(pair.Key);
-            Equal(2, rule.Version, $"{pair.Key} version");
-            Equal(pair.Value, rule.Duration, $"{pair.Key} duration");
+            Equal(pair.Value.Version, rule.Version, $"{pair.Key} version");
+            Equal(pair.Value.Duration, rule.Duration, $"{pair.Key} duration");
         }
+    }
+
+    private void ConfirmedShiftExtraQualification()
+    {
+        var shortageCovered = QualifyConfirmedShiftExtra(-100, 150);
+        Equal(1, shortageCovered.Count, "-100 cash and +150 cashless");
+        Equal(50, shortageCovered.Single().NetExtraAmount, "covered net extra");
+
+        var cashExact = QualifyConfirmedShiftExtra(0, 50);
+        Equal(1, cashExact.Count, "zero cash difference and +50 cashless");
+
+        var cashExtra = QualifyConfirmedShiftExtra(101, -50);
+        Equal(1, cashExtra.Count, "+101 cash and -50 cashless");
+        Equal(51, cashExtra.Single().NetExtraAmount, "cash extra net");
+
+        var excessiveShortage = QualifyConfirmedShiftExtra(-101, 200);
+        Equal(0, excessiveShortage.Count, "cash shortage above 100 is rejected");
+
+        var belowThreshold = QualifyConfirmedShiftExtra(0, 49);
+        Equal(0, belowThreshold.Count, "net extra below 50 is rejected");
+
+        var ambiguous = new List<CashReconciliationItem>();
+        DateTime monthStart = new(2026, 8, 1);
+        DateTime nextMonthStart = monthStart.AddMonths(1);
+        CashConstitutionEngine.RecordCashAcceptance(
+            ambiguous,
+            monthStart,
+            nextMonthStart,
+            Start,
+            "Next employee",
+            "Employee 1",
+            1000,
+            1050,
+            "First acceptance"
+        );
+        CashConstitutionEngine.RecordCashAcceptance(
+            ambiguous,
+            monthStart,
+            nextMonthStart,
+            Start.AddSeconds(1),
+            "Next employee",
+            "Employee 1",
+            1000,
+            1050,
+            "Corrected acceptance"
+        );
+        CashConstitutionEngine.RecordCashlessVerification(
+            ambiguous,
+            monthStart,
+            nextMonthStart,
+            Start.AddMinutes(1),
+            2000,
+            2050,
+            "Employee 1",
+            "Shared verification"
+        );
+        Equal(
+            0,
+            EmployeeRatingService.FindConfirmedShiftExtraRewards(ambiguous).Count,
+            "one verification cannot reward two acceptances"
+        );
+    }
+
+    private static IReadOnlyList<ConfirmedShiftExtraReward>
+        QualifyConfirmedShiftExtra(
+            int cashDifference,
+            int cashlessDifference)
+    {
+        var items = new List<CashReconciliationItem>();
+        DateTime monthStart = new(2026, 8, 1);
+        DateTime nextMonthStart = monthStart.AddMonths(1);
+        CashConstitutionEngine.RecordCashAcceptance(
+            items,
+            monthStart,
+            nextMonthStart,
+            Start,
+            "Next employee",
+            "Employee 1",
+            expectedAmount: 1000,
+            actualAmount: 1000 + cashDifference,
+            note: "Acceptance"
+        );
+        CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            monthStart,
+            nextMonthStart,
+            Start.AddMinutes(1),
+            expectedAmount: 2000,
+            actualAmount: 2000 + cashlessDifference,
+            suspectedEmployeeName: "Employee 1",
+            note: "Cashless verification"
+        );
+
+        return EmployeeRatingService.FindConfirmedShiftExtraRewards(items);
     }
 
     private void OpeningPenaltySteps()
@@ -1074,6 +1193,9 @@ internal sealed class CashConstitutionTestSuite
 
     public void Run()
     {
+        Test("Successive cashless checks preserve the confirmed 28 som loss", SuccessiveCashlessChecksPreserveConfirmedLoss);
+        Test("Owner baseline records a zero checkpoint", OwnerBaselineRecordsZeroCheckpoint);
+        Test("Known accumulated snapshot incident is repaired once", KnownAccumulatedSnapshotIncidentIsRepairedOnce);
         Test("Связанная сверка полностью закрывает ошибку типа оплаты", PairedFullSettlement);
         Test("Связанная сверка закрывает только часть и оформляет остаток", PairedPartialSettlement);
         Test("Старый излишек не спасает подтверждённую новую недостачу", OldExtraDoesNotRescueConfirmedLoss);
@@ -1345,6 +1467,244 @@ internal sealed class CashConstitutionTestSuite
         Equal(-13, second.Breakdown, "Повторная корректировка");
         Equal(id, Open(items).Single(IsShortage).Id, "ID выжившей карты");
         Equal(0, first.Assignments.Count + second.Assignments.Count, "Штрафы");
+    }
+
+    private void SuccessiveCashlessChecksPreserveConfirmedLoss()
+    {
+        var items = NewLedger();
+        AddReadyShortage(
+            items,
+            284,
+            CashResponsibilityLevel.Suspected,
+            Now.AddMinutes(-1),
+            suspect: "Employee 1"
+        );
+
+        CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now,
+            17526,
+            17060,
+            "Employee 2",
+            "Initial shortage"
+        );
+        CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(1),
+            17526,
+            17560,
+            "",
+            "First transfer"
+        );
+        CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(2),
+            17526,
+            17860,
+            "",
+            "Second transfer"
+        );
+        var beforeCorrection = CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(3),
+            17526,
+            17880,
+            "",
+            "Final transfer"
+        );
+
+        Equal(-28, beforeCorrection.Breakdown, "Breakdown before correction");
+        Equal(466, Open(items).Single(IsShortage).Amount, "Recommended shortage");
+        Equal(438, Open(items).Single(IsExtra).Amount, "Extra before correction");
+
+        var correction = CashConstitutionEngine.ApplyCorrection(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(4),
+            checkpointNumber: 0
+        );
+        Equal(28, correction.Assignments.Sum(item => item.Amount), "Confirmed penalty");
+        Equal(0, correction.Breakdown, "Breakdown after correction");
+        Equal(
+            0,
+            CashConstitutionEngine.CalculateUnrepresentedDifference(
+                observedDifference: -28,
+                alreadyFormalizedLosses: 28,
+                representedCycleDifference: 0,
+                checkpointBreakdown: 0),
+            "No mirrored extra"
+        );
+    }
+
+    private void OwnerBaselineRecordsZeroCheckpoint()
+    {
+        var items = NewLedger();
+        items.Add(new CashReconciliationItem
+        {
+            AccountingSchemaVersion = 3,
+            Id = Guid.NewGuid(),
+            InvestigationId = Guid.NewGuid(),
+            IsTechnicalEvent = true,
+            CreatedAt = Now,
+            Kind = CashReconciliationKind.Other,
+            Origin = CashReconciliationOrigin.CorrectionCheckpoint,
+            Status = CashReconciliationStatus.Resolved,
+            Stage = CashReconciliationStage.Ready,
+            CheckpointNumber = 1,
+            AmountAtCheckpoint = 100
+        });
+        CashConstitutionEngine.RecordCheckpoint(
+            items,
+            MonthStart,
+            NextMonthStart,
+            Now.AddMinutes(1),
+            checkpointNumber: 2,
+            operationId: "owner-baseline",
+            actualCashAtCheckpoint: 100,
+            actualCashlessAtCheckpoint: 200
+        );
+
+        Equal(
+            0,
+            CashConstitutionEngine.GetLatestCheckpointBreakdown(
+                items,
+                MonthStart,
+                NextMonthStart),
+            "Latest checkpoint"
+        );
+    }
+
+    private void KnownAccumulatedSnapshotIncidentIsRepairedOnce()
+    {
+        Guid extraId = Guid.NewGuid();
+        Guid shortageId = Guid.NewGuid();
+        Guid allocationId = Guid.NewGuid();
+        const long checkpointNumber = 12345;
+        var items = NewLedger();
+        items.Add(new CashReconciliationItem
+        {
+            AccountingSchemaVersion = 3,
+            Id = extraId,
+            InvestigationId = Guid.NewGuid(),
+            CreatedAt = Now,
+            Kind = CashReconciliationKind.CashlessExtra,
+            Origin = CashReconciliationOrigin.BalanceRawDifference,
+            Status = CashReconciliationStatus.Open,
+            Stage = CashReconciliationStage.Ready,
+            Amount = 1330,
+            OriginalAmount = 1330,
+            AmountAtCheckpoint = 1330,
+            CheckpointNumber = checkpointNumber,
+            ExtraContributions = new List<CashExtraContribution>
+            {
+                new()
+                {
+                    InvestigationId = Guid.NewGuid(),
+                    CreatedAt = Now,
+                    Kind = CashReconciliationKind.CashlessExtra,
+                    Origin = CashReconciliationOrigin.BalanceRawDifference,
+                    Stage = CashReconciliationStage.Ready,
+                    Amount = 1330,
+                    OriginalAmount = 1330
+                }
+            }
+        });
+        items.Add(new CashReconciliationItem
+        {
+            AccountingSchemaVersion = 3,
+            Id = shortageId,
+            InvestigationId = Guid.NewGuid(),
+            CreatedAt = Now.AddMinutes(-1),
+            Kind = CashReconciliationKind.CashlessShortage,
+            Origin = CashReconciliationOrigin.CashlessVerification,
+            Status = CashReconciliationStatus.Resolved,
+            Stage = CashReconciliationStage.Ready,
+            Amount = 0,
+            OriginalAmount = 466,
+            ResolvedAmount = 438,
+            FormalizedAmount = 28,
+            PostedFormalizedAmount = 28,
+            Resolution = CashReconciliationResolution.FormalizedLoss,
+            LossAllocations = new List<CashLossAllocation>
+            {
+                new()
+                {
+                    Id = allocationId,
+                    CreatedAt = Now,
+                    EmployeeName = "Employee",
+                    Amount = 28,
+                    PostedAmount = 28,
+                    Source = CashLossAllocationSource.AutomaticCorrection
+                }
+            }
+        });
+        items.Add(new CashReconciliationItem
+        {
+            AccountingSchemaVersion = 3,
+            Id = Guid.NewGuid(),
+            InvestigationId = Guid.NewGuid(),
+            IsTechnicalEvent = true,
+            CreatedAt = Now,
+            Kind = CashReconciliationKind.Other,
+            Origin = CashReconciliationOrigin.CorrectionCheckpoint,
+            Status = CashReconciliationStatus.Resolved,
+            Stage = CashReconciliationStage.Ready,
+            CheckpointNumber = checkpointNumber,
+            AmountAtCheckpoint = 1330
+        });
+
+        bool repaired = CashConstitutionEngine
+            .TryRepairKnownAccumulatedCashlessSnapshots(
+                items,
+                extraId,
+                shortageId,
+                allocationId,
+                incorrectExtraAmount: 1330,
+                incorrectFormalizedAmount: 28,
+                employeeName: "Employee"
+            );
+        bool repeated = CashConstitutionEngine
+            .TryRepairKnownAccumulatedCashlessSnapshots(
+                items,
+                extraId,
+                shortageId,
+                allocationId,
+                incorrectExtraAmount: 1330,
+                incorrectFormalizedAmount: 28,
+                employeeName: "Employee"
+            );
+
+        Assert(repaired, "Repair recognized");
+        Assert(repeated, "Repeated repair recognized");
+        var extra = items.Single(item => item.Id == extraId);
+        var shortage = items.Single(item => item.Id == shortageId);
+        Equal(0, extra.Amount, "No open extra");
+        Equal(1330, extra.OriginalAmount, "Historical original extra");
+        Equal(1330, extra.ResolvedAmount, "Cancelled technical extra");
+        Equal(0, extra.AmountAtCheckpoint, "Zero item checkpoint");
+        Equal(CashReconciliationStatus.Resolved, extra.Status, "Closed extra");
+        Equal(0, extra.ExtraContributions.Single().Amount, "No open contribution");
+        Equal(438, shortage.ResolvedAmount, "Settled shortage part");
+        Equal(28, shortage.FormalizedAmount, "Confirmed penalty remains");
+        Equal(28, shortage.PostedFormalizedAmount, "Posted penalty remains");
+        Equal(1, shortage.LossAllocations.Count, "Penalty allocation remains");
+        Equal(
+            0,
+            CashConstitutionEngine.GetLatestCheckpointBreakdown(
+                items,
+                MonthStart,
+                NextMonthStart),
+            "Correct technical checkpoint"
+        );
     }
 
     private void RepeatedCashlessVerificationIsRecognized()

@@ -42,6 +42,16 @@ namespace ClubTimerXbox.Models
 
         public int OverallRatingPercent { get; set; } = 100;
 
+        public int TimeRatingEarnedAmount { get; set; }
+
+        public int TimeRatingLostAmount { get; set; }
+
+        public int GameRatingEarnedAmount { get; set; }
+
+        public int GameRatingLostAmount { get; set; }
+
+        public bool RatingFinancialEffectCaptured { get; set; }
+
         public int RemainingAmount =>
             AccruedAmount + BonusAmount - PenaltyAmount - PaidAmount;
     }

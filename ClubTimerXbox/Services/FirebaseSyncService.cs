@@ -1069,6 +1069,14 @@ namespace ClubTimerXbox.Services
                                     timeRatingPercent = autoSalary.TimeRatingPercent,
                                     revenueRatingPercent = autoSalary.RevenueRatingPercent,
                                     overallRatingPercent = autoSalary.OverallRatingPercent,
+                                    timeRatingEarnedAmount = autoSalary.TimeRatingEarnedAmount,
+                                    timeRatingLostAmount = autoSalary.TimeRatingLostAmount,
+                                    timeRatingNetAmount = autoSalary.TimeRatingEarnedAmount -
+                                        autoSalary.TimeRatingLostAmount,
+                                    gameRatingEarnedAmount = autoSalary.GameRatingEarnedAmount,
+                                    gameRatingLostAmount = autoSalary.GameRatingLostAmount,
+                                    gameRatingNetAmount = autoSalary.GameRatingEarnedAmount -
+                                        autoSalary.GameRatingLostAmount,
                                     ratingHasWarning = autoSalary.RatingHasWarning,
                                     ratingEvents = BuildRatingEventsPayload(autoSalary)
                                 },
@@ -1651,6 +1659,14 @@ namespace ClubTimerXbox.Services
                     timeRatingPercent = employee.TimeRatingPercent,
                     revenueRatingPercent = employee.RevenueRatingPercent,
                     overallRatingPercent = employee.OverallRatingPercent,
+                    timeRatingEarnedAmount = employee.TimeRatingEarnedAmount,
+                    timeRatingLostAmount = employee.TimeRatingLostAmount,
+                    timeRatingNetAmount = employee.TimeRatingEarnedAmount -
+                        employee.TimeRatingLostAmount,
+                    gameRatingEarnedAmount = employee.GameRatingEarnedAmount,
+                    gameRatingLostAmount = employee.GameRatingLostAmount,
+                    gameRatingNetAmount = employee.GameRatingEarnedAmount -
+                        employee.GameRatingLostAmount,
                     ratingHasWarning = employee.RatingHasWarning,
                     ratingEvents = employee.RatingEvents.Select(item => new
                     {
@@ -2643,6 +2659,14 @@ namespace ClubTimerXbox.Services
                                 timeRatingPercent = autoSalary.TimeRatingPercent,
                                 revenueRatingPercent = autoSalary.RevenueRatingPercent,
                                 overallRatingPercent = autoSalary.OverallRatingPercent,
+                                timeRatingEarnedAmount = autoSalary.TimeRatingEarnedAmount,
+                                timeRatingLostAmount = autoSalary.TimeRatingLostAmount,
+                                timeRatingNetAmount = autoSalary.TimeRatingEarnedAmount -
+                                    autoSalary.TimeRatingLostAmount,
+                                gameRatingEarnedAmount = autoSalary.GameRatingEarnedAmount,
+                                gameRatingLostAmount = autoSalary.GameRatingLostAmount,
+                                gameRatingNetAmount = autoSalary.GameRatingEarnedAmount -
+                                    autoSalary.GameRatingLostAmount,
                                 ratingHasWarning = autoSalary.RatingHasWarning,
                                 ratingEvents = BuildRatingEventsPayload(autoSalary)
                             },
@@ -3952,6 +3976,15 @@ namespace ClubTimerXbox.Services
                         actualCashless.Value
                     );
                 }
+
+                CashReconciliationService.RecordConstitutionCheckpoint(
+                    monthStart,
+                    nextMonthStart,
+                    DateTime.UtcNow.Ticks,
+                    $"owner-baseline:{item.Id}",
+                    actualCash,
+                    actualCashless
+                );
             }
 
             if (command.ResolutionType == "RealShortage" &&

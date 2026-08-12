@@ -188,6 +188,31 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        public static CashAccountingResult RecordConstitutionCheckpoint(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            long checkpointNumber,
+            string operationId,
+            int? actualCashAtCheckpoint,
+            int? actualCashlessAtCheckpoint)
+        {
+            lock (Gate)
+            {
+                var result = CashConstitutionEngine.RecordCheckpoint(
+                    _items,
+                    fromInclusive,
+                    toExclusive,
+                    ClubClock.Current.LocalNow,
+                    checkpointNumber,
+                    operationId,
+                    actualCashAtCheckpoint,
+                    actualCashlessAtCheckpoint
+                );
+                Save();
+                return result;
+            }
+        }
+
         public static CashAccountingResult AddConstitutionRawDifference(
             DateTime fromInclusive,
             DateTime toExclusive,
@@ -677,6 +702,33 @@ namespace ClubTimerXbox.Services
 
                 Save();
                 return true;
+            }
+        }
+
+        public static bool TryRepairKnownAccumulatedCashlessSnapshots(
+            Guid extraId,
+            Guid shortageId,
+            Guid allocationId,
+            int incorrectExtraAmount,
+            int incorrectFormalizedAmount,
+            string employeeName)
+        {
+            lock (Gate)
+            {
+                bool recognized = CashConstitutionEngine
+                    .TryRepairKnownAccumulatedCashlessSnapshots(
+                        _items,
+                        extraId,
+                        shortageId,
+                        allocationId,
+                        incorrectExtraAmount,
+                        incorrectFormalizedAmount,
+                        employeeName
+                    );
+                if (recognized)
+                    Save();
+
+                return recognized;
             }
         }
 
