@@ -642,11 +642,21 @@ namespace ClubTimerXbox
             try
             {
                 var lastCashAcceptance = CashAcceptanceService.GetLastAcceptance();
+                var lastCashCheckpoint = CashBalanceCheckpointService.Items
+                    .OrderByDescending(item => item.CreatedAt)
+                    .FirstOrDefault();
 
                 DateTime fromTime;
                 int baseCashAmount;
 
-                if (lastCashAcceptance != null)
+                if (lastCashCheckpoint != null &&
+                    (lastCashAcceptance == null ||
+                     lastCashCheckpoint.CreatedAt >= lastCashAcceptance.CreatedAt))
+                {
+                    fromTime = lastCashCheckpoint.CreatedAt;
+                    baseCashAmount = lastCashCheckpoint.CashAmount;
+                }
+                else if (lastCashAcceptance != null)
                 {
                     // Правильная логика:
                     // последняя принятая фактическая наличка
@@ -749,15 +759,6 @@ namespace ClubTimerXbox
             DateTime reconciliationCycleStart = CashBalanceCheckpointService
                 .GetCurrentCycleStart(monthStart, nextMonthStart);
 
-            CashAcceptanceService.AddItem(
-                checkedByEmployeeName: checkedBy,
-                responsibleEmployeeName: responsible,
-                expectedCashAmount: _expectedCashAmount,
-                actualCashAmount: actualCash,
-                note: "Приёмка налички",
-                acceptanceKey: acceptanceKey
-            );
-
             if (difference < 0)
             {
                 CashReconciliationService.ProcessCashAcceptance(
@@ -767,7 +768,8 @@ namespace ClubTimerXbox
                     responsibleEmployeeName: responsible,
                     expectedAmount: _expectedCashAmount,
                     actualAmount: actualCash,
-                    note: "Приёмка налички"
+                    note: "Приёмка налички",
+                    operationId: $"{acceptanceKey}:ledger"
                 );
             }
             else if (difference > 0)
@@ -780,7 +782,8 @@ namespace ClubTimerXbox
                         $"Повторная приёмка налички: {checkedBy} ввёл {actualCash} сом. " +
                         "Зачтено как исправление ошибки ввода.",
                     fromInclusive: reconciliationCycleStart,
-                    toExclusive: nextMonthStart
+                    toExclusive: nextMonthStart,
+                    operationId: $"{acceptanceKey}:input-correction"
                 );
 
                 remainingCashExtra = difference - correctedInputMistake;
@@ -796,9 +799,23 @@ namespace ClubTimerXbox
                         actualAmount: _expectedCashAmount + remainingCashExtra,
                         note: correctedInputMistake > 0
                             ? $"Приёмка налички. После исправления ошибки ввода осталось лишнее: {remainingCashExtra} сом."
-                            : "Приёмка налички"
+                            : "Приёмка налички",
+                        operationId: $"{acceptanceKey}:ledger"
                     );
                     remainingCashExtra = result.EventRemainingAmount;
+                }
+                else
+                {
+                    CashReconciliationService.ProcessCashAcceptance(
+                        monthStart,
+                        nextMonthStart,
+                        checkedByEmployeeName: checkedBy,
+                        responsibleEmployeeName: responsible,
+                        expectedAmount: actualCash,
+                        actualAmount: actualCash,
+                        note: "Приёмка налички завершена исправлением ввода.",
+                        operationId: $"{acceptanceKey}:ledger"
+                    );
                 }
             }
             else
@@ -810,9 +827,19 @@ namespace ClubTimerXbox
                     responsibleEmployeeName: responsible,
                     expectedAmount: _expectedCashAmount,
                     actualAmount: actualCash,
-                    note: "Приёмка налички без разницы"
+                    note: "Приёмка налички без разницы",
+                    operationId: $"{acceptanceKey}:ledger"
                 );
             }
+
+            CashAcceptanceService.AddItem(
+                checkedByEmployeeName: checkedBy,
+                responsibleEmployeeName: responsible,
+                expectedCashAmount: _expectedCashAmount,
+                actualCashAmount: actualCash,
+                note: "Приёмка налички",
+                acceptanceKey: acceptanceKey
+            );
 
             ShiftAcceptanceService.AcceptCash();
 

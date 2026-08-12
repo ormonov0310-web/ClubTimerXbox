@@ -111,6 +111,31 @@ namespace ClubTimerXbox.Services
             return QueueAndFlushAsync(record);
         }
 
+        public static Task PublishSalaryTakenCashAsync(
+            string operationId,
+            string employeeName,
+            int amount)
+        {
+            var identity = PcIdentityService.Current;
+            if (!CanPublish(identity) || amount <= 0 || string.IsNullOrWhiteSpace(operationId))
+                return Task.CompletedTask;
+
+            string employee = CleanEmployeeName(employeeName);
+            var record = CreateBaseRecord(
+                id: BuildStableId("salary_cash", operationId.Trim()),
+                type: "salary_taken_cash",
+                title: $"{identity.ClubName}: зарплата",
+                body: $"{employee} взял зарплату наличными: {amount} сом",
+                severity: "info"
+            );
+            record.EmployeeName = employee;
+            record.Amount = amount;
+            record.PaymentMethod = "Наличные";
+            record.OperationId = operationId.Trim();
+
+            return QueueAndFlushAsync(record);
+        }
+
         public static Task PublishUpdateResultAsync(
             UpdateSessionTicket ticket,
             string result)
@@ -469,6 +494,9 @@ namespace ClubTimerXbox.Services
             public int CashDifference { get; set; }
             public int ProductShortageAmount { get; set; }
             public int ProductExtraAmount { get; set; }
+            public int Amount { get; set; }
+            public string PaymentMethod { get; set; } = "";
+            public string OperationId { get; set; } = "";
             public string UpdateVersion { get; set; } = "";
             public string UpdateResult { get; set; } = "";
             public string InstallMode { get; set; } = "";

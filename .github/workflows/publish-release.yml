@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Fixes sequential cash reconciliation, extends positive rating periods, rewards confirmed shift extras, and records the exact salary impact of ratings." `
+            -Notes "Enforces cash conservation across reconciliation, correction, restarts, and stock audits, and notifies the owner when an employee takes salary in cash." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,13 +66,16 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Sequential cashless reconciliations now preserve only the real remaining
-          loss and cannot create a mirrored extra after final correction. Owner
-          checkpoints remain stable across later reconciliations and restarts.
+          Cash reconciliation now follows a strict two-bucket conservation ledger.
+          Every shortage, extra, settlement, correction, stock-audit difference, and
+          restart keeps one traceable source and cannot create or erase money silently.
 
-          Positive automatic rating periods are extended by 50 percent. A verified
-          shift extra can reward time rating, and the owner receives separate monthly
-          totals showing the actual salary gained or lost through time and game ratings.
+          Repeated acceptance, reconciliation, and correction commands are idempotent.
+          Legacy open items migrate without reopening closed cases, and the expanded
+          regression suite covers the real TeleCom sequence and randomized invariants.
+
+          When an employee takes salary from the cash desk, the owner now receives a
+          compact notification containing the club, employee, payment method, and amount.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {

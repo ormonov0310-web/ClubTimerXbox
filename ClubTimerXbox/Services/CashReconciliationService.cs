@@ -41,6 +41,8 @@ namespace ClubTimerXbox.Services
                 }
 
                 item.LossAllocations ??= new List<CashLossAllocation>();
+                item.ExtraContributions ??= new List<CashExtraContribution>();
+                item.Settlements ??= new List<CashSettlementEntry>();
                 if (item.AccountingSchemaVersion < 3)
                 {
                     if (item.CheckpointNumber > 0 &&
@@ -74,6 +76,75 @@ namespace ClubTimerXbox.Services
                     item.AccountingSchemaVersion = 3;
                     constitutionMigrated = true;
                 }
+
+                if (item.AccountingSchemaVersion < CashConstitutionEngine.CurrentSchemaVersion)
+                {
+                    if (!item.IsTechnicalEvent)
+                    {
+                        int allocated = item.LossAllocations.Sum(allocation =>
+                            Math.Max(0, allocation.Amount));
+                        if (item.FormalizedAmount > allocated)
+                        {
+                            int missingAllocation = item.FormalizedAmount - allocated;
+                            string employee = !string.IsNullOrWhiteSpace(
+                                item.ResponsibleEmployeeName)
+                                    ? item.ResponsibleEmployeeName.Trim()
+                                    : item.SuspectedEmployeeName.Trim();
+                            item.LossAllocations.Add(new CashLossAllocation
+                            {
+                                CreatedAt = item.ResolvedAt ?? item.CreatedAt,
+                                EmployeeName = employee,
+                                Amount = missingAllocation,
+                                PostedAmount = missingAllocation,
+                                Source = CashLossAllocationSource.Legacy,
+                                Reason = "Историческая проводка оформленной потери"
+                            });
+                        }
+                        else if (allocated > item.FormalizedAmount)
+                        {
+                            item.FormalizedAmount = allocated;
+                        }
+
+                        if (IsExtraKind(item.Kind) &&
+                            item.ExtraContributions.Count == 0 &&
+                            item.OriginalAmount > 0)
+                        {
+                            int active = Math.Max(0, item.Amount);
+                            item.ExtraContributions.Add(new CashExtraContribution
+                            {
+                                InvestigationId = item.InvestigationId,
+                                CreatedAt = item.CreatedAt,
+                                Kind = item.Kind,
+                                Origin = item.Origin,
+                                Stage = item.Stage,
+                                OriginalAmount = item.OriginalAmount,
+                                Amount = active,
+                                ResolvedAmount = Math.Max(0, item.OriginalAmount - active),
+                                ExpectedAmount = item.ExpectedAmount,
+                                ActualAmount = item.ActualAmount,
+                                ProgramExpectedAmount = item.ProgramExpectedAmount
+                            });
+                        }
+
+                        foreach (var contribution in item.ExtraContributions)
+                        {
+                            contribution.OriginalAmount =
+                                Math.Max(0, contribution.Amount) +
+                                Math.Max(0, contribution.ResolvedAmount);
+                        }
+
+                        if (IsShortageKind(item.Kind))
+                        {
+                            item.OriginalAmount =
+                                Math.Max(0, item.Amount) +
+                                Math.Max(0, item.ResolvedAmount) +
+                                Math.Max(0, item.FormalizedAmount);
+                        }
+                    }
+
+                    item.AccountingSchemaVersion = CashConstitutionEngine.CurrentSchemaVersion;
+                    constitutionMigrated = true;
+                }
             }
 
             if (!originMigrated && !constitutionMigrated)
@@ -98,23 +169,24 @@ namespace ClubTimerXbox.Services
             string responsibleEmployeeName,
             int expectedAmount,
             int actualAmount,
-            string note)
+            string note,
+            string operationId = "")
         {
             lock (Gate)
             {
-                var result = CashConstitutionEngine.RecordCashAcceptance(
-                    _items,
-                    fromInclusive,
-                    toExclusive,
-                    ClubClock.Current.LocalNow,
-                    checkedByEmployeeName,
-                    responsibleEmployeeName,
-                    expectedAmount,
-                    actualAmount,
-                    note
-                );
-                Save();
-                return result;
+                return MutateAndSave(() =>
+                    CashConstitutionEngine.RecordCashAcceptance(
+                        _items,
+                        fromInclusive,
+                        toExclusive,
+                        ClubClock.Current.LocalNow,
+                        checkedByEmployeeName,
+                        responsibleEmployeeName,
+                        expectedAmount,
+                        actualAmount,
+                        note,
+                        operationId
+                    ));
             }
         }
 
@@ -125,23 +197,24 @@ namespace ClubTimerXbox.Services
             int actualAmount,
             string suspectedEmployeeName,
             string note,
-            string operationId = "")
+            string operationId = "",
+            int? programExpectedAmount = null)
         {
             lock (Gate)
             {
-                var result = CashConstitutionEngine.RecordCashlessVerification(
-                    _items,
-                    fromInclusive,
-                    toExclusive,
-                    ClubClock.Current.LocalNow,
-                    expectedAmount,
-                    actualAmount,
-                    suspectedEmployeeName,
-                    note,
-                    operationId
-                );
-                Save();
-                return result;
+                return MutateAndSave(() =>
+                    CashConstitutionEngine.RecordCashlessVerification(
+                        _items,
+                        fromInclusive,
+                        toExclusive,
+                        ClubClock.Current.LocalNow,
+                        expectedAmount,
+                        actualAmount,
+                        suspectedEmployeeName,
+                        note,
+                        operationId,
+                        programExpectedAmount
+                    ));
             }
         }
 
@@ -173,18 +246,17 @@ namespace ClubTimerXbox.Services
         {
             lock (Gate)
             {
-                var result = CashConstitutionEngine.ApplyCorrection(
-                    _items,
-                    fromInclusive,
-                    toExclusive,
-                    ClubClock.Current.LocalNow,
-                    checkpointNumber,
-                    operationId,
-                    actualCashAtCheckpoint,
-                    actualCashlessAtCheckpoint
-                );
-                Save();
-                return result;
+                return MutateAndSave(() =>
+                    CashConstitutionEngine.ApplyCorrection(
+                        _items,
+                        fromInclusive,
+                        toExclusive,
+                        ClubClock.Current.LocalNow,
+                        checkpointNumber,
+                        operationId,
+                        actualCashAtCheckpoint,
+                        actualCashlessAtCheckpoint
+                    ));
             }
         }
 
@@ -198,47 +270,17 @@ namespace ClubTimerXbox.Services
         {
             lock (Gate)
             {
-                var result = CashConstitutionEngine.RecordCheckpoint(
-                    _items,
-                    fromInclusive,
-                    toExclusive,
-                    ClubClock.Current.LocalNow,
-                    checkpointNumber,
-                    operationId,
-                    actualCashAtCheckpoint,
-                    actualCashlessAtCheckpoint
-                );
-                Save();
-                return result;
-            }
-        }
-
-        public static CashAccountingResult AddConstitutionRawDifference(
-            DateTime fromInclusive,
-            DateTime toExclusive,
-            int difference,
-            int expectedAmount,
-            int actualAmount,
-            string responsibleEmployeeName,
-            string suspectedEmployeeName,
-            string note)
-        {
-            lock (Gate)
-            {
-                var result = CashConstitutionEngine.RecordRawDifference(
-                    _items,
-                    fromInclusive,
-                    toExclusive,
-                    ClubClock.Current.LocalNow,
-                    difference,
-                    expectedAmount,
-                    actualAmount,
-                    responsibleEmployeeName,
-                    suspectedEmployeeName,
-                    note
-                );
-                Save();
-                return result;
+                return MutateAndSave(() =>
+                    CashConstitutionEngine.RecordCheckpoint(
+                        _items,
+                        fromInclusive,
+                        toExclusive,
+                        ClubClock.Current.LocalNow,
+                        checkpointNumber,
+                        operationId,
+                        actualCashAtCheckpoint,
+                        actualCashlessAtCheckpoint
+                    ));
             }
         }
 
@@ -251,17 +293,16 @@ namespace ClubTimerXbox.Services
         {
             lock (Gate)
             {
-                var result = CashConstitutionEngine.ApplyManualLoss(
-                    _items,
-                    fromInclusive,
-                    toExclusive,
-                    ClubClock.Current.LocalNow,
-                    employeeName,
-                    amount,
-                    operationId
-                );
-                Save();
-                return result;
+                return MutateAndSave(() =>
+                    CashConstitutionEngine.ApplyManualLoss(
+                        _items,
+                        fromInclusive,
+                        toExclusive,
+                        ClubClock.Current.LocalNow,
+                        employeeName,
+                        amount,
+                        operationId
+                    ));
             }
         }
 
@@ -315,15 +356,14 @@ namespace ClubTimerXbox.Services
         {
             lock (Gate)
             {
-                var result = CashConstitutionEngine.CloseMonth(
-                    _items,
-                    monthStart,
-                    nextMonthStart,
-                    ClubClock.Current.LocalNow,
-                    workedHours
-                );
-                Save();
-                return result;
+                return MutateAndSave(() =>
+                    CashConstitutionEngine.CloseMonth(
+                        _items,
+                        monthStart,
+                        nextMonthStart,
+                        ClubClock.Current.LocalNow,
+                        workedHours
+                    ));
             }
         }
 
@@ -1265,6 +1305,7 @@ namespace ClubTimerXbox.Services
             return true;
         }
 
+        [Obsolete("Старый путь закрытия карточек запрещён Конституцией кассы.", true)]
         public static int ConsumeOpenCashExtra(
             int amount,
             DateTime fromInclusive,
@@ -1313,6 +1354,7 @@ namespace ClubTimerXbox.Services
             return consumed;
         }
 
+        [Obsolete("Старый путь закрытия карточек запрещён Конституцией кассы.", true)]
         public static int ConsumeOpenCashlessExtra(
             int amount,
             DateTime fromInclusive,
@@ -1390,13 +1432,28 @@ namespace ClubTimerXbox.Services
 
         public static List<CashReconciliationItem> GetRecentItems(int count = 100)
         {
-            return _items
-                .Where(item => !item.IsTechnicalEvent)
+            var open = _items
+                .Where(item =>
+                    !item.IsTechnicalEvent &&
+                    item.Status == CashReconciliationStatus.Open)
+                .ToList();
+            var resolved = _items
+                .Where(item =>
+                    !item.IsTechnicalEvent &&
+                    item.Status == CashReconciliationStatus.Resolved)
                 .OrderByDescending(item => item.CreatedAt)
-                .Take(count)
+                .Take(Math.Max(0, count))
+                .ToList();
+
+            return open
+                .Concat(resolved)
+                .GroupBy(item => item.Id)
+                .Select(group => group.First())
+                .OrderByDescending(item => item.CreatedAt)
                 .ToList();
         }
 
+        [Obsolete("Ручное изменение суммы карточки запрещено Конституцией кассы.", true)]
         public static CashReconciliationItem UpdateOpenAmount(
             Guid id,
             int amount,
@@ -1438,6 +1495,7 @@ namespace ClubTimerXbox.Services
             return item;
         }
 
+        [Obsolete("Массовое закрытие карточек запрещено Конституцией кассы.", true)]
         public static int CloseOpenItemsForBalance(
             DateTime fromInclusive,
             DateTime toExclusive,
@@ -1478,6 +1536,7 @@ namespace ClubTimerXbox.Services
             return closed;
         }
 
+        [Obsolete("Замена открытых сверок запрещена Конституцией кассы.", true)]
         public static int SupersedeOpenCashlessVerifications(
             DateTime fromInclusive,
             DateTime toExclusive,
@@ -1520,6 +1579,7 @@ namespace ClubTimerXbox.Services
             return closed;
         }
 
+        [Obsolete("Используйте конституционный движок и неизменяемые назначения.", true)]
         public static int FormalizeOpenShortagesForPeriod(
             DateTime fromInclusive,
             DateTime toExclusive,
@@ -1537,6 +1597,7 @@ namespace ClubTimerXbox.Services
             );
         }
 
+        [Obsolete("Используйте конституционный движок и неизменяемые назначения.", true)]
         public static int FormalizeOpenShortagesForEmployee(
             DateTime fromInclusive,
             DateTime toExclusive,
@@ -1666,8 +1727,42 @@ namespace ClubTimerXbox.Services
             TimeSpan correctionWindow,
             string note,
             DateTime fromInclusive,
-            DateTime toExclusive)
+            DateTime toExclusive,
+            string operationId = "")
         {
+            lock (Gate)
+            {
+                return MutateAndSave(() =>
+                    ResolveRecentCashAcceptanceInputMistakesCore(
+                        checkedByEmployeeName,
+                        amount,
+                        correctionWindow,
+                        note,
+                        fromInclusive,
+                        toExclusive,
+                        operationId));
+            }
+        }
+
+        private static int ResolveRecentCashAcceptanceInputMistakesCore(
+            string checkedByEmployeeName,
+            int amount,
+            TimeSpan correctionWindow,
+            string note,
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string operationId)
+        {
+            operationId = operationId.Trim();
+            if (!string.IsNullOrWhiteSpace(operationId))
+            {
+                var existing = _items.FirstOrDefault(item =>
+                    item.IsTechnicalEvent &&
+                    item.OperationId.Equals(operationId, StringComparison.Ordinal));
+                if (existing != null)
+                    return Math.Max(0, existing.ActualAmount);
+            }
+
             checkedByEmployeeName = checkedByEmployeeName.Trim();
 
             if (string.IsNullOrWhiteSpace(checkedByEmployeeName) || amount <= 0)
@@ -1721,8 +1816,29 @@ namespace ClubTimerXbox.Services
                 }
             }
 
-            if (resolved > 0)
-                Save();
+            if (!string.IsNullOrWhiteSpace(operationId))
+            {
+                _items.Add(new CashReconciliationItem
+                {
+                    AccountingSchemaVersion = CashConstitutionEngine.CurrentSchemaVersion,
+                    Id = Guid.NewGuid(),
+                    InvestigationId = Guid.NewGuid(),
+                    IsTechnicalEvent = true,
+                    OperationId = operationId,
+                    CreatedAt = ClubClock.Current.LocalNow,
+                    Kind = CashReconciliationKind.Other,
+                    Origin = CashReconciliationOrigin.CashAcceptanceInputCorrection,
+                    Status = CashReconciliationStatus.Resolved,
+                    Stage = CashReconciliationStage.Ready,
+                    Resolution = CashReconciliationResolution.InputCorrection,
+                    ExpectedAmount = amount,
+                    ActualAmount = resolved,
+                    Note = note.Trim(),
+                    ResolvedAt = ClubClock.Current.LocalNow,
+                    ResolvedBy = "Система",
+                    ResolutionNote = "Идемпотентная запись исправления повторной приёмки."
+                });
+            }
 
             return resolved;
         }
@@ -1732,6 +1848,22 @@ namespace ClubTimerXbox.Services
             string resolvedBy,
             string resolutionType,
             string note = "")
+        {
+            lock (Gate)
+            {
+                return MutateAndSave(() => ResolveCore(
+                    id,
+                    resolvedBy,
+                    resolutionType,
+                    note));
+            }
+        }
+
+        private static CashReconciliationItem ResolveCore(
+            Guid id,
+            string resolvedBy,
+            string resolutionType,
+            string note)
         {
             var item = _items.FirstOrDefault(entry => entry.Id == id);
 
@@ -1743,10 +1875,35 @@ namespace ClubTimerXbox.Services
 
             NormalizeItem(item);
 
+            string penaltyEmployee = !string.IsNullOrWhiteSpace(
+                item.ResponsibleEmployeeName)
+                    ? item.ResponsibleEmployeeName.Trim()
+                    : item.SuspectedEmployeeName.Trim();
+            if (resolutionType == "RealShortage" &&
+                string.IsNullOrWhiteSpace(penaltyEmployee))
+            {
+                throw new Exception(
+                    "У этой недостачи нет определённого сотрудника. " +
+                    "Назначьте штраф за потери вручную выбранному сотруднику.");
+            }
+
             if (item.Amount > 0)
             {
                 if (resolutionType == "RealShortage")
-                    item.FormalizedAmount += item.Amount;
+                {
+                    int formalizedAmount = item.Amount;
+                    item.FormalizedAmount += formalizedAmount;
+                    item.LossAllocations.Add(new CashLossAllocation
+                    {
+                        CreatedAt = ClubClock.Current.LocalNow,
+                        EmployeeName = penaltyEmployee,
+                        Amount = formalizedAmount,
+                        Source = CashLossAllocationSource.OwnerManual,
+                        Reason = string.IsNullOrWhiteSpace(note)
+                            ? "Недостача подтверждена владельцем"
+                            : note.Trim()
+                    });
+                }
                 else
                     item.ResolvedAmount += item.Amount;
 
@@ -1777,7 +1934,11 @@ namespace ClubTimerXbox.Services
                 : resolvedBy.Trim();
             item.ResolutionNote = BuildResolutionNote(resolutionType, note);
 
-            Save();
+            var period = BusinessCalendarService.GetBusinessMonth(item.CreatedAt);
+            CashConstitutionEngine.ValidateConservation(
+                _items,
+                period.StartInclusive,
+                period.EndExclusive);
 
             return item;
         }
@@ -2004,6 +2165,25 @@ namespace ClubTimerXbox.Services
             string temporaryPath = FilePath + ".tmp";
             File.WriteAllText(temporaryPath, json);
             File.Move(temporaryPath, FilePath, true);
+        }
+
+        private static T MutateAndSave<T>(Func<T> mutation)
+        {
+            string snapshot = JsonSerializer.Serialize(_items);
+            try
+            {
+                T result = mutation();
+                Save();
+                return result;
+            }
+            catch
+            {
+                var restored = JsonSerializer.Deserialize<List<CashReconciliationItem>>(snapshot)
+                    ?? new List<CashReconciliationItem>();
+                _items.Clear();
+                _items.AddRange(restored);
+                throw;
+            }
         }
     }
 }

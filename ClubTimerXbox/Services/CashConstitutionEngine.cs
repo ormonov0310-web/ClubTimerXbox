@@ -54,6 +54,15 @@ namespace ClubTimerXbox.Services
 
     public static class CashConstitutionEngine
     {
+        private sealed class MonthCloseShare
+        {
+            public string EmployeeName { get; init; } = "";
+
+            public int Remaining { get; set; }
+        }
+
+        public const int CurrentSchemaVersion = 4;
+
         public static CashAccountingResult RecordCashAcceptance(
             IList<CashReconciliationItem> items,
             DateTime fromInclusive,
@@ -63,66 +72,87 @@ namespace ClubTimerXbox.Services
             string responsibleEmployeeName,
             int expectedAmount,
             int actualAmount,
-            string note)
+            string note,
+            string operationId = "")
         {
             Normalize(items, fromInclusive, toExclusive);
+            if (HasAppliedOperation(items, operationId))
+            {
+                return BuildResult(
+                    items,
+                    fromInclusive,
+                    toExclusive,
+                    null,
+                    0,
+                    0,
+                    0,
+                    0,
+                    Array.Empty<CashAccountingAssignment>()
+                );
+            }
+
             Guid investigationId = Guid.NewGuid();
+            var settlements = new List<CashSettlementEntry>();
 
             int difference = actualAmount - expectedAmount;
             int eventAmount = Math.Abs(difference);
             int paired = 0;
             CashReconciliationItem? eventItem = null;
 
-            if (difference >= 0)
+            if (difference > 0)
             {
-                int available = difference;
-                paired += SettleAwaitingShortages(
+                eventItem = AddExtraContribution(
                     items,
                     fromInclusive,
                     toExclusive,
+                    now,
+                    CashReconciliationKind.CashExtra,
+                    CashReconciliationOrigin.CashAcceptance,
+                    CashReconciliationStage.AwaitingCashlessVerification,
+                    eventAmount,
+                    expectedAmount,
+                    actualAmount,
+                    checkedByEmployeeName,
+                    note,
+                    investigationId,
+                    responsibleEmployeeName,
+                    operationId: operationId
+                );
+                var eventContribution = eventItem.ExtraContributions.Last(item =>
+                    item.CreatedAt == now &&
+                    item.Kind == CashReconciliationKind.CashExtra);
+                paired += SettleNewExtraAgainstAwaitingShortages(
+                    items,
+                    fromInclusive,
+                    toExclusive,
+                    eventContribution,
                     CashReconciliationKind.CashlessShortage,
-                    ref available,
                     now,
                     CashReconciliationResolution.PairedTender,
-                    "Закрыто связанной приёмкой наличных."
+                    "Закрыто связанной приёмкой наличных.",
+                    cashDeltaSign: 1,
+                    cashlessDeltaSign: -1,
+                    settlements: settlements
                 );
-
-                MarkAwaitingShortagesReady(
-                    items,
-                    fromInclusive,
-                    toExclusive,
-                    CashReconciliationKind.CashlessShortage
-                );
-
-                if (available > 0)
+                SyncExtra(eventItem);
+                if (eventItem.Amount == 0)
                 {
-                    eventItem = AddExtraContribution(
-                        items,
-                        fromInclusive,
-                        toExclusive,
+                    Resolve(
+                        eventItem,
                         now,
-                        CashReconciliationKind.CashExtra,
-                        CashReconciliationOrigin.CashAcceptance,
-                        CashReconciliationStage.AwaitingCashlessVerification,
-                        available,
-                        expectedAmount,
-                        actualAmount,
-                        checkedByEmployeeName,
-                        note,
-                        investigationId,
-                        responsibleEmployeeName
-                    );
+                        CashReconciliationResolution.PairedTender,
+                        "Излишек полностью закрыт связанной приёмкой наличных.");
                 }
-            }
-            else
-            {
+
                 MarkAwaitingShortagesReady(
                     items,
                     fromInclusive,
                     toExclusive,
                     CashReconciliationKind.CashlessShortage
                 );
-
+            }
+            else if (difference < 0)
+            {
                 eventItem = AddShortage(
                     items,
                     now,
@@ -137,11 +167,43 @@ namespace ClubTimerXbox.Services
                     responsibleEmployeeName,
                     "",
                     note,
-                    investigationId
+                    investigationId,
+                    operationId
                 );
+                paired += SettleNewShortageAgainstAwaitingExtraContributions(
+                    items,
+                    fromInclusive,
+                    toExclusive,
+                    eventItem,
+                    CashReconciliationKind.CashlessExtra,
+                    CashReconciliationStage.AwaitingCashAcceptance,
+                    now,
+                    "Закрыто связанной приёмкой наличных.",
+                    cashDeltaSign: -1,
+                    cashlessDeltaSign: 1,
+                    settlements: settlements
+                );
+                MarkAwaitingExtraContributionsReady(
+                    items,
+                    fromInclusive,
+                    toExclusive,
+                    CashReconciliationKind.CashlessExtra
+                );
+                MarkAwaitingShortagesReady(
+                    items,
+                    fromInclusive,
+                    toExclusive,
+                    CashReconciliationKind.CashlessShortage
+                );
+
             }
 
-            int settled = SettleEligibleExtra(items, fromInclusive, toExclusive, now);
+            int settled = SettleEligibleExtra(
+                items,
+                fromInclusive,
+                toExclusive,
+                now,
+                settlements);
             var result = BuildResult(
                 items,
                 fromInclusive,
@@ -162,8 +224,11 @@ namespace ClubTimerXbox.Services
                 expectedAmount,
                 actualAmount,
                 note,
-                responsibleEmployeeName: responsibleEmployeeName
+                operationId,
+                responsibleEmployeeName,
+                settlements: settlements
             );
+            ValidateConservation(items, fromInclusive, toExclusive);
             return result;
         }
 
@@ -176,7 +241,8 @@ namespace ClubTimerXbox.Services
             int actualAmount,
             string suspectedEmployeeName,
             string note,
-            string operationId = "")
+            string operationId = "",
+            int? programExpectedAmount = null)
         {
             Normalize(items, fromInclusive, toExclusive);
             if (HasAppliedOperation(items, operationId))
@@ -222,6 +288,7 @@ namespace ClubTimerXbox.Services
             Guid investigationId = linkedInvestigationIds.Count == 1
                 ? linkedInvestigationIds[0]
                 : Guid.NewGuid();
+            var settlements = new List<CashSettlementEntry>();
 
             int difference = actualAmount - expectedAmount;
             int eventAmount = Math.Abs(difference);
@@ -229,46 +296,6 @@ namespace ClubTimerXbox.Services
             int availableShortage = Math.Max(0, -difference);
             int paired = 0;
             CashReconciliationItem? eventItem = null;
-
-            if (availableExtra > 0)
-            {
-                paired += SettleAwaitingShortages(
-                    items,
-                    fromInclusive,
-                    toExclusive,
-                    CashReconciliationKind.CashShortage,
-                    ref availableExtra,
-                    now,
-                    CashReconciliationResolution.PairedTender,
-                    "Закрыто связанной сверкой безнала."
-                );
-            }
-
-            if (availableShortage > 0)
-            {
-                paired += SettleAwaitingExtraContributions(
-                    items,
-                    fromInclusive,
-                    toExclusive,
-                    CashReconciliationKind.CashExtra,
-                    ref availableShortage,
-                    now,
-                    "Закрыто связанной сверкой безнала."
-                );
-            }
-
-            MarkAwaitingShortagesReady(
-                items,
-                fromInclusive,
-                toExclusive,
-                CashReconciliationKind.CashShortage
-            );
-            MarkAwaitingExtraContributionsReady(
-                items,
-                fromInclusive,
-                toExclusive,
-                CashReconciliationKind.CashExtra
-            );
 
             if (availableExtra > 0)
             {
@@ -285,10 +312,38 @@ namespace ClubTimerXbox.Services
                     actualAmount,
                     "Владелец",
                     note,
-                    investigationId
+                    investigationId,
+                    programExpectedAmount: programExpectedAmount ?? expectedAmount,
+                    operationId: operationId
                 );
+                var eventContribution = eventItem.ExtraContributions.Last(item =>
+                    item.CreatedAt == now &&
+                    item.Kind == CashReconciliationKind.CashlessExtra);
+                paired += SettleNewExtraAgainstAwaitingShortages(
+                    items,
+                    fromInclusive,
+                    toExclusive,
+                    eventContribution,
+                    CashReconciliationKind.CashShortage,
+                    now,
+                    CashReconciliationResolution.PairedTender,
+                    "Закрыто связанной сверкой безнала.",
+                    cashDeltaSign: -1,
+                    cashlessDeltaSign: 1,
+                    settlements: settlements
+                );
+                SyncExtra(eventItem);
+                if (eventItem.Amount == 0)
+                {
+                    Resolve(
+                        eventItem,
+                        now,
+                        CashReconciliationResolution.PairedTender,
+                        "Излишек полностью закрыт связанной сверкой безнала.");
+                }
             }
-            else if (availableShortage > 0)
+
+            if (availableShortage > 0)
             {
                 eventItem = AddShortage(
                     items,
@@ -306,12 +361,45 @@ namespace ClubTimerXbox.Services
                     "",
                     suspectedEmployeeName,
                     note,
-                    investigationId
+                    investigationId,
+                    operationId,
+                    programExpectedAmount ?? expectedAmount
+                );
+                paired += SettleNewShortageAgainstAwaitingExtraContributions(
+                    items,
+                    fromInclusive,
+                    toExclusive,
+                    eventItem,
+                    CashReconciliationKind.CashExtra,
+                    CashReconciliationStage.AwaitingCashlessVerification,
+                    now,
+                    "Закрыто связанной сверкой безнала.",
+                    cashDeltaSign: 1,
+                    cashlessDeltaSign: -1,
+                    settlements: settlements
                 );
             }
 
-            int settled = SettleEligibleExtra(items, fromInclusive, toExclusive, now);
-            var assignments = FormalizeReadyConfirmed(items, fromInclusive, toExclusive, now);
+            MarkAwaitingShortagesReady(
+                items,
+                fromInclusive,
+                toExclusive,
+                CashReconciliationKind.CashShortage
+            );
+            MarkAwaitingExtraContributionsReady(
+                items,
+                fromInclusive,
+                toExclusive,
+                CashReconciliationKind.CashExtra
+            );
+
+            int settled = SettleEligibleExtra(
+                items,
+                fromInclusive,
+                toExclusive,
+                now,
+                settlements);
+            var assignments = Array.Empty<CashAccountingAssignment>();
 
             var result = BuildResult(
                 items,
@@ -333,8 +421,11 @@ namespace ClubTimerXbox.Services
                 expectedAmount,
                 actualAmount,
                 note,
-                operationId
+                operationId,
+                programExpectedAmount: programExpectedAmount ?? expectedAmount,
+                settlements: settlements
             );
+            ValidateConservation(items, fromInclusive, toExclusive);
             return result;
         }
 
@@ -389,7 +480,13 @@ namespace ClubTimerXbox.Services
                 CashReconciliationKind.CashlessExtra
             );
 
-            int settled = SettleEligibleExtra(items, fromInclusive, toExclusive, now);
+            var settlements = new List<CashSettlementEntry>();
+            int settled = SettleEligibleExtra(
+                items,
+                fromInclusive,
+                toExclusive,
+                now,
+                settlements);
             var assignments = FormalizeReadyConfirmed(items, fromInclusive, toExclusive, now)
                 .Concat(FormalizeReadySuspected(items, fromInclusive, toExclusive, now))
                 .ToList();
@@ -409,7 +506,7 @@ namespace ClubTimerXbox.Services
                 );
                 items.Add(new CashReconciliationItem
                 {
-                    AccountingSchemaVersion = 3,
+                    AccountingSchemaVersion = CurrentSchemaVersion,
                     Id = Guid.NewGuid(),
                     InvestigationId = Guid.NewGuid(),
                     IsTechnicalEvent = true,
@@ -424,11 +521,14 @@ namespace ClubTimerXbox.Services
                     AmountAtCheckpoint = checkpointBreakdown,
                     ExpectedAmount = actualCashAtCheckpoint ?? -1,
                     ActualAmount = actualCashlessAtCheckpoint ?? -1,
+                    Settlements = settlements,
                     ResolvedAt = now,
                     ResolvedBy = "Система",
                     ResolutionNote = "Снимок разбора итоговой корректировки."
                 });
             }
+
+            ValidateConservation(items, fromInclusive, toExclusive);
 
             return BuildResult(
                 items,
@@ -483,7 +583,7 @@ namespace ClubTimerXbox.Services
             );
             items.Add(new CashReconciliationItem
             {
-                AccountingSchemaVersion = 3,
+                AccountingSchemaVersion = CurrentSchemaVersion,
                 Id = Guid.NewGuid(),
                 InvestigationId = Guid.NewGuid(),
                 IsTechnicalEvent = true,
@@ -502,6 +602,8 @@ namespace ClubTimerXbox.Services
                 ResolvedBy = "System",
                 ResolutionNote = "Cash baseline checkpoint."
             });
+
+            ValidateConservation(items, fromInclusive, toExclusive);
 
             return BuildResult(
                 items,
@@ -715,6 +817,7 @@ namespace ClubTimerXbox.Services
                 $"Ручной штраф за потери: {employeeName.Trim()}, {amount} сом.",
                 operationId
             );
+            ValidateConservation(items, fromInclusive, toExclusive);
             return result;
         }
 
@@ -751,7 +854,13 @@ namespace ClubTimerXbox.Services
                 };
             }
 
-            SettleAllAtMonthClose(items, monthStart, nextMonthStart, now);
+            var settlements = new List<CashSettlementEntry>();
+            SettleAllAtMonthClose(
+                items,
+                monthStart,
+                nextMonthStart,
+                now,
+                settlements);
 
             int breakdown = GetBreakdown(items, monthStart, nextMonthStart);
             int archivedExtra = Math.Max(0, breakdown);
@@ -767,6 +876,18 @@ namespace ClubTimerXbox.Services
             var assignments = breakdown < 0
                 ? DistributeByHours(Math.Abs(breakdown), workedHours)
                 : new List<CashAccountingAssignment>();
+            var remainingShares = assignments
+                .Select(assignment => new
+                {
+                    assignment.EmployeeName,
+                    Remaining = assignment.Amount
+                })
+                .Select(entry => new MonthCloseShare
+                {
+                    EmployeeName = entry.EmployeeName,
+                    Remaining = entry.Remaining
+                })
+                .ToList();
 
             foreach (var item in CurrentOpen(items, monthStart, nextMonthStart).ToList())
             {
@@ -774,7 +895,27 @@ namespace ClubTimerXbox.Services
                 {
                     if (IsShortage(item))
                     {
-                        item.FormalizedAmount += item.Amount;
+                        int remainingItem = item.Amount;
+                        foreach (var share in remainingShares.Where(entry => entry.Remaining > 0))
+                        {
+                            if (remainingItem <= 0)
+                                break;
+
+                            int used = Math.Min(remainingItem, share.Remaining);
+                            item.LossAllocations.Add(new CashLossAllocation
+                            {
+                                CreatedAt = now,
+                                EmployeeName = share.EmployeeName,
+                                Amount = used,
+                                PostedAmount = used,
+                                Source = CashLossAllocationSource.MonthClose,
+                                Reason = "Закрытие месяца пропорционально рабочим часам"
+                            });
+                            item.FormalizedAmount += used;
+                            remainingItem -= used;
+                            share.Remaining -= used;
+                        }
+
                         item.PostedFormalizedAmount = item.FormalizedAmount;
                     }
                     else
@@ -802,7 +943,7 @@ namespace ClubTimerXbox.Services
 
             var marker = new CashReconciliationItem
             {
-                AccountingSchemaVersion = 3,
+                AccountingSchemaVersion = CurrentSchemaVersion,
                 Id = Guid.NewGuid(),
                 InvestigationId = Guid.NewGuid(),
                 IsTechnicalEvent = true,
@@ -818,6 +959,7 @@ namespace ClubTimerXbox.Services
                 ResolvedAt = now,
                 ResolvedBy = "Система",
                 ResolutionNote = "Неизменяемый акт закрытия месяца.",
+                Settlements = settlements,
                 LossAllocations = assignments
                     .Select(assignment => new CashLossAllocation
                     {
@@ -834,6 +976,7 @@ namespace ClubTimerXbox.Services
                     .ToList()
             };
             items.Add(marker);
+            ValidateConservation(items, monthStart, nextMonthStart);
             var persistedAssignments = marker.LossAllocations
                 .Select(allocation => new CashAccountingAssignment
                 {
@@ -1146,6 +1289,7 @@ namespace ClubTimerXbox.Services
 
                 item.ExtraContributions ??= new List<CashExtraContribution>();
                 item.LossAllocations ??= new List<CashLossAllocation>();
+                item.Settlements ??= new List<CashSettlementEntry>();
                 item.LinkedInvestigationIds ??= new List<Guid>();
                 if (item.InvestigationId == Guid.Empty)
                     item.InvestigationId = item.Id == Guid.Empty ? Guid.NewGuid() : item.Id;
@@ -1181,6 +1325,74 @@ namespace ClubTimerXbox.Services
                     }
 
                     item.AccountingSchemaVersion = 3;
+                }
+
+                if (item.AccountingSchemaVersion < CurrentSchemaVersion)
+                {
+                    if (!item.IsTechnicalEvent)
+                    {
+                        int allocated = item.LossAllocations.Sum(allocation =>
+                            Math.Max(0, allocation.Amount));
+                        if (item.FormalizedAmount > allocated)
+                        {
+                            int missingAllocation = item.FormalizedAmount - allocated;
+                            string employee = !string.IsNullOrWhiteSpace(
+                                item.ResponsibleEmployeeName)
+                                    ? item.ResponsibleEmployeeName.Trim()
+                                    : item.SuspectedEmployeeName.Trim();
+                            item.LossAllocations.Add(new CashLossAllocation
+                            {
+                                CreatedAt = item.ResolvedAt ?? item.CreatedAt,
+                                EmployeeName = employee,
+                                Amount = missingAllocation,
+                                PostedAmount = missingAllocation,
+                                Source = CashLossAllocationSource.Legacy,
+                                Reason = "Историческая проводка оформленной потери"
+                            });
+                        }
+                        else if (allocated > item.FormalizedAmount)
+                        {
+                            item.FormalizedAmount = allocated;
+                        }
+
+                        if (IsExtra(item) &&
+                            item.ExtraContributions.Count == 0 &&
+                            item.OriginalAmount > 0)
+                        {
+                            int active = Math.Max(0, item.Amount);
+                            item.ExtraContributions.Add(new CashExtraContribution
+                            {
+                                InvestigationId = item.InvestigationId,
+                                CreatedAt = item.CreatedAt,
+                                Kind = item.Kind,
+                                Origin = item.Origin,
+                                Stage = item.Stage,
+                                OriginalAmount = item.OriginalAmount,
+                                Amount = active,
+                                ResolvedAmount = Math.Max(0, item.OriginalAmount - active),
+                                ExpectedAmount = item.ExpectedAmount,
+                                ActualAmount = item.ActualAmount,
+                                ProgramExpectedAmount = item.ProgramExpectedAmount
+                            });
+                        }
+
+                        foreach (var contribution in item.ExtraContributions)
+                        {
+                            contribution.OriginalAmount =
+                                Math.Max(0, contribution.Amount) +
+                                Math.Max(0, contribution.ResolvedAmount);
+                        }
+
+                        if (IsShortage(item))
+                        {
+                            item.OriginalAmount =
+                                Math.Max(0, item.Amount) +
+                                Math.Max(0, item.ResolvedAmount) +
+                                Math.Max(0, item.FormalizedAmount);
+                        }
+                    }
+
+                    item.AccountingSchemaVersion = CurrentSchemaVersion;
                 }
 
                 if (item.ResponsibilityLevel == CashResponsibilityLevel.Unknown)
@@ -1269,11 +1481,13 @@ namespace ClubTimerXbox.Services
             int actualAmount,
             string note,
             string operationId = "",
-            string responsibleEmployeeName = "")
+            string responsibleEmployeeName = "",
+            int? programExpectedAmount = null,
+            IReadOnlyList<CashSettlementEntry>? settlements = null)
         {
             items.Add(new CashReconciliationItem
             {
-                AccountingSchemaVersion = 3,
+                AccountingSchemaVersion = CurrentSchemaVersion,
                 Id = Guid.NewGuid(),
                 InvestigationId = investigationId,
                 LinkedInvestigationIds = linkedInvestigationIds
@@ -1289,12 +1503,14 @@ namespace ClubTimerXbox.Services
                 Resolution = CashReconciliationResolution.InputCorrection,
                 ExpectedAmount = expectedAmount,
                 ActualAmount = actualAmount,
+                ProgramExpectedAmount = programExpectedAmount ?? expectedAmount,
                 CheckedByEmployeeName = origin == CashReconciliationOrigin.CashAcceptance
                     ? "Сотрудник"
                     : "Владелец",
                 ResponsibleEmployeeName = responsibleEmployeeName.Trim(),
                 Note = note.Trim(),
                 OperationId = operationId.Trim(),
+                Settlements = settlements?.ToList() ?? new List<CashSettlementEntry>(),
                 ResolvedAt = now,
                 ResolvedBy = "Система",
                 ResolutionNote = "Технический журнал идемпотентности кассы."
@@ -1315,11 +1531,13 @@ namespace ClubTimerXbox.Services
             string responsible,
             string suspected,
             string note,
-            Guid? investigationId = null)
+            Guid? investigationId = null,
+            string operationId = "",
+            int? programExpectedAmount = null)
         {
             var item = new CashReconciliationItem
             {
-                AccountingSchemaVersion = 3,
+                AccountingSchemaVersion = CurrentSchemaVersion,
                 Id = Guid.NewGuid(),
                 InvestigationId = investigationId ?? Guid.NewGuid(),
                 CreatedAt = now,
@@ -1332,6 +1550,8 @@ namespace ClubTimerXbox.Services
                 OriginalAmount = amount,
                 ExpectedAmount = expectedAmount,
                 ActualAmount = actualAmount,
+                ProgramExpectedAmount = programExpectedAmount ?? expectedAmount,
+                OperationId = operationId.Trim(),
                 CheckedByEmployeeName = checkedBy.Trim(),
                 ResponsibleEmployeeName = responsible.Trim(),
                 SuspectedEmployeeName = suspected.Trim(),
@@ -1359,7 +1579,9 @@ namespace ClubTimerXbox.Services
             string checkedBy,
             string note,
             Guid? investigationId = null,
-            string employeeName = "")
+            string employeeName = "",
+            int? programExpectedAmount = null,
+            string operationId = "")
         {
             var pool = CurrentOpen(items, fromInclusive, toExclusive)
                 .FirstOrDefault(IsExtra);
@@ -1368,7 +1590,7 @@ namespace ClubTimerXbox.Services
             {
                 pool = new CashReconciliationItem
                 {
-                    AccountingSchemaVersion = 3,
+                    AccountingSchemaVersion = CurrentSchemaVersion,
                     Id = Guid.NewGuid(),
                     InvestigationId = investigationId ?? Guid.NewGuid(),
                     CreatedAt = now,
@@ -1379,6 +1601,8 @@ namespace ClubTimerXbox.Services
                     ResponsibilityLevel = CashResponsibilityLevel.Unknown,
                     ExpectedAmount = expectedAmount,
                     ActualAmount = actualAmount,
+                    ProgramExpectedAmount = programExpectedAmount ?? expectedAmount,
+                    OperationId = operationId.Trim(),
                     CheckedByEmployeeName = checkedBy.Trim(),
                     Title = "Общий излишек кассы",
                     Note = note.Trim()
@@ -1402,24 +1626,30 @@ namespace ClubTimerXbox.Services
                 Origin = origin,
                 Stage = stage,
                 OriginalAmount = amount,
-                Amount = amount
+                Amount = amount,
+                ExpectedAmount = expectedAmount,
+                ActualAmount = actualAmount,
+                ProgramExpectedAmount = programExpectedAmount ?? expectedAmount,
+                OperationId = operationId.Trim()
             });
             SyncExtra(pool);
             return pool;
         }
 
-        private static int SettleAwaitingShortages(
+        private static int SettleNewExtraAgainstAwaitingShortages(
             IList<CashReconciliationItem> items,
             DateTime fromInclusive,
             DateTime toExclusive,
+            CashExtraContribution source,
             CashReconciliationKind shortageKind,
-            ref int available,
             DateTime now,
             CashReconciliationResolution resolution,
-            string note)
+            string note,
+            int cashDeltaSign,
+            int cashlessDeltaSign,
+            ICollection<CashSettlementEntry> settlements)
         {
-            int initial = available;
-
+            int initial = source.Amount;
             foreach (var shortage in CurrentOpen(items, fromInclusive, toExclusive)
                 .Where(item =>
                     item.Kind == shortageKind &&
@@ -1430,59 +1660,90 @@ namespace ClubTimerXbox.Services
                 .OrderBy(item => item.CreatedAt)
                 .ThenBy(item => item.Id))
             {
-                if (available <= 0)
+                if (source.Amount <= 0)
                     break;
 
-                int used = Math.Min(shortage.Amount, available);
+                int used = Math.Min(shortage.Amount, source.Amount);
                 shortage.Amount -= used;
                 shortage.ResolvedAmount += used;
-                available -= used;
+                source.Amount -= used;
+                source.ResolvedAmount += used;
+                settlements.Add(CreateSettlement(
+                    now,
+                    CashSettlementKind.PairedTender,
+                    source.Id,
+                    shortage.Id,
+                    used,
+                    cashDeltaSign,
+                    cashlessDeltaSign,
+                    note));
 
                 if (shortage.Amount == 0)
                     Resolve(shortage, now, resolution, note);
             }
 
-            return initial - available;
+            return initial - source.Amount;
         }
 
-        private static int SettleAwaitingExtraContributions(
+        private static int SettleNewShortageAgainstAwaitingExtraContributions(
             IList<CashReconciliationItem> items,
             DateTime fromInclusive,
             DateTime toExclusive,
+            CashReconciliationItem sourceShortage,
             CashReconciliationKind extraKind,
-            ref int availableShortage,
+            CashReconciliationStage requiredStage,
             DateTime now,
-            string note)
+            string note,
+            int cashDeltaSign,
+            int cashlessDeltaSign,
+            ICollection<CashSettlementEntry> settlements)
         {
-            int initial = availableShortage;
+            int initial = sourceShortage.Amount;
             var pool = CurrentOpen(items, fromInclusive, toExclusive)
                 .FirstOrDefault(IsExtra);
-
             if (pool == null)
                 return 0;
 
             foreach (var contribution in pool.ExtraContributions
                 .Where(item =>
                     item.Kind == extraKind &&
-                    item.Stage == CashReconciliationStage.AwaitingCashlessVerification &&
+                    item.Stage == requiredStage &&
                     item.Amount > 0)
                 .OrderBy(item => item.CreatedAt)
                 .ThenBy(item => item.Id))
             {
-                if (availableShortage <= 0)
+                if (sourceShortage.Amount <= 0)
                     break;
 
-                int used = Math.Min(contribution.Amount, availableShortage);
+                int used = Math.Min(contribution.Amount, sourceShortage.Amount);
                 contribution.Amount -= used;
                 contribution.ResolvedAmount += used;
-                availableShortage -= used;
+                sourceShortage.Amount -= used;
+                sourceShortage.ResolvedAmount += used;
+                settlements.Add(CreateSettlement(
+                    now,
+                    CashSettlementKind.PairedTender,
+                    contribution.Id,
+                    sourceShortage.Id,
+                    used,
+                    cashDeltaSign,
+                    cashlessDeltaSign,
+                    note));
             }
 
             SyncExtra(pool);
             if (pool.Amount == 0)
                 Resolve(pool, now, CashReconciliationResolution.PairedTender, note);
+            if (sourceShortage.Amount == 0)
+            {
+                Resolve(
+                    sourceShortage,
+                    now,
+                    CashReconciliationResolution.PairedTender,
+                    note);
+            }
 
-            return initial - availableShortage;
+            return initial - sourceShortage.Amount;
         }
 
         private static void MarkAwaitingShortagesReady(
@@ -1517,7 +1778,8 @@ namespace ClubTimerXbox.Services
             IList<CashReconciliationItem> items,
             DateTime fromInclusive,
             DateTime toExclusive,
-            DateTime now)
+            DateTime now,
+            ICollection<CashSettlementEntry>? settlements = null)
         {
             var pool = CurrentOpen(items, fromInclusive, toExclusive).FirstOrDefault(IsExtra);
             if (pool == null)
@@ -1552,6 +1814,29 @@ namespace ClubTimerXbox.Services
                     contribution.Amount -= used;
                     contribution.ResolvedAmount += used;
                     settled += used;
+                    int cashDeltaSign = 0;
+                    int cashlessDeltaSign = 0;
+                    if (contribution.Kind == CashReconciliationKind.CashExtra &&
+                        shortage.Kind == CashReconciliationKind.CashlessShortage)
+                    {
+                        cashDeltaSign = 1;
+                        cashlessDeltaSign = -1;
+                    }
+                    else if (contribution.Kind == CashReconciliationKind.CashlessExtra &&
+                             shortage.Kind == CashReconciliationKind.CashShortage)
+                    {
+                        cashDeltaSign = -1;
+                        cashlessDeltaSign = 1;
+                    }
+                    settlements?.Add(CreateSettlement(
+                        now,
+                        CashSettlementKind.ExtraSettlement,
+                        contribution.Id,
+                        shortage.Id,
+                        used,
+                        cashDeltaSign,
+                        cashlessDeltaSign,
+                        "Взаимный зачёт двух ведер по приоритету Конституции кассы."));
 
                     if (shortage.Amount == 0)
                     {
@@ -1583,7 +1868,8 @@ namespace ClubTimerXbox.Services
             IList<CashReconciliationItem> items,
             DateTime fromInclusive,
             DateTime toExclusive,
-            DateTime now)
+            DateTime now,
+            ICollection<CashSettlementEntry> settlements)
         {
             var pool = CurrentOpen(items, fromInclusive, toExclusive).FirstOrDefault(IsExtra);
             if (pool == null)
@@ -1610,6 +1896,29 @@ namespace ClubTimerXbox.Services
                     contribution.Amount -= used;
                     contribution.ResolvedAmount += used;
                     settled += used;
+                    int cashDeltaSign = 0;
+                    int cashlessDeltaSign = 0;
+                    if (contribution.Kind == CashReconciliationKind.CashExtra &&
+                        shortage.Kind == CashReconciliationKind.CashlessShortage)
+                    {
+                        cashDeltaSign = 1;
+                        cashlessDeltaSign = -1;
+                    }
+                    else if (contribution.Kind == CashReconciliationKind.CashlessExtra &&
+                             shortage.Kind == CashReconciliationKind.CashShortage)
+                    {
+                        cashDeltaSign = -1;
+                        cashlessDeltaSign = 1;
+                    }
+                    settlements.Add(CreateSettlement(
+                        now,
+                        CashSettlementKind.MonthClose,
+                        contribution.Id,
+                        shortage.Id,
+                        used,
+                        cashDeltaSign,
+                        cashlessDeltaSign,
+                        "Финальный взаимный зачёт перед закрытием месяца."));
 
                     if (shortage.Amount == 0)
                     {
@@ -1783,6 +2092,31 @@ namespace ClubTimerXbox.Services
             return contribution.CreatedAt >= shortage.CreatedAt;
         }
 
+        private static CashSettlementEntry CreateSettlement(
+            DateTime now,
+            CashSettlementKind kind,
+            Guid sourceId,
+            Guid targetId,
+            int amount,
+            int cashDeltaSign,
+            int cashlessDeltaSign,
+            string note)
+        {
+            amount = Math.Max(0, amount);
+            return new CashSettlementEntry
+            {
+                Id = Guid.NewGuid(),
+                CreatedAt = now,
+                Kind = kind,
+                SourceId = sourceId,
+                TargetId = targetId,
+                Amount = amount,
+                CashDelta = amount * cashDeltaSign,
+                CashlessDelta = amount * cashlessDeltaSign,
+                Note = note
+            };
+        }
+
         private static List<CashAccountingAssignment> DistributeByHours(
             int amount,
             IReadOnlyDictionary<string, double> workedHours)
@@ -1853,8 +2187,10 @@ namespace ClubTimerXbox.Services
             foreach (var duplicate in extras.Skip(1))
             {
                 target.ExtraContributions.AddRange(duplicate.ExtraContributions);
-                duplicate.ResolvedAmount += duplicate.Amount;
+                duplicate.ExtraContributions = new List<CashExtraContribution>();
                 duplicate.Amount = 0;
+                duplicate.OriginalAmount = 0;
+                duplicate.ResolvedAmount = 0;
                 duplicate.Status = CashReconciliationStatus.Resolved;
                 duplicate.Resolution = CashReconciliationResolution.Legacy;
                 duplicate.ResolvedAt ??= ClubClock.Current.LocalNow;
@@ -1863,6 +2199,107 @@ namespace ClubTimerXbox.Services
             }
 
             SyncExtra(target);
+        }
+
+        public static void ValidateConservation(
+            IEnumerable<CashReconciliationItem> items,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            var periodItems = items
+                .Where(item =>
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive &&
+                    item.AccountingSchemaVersion >= CurrentSchemaVersion)
+                .ToList();
+
+            foreach (var item in periodItems.Where(item => !item.IsTechnicalEvent))
+            {
+                if (item.Amount < 0 ||
+                    item.ResolvedAmount < 0 ||
+                    item.FormalizedAmount < 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Нарушение кассового журнала {item.Id}: отрицательная сумма.");
+                }
+
+                if (item.Status == CashReconciliationStatus.Resolved && item.Amount != 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Нарушение кассового журнала {item.Id}: закрытая карта содержит активную сумму.");
+                }
+
+                if (IsExtra(item))
+                {
+                    foreach (var contribution in item.ExtraContributions)
+                    {
+                        if (contribution.OriginalAmount !=
+                            contribution.Amount + contribution.ResolvedAmount)
+                        {
+                            throw new InvalidOperationException(
+                                $"Нарушение вклада излишка {contribution.Id}: сумма не сохраняется.");
+                        }
+                    }
+
+                    int original = item.ExtraContributions.Sum(entry => entry.OriginalAmount);
+                    int active = item.ExtraContributions.Sum(entry => entry.Amount);
+                    int resolved = item.ExtraContributions.Sum(entry => entry.ResolvedAmount);
+                    if (item.OriginalAmount != original ||
+                        item.Amount != active ||
+                        item.ResolvedAmount != resolved)
+                    {
+                        throw new InvalidOperationException(
+                            $"Нарушение карточки излишка {item.Id}: вклад и итог не равны.");
+                    }
+                }
+                else if (IsShortage(item))
+                {
+                    if (item.OriginalAmount !=
+                        item.Amount + item.ResolvedAmount + item.FormalizedAmount)
+                    {
+                        throw new InvalidOperationException(
+                            $"Нарушение карточки недостачи {item.Id}: сумма не сохраняется.");
+                    }
+
+                    int allocated = item.LossAllocations.Sum(entry => Math.Max(0, entry.Amount));
+                    if (allocated != item.FormalizedAmount)
+                    {
+                        throw new InvalidOperationException(
+                            $"Нарушение штрафа {item.Id}: оформленная сумма не равна проводкам.");
+                    }
+                }
+            }
+
+            var settlements = periodItems
+                .SelectMany(item => item.Settlements ?? new List<CashSettlementEntry>())
+                .ToList();
+            if (settlements.Select(item => item.Id).Distinct().Count() != settlements.Count)
+                throw new InvalidOperationException("Повтор settlementId в кассовом журнале.");
+
+            foreach (var settlement in settlements)
+            {
+                if (settlement.Amount <= 0 ||
+                    settlement.SourceId == Guid.Empty ||
+                    settlement.TargetId == Guid.Empty)
+                {
+                    throw new InvalidOperationException(
+                        $"Неполная проводка взаимозачёта {settlement.Id}.");
+                }
+
+                if (settlement.CashDelta + settlement.CashlessDelta != 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Проводка {settlement.Id} изменила общую сумму денег.");
+                }
+            }
+
+            int openExtraCards = periodItems.Count(item =>
+                !item.IsTechnicalEvent &&
+                item.Status == CashReconciliationStatus.Open &&
+                IsExtra(item) &&
+                item.Amount > 0);
+            if (openExtraCards > 1)
+                throw new InvalidOperationException("В клубе больше одной активной карты излишка.");
         }
 
         private static CashAccountingResult BuildResult(
@@ -1926,11 +2363,11 @@ namespace ClubTimerXbox.Services
 
             item.Amount = item.ExtraContributions.Sum(contribution =>
                 Math.Max(0, contribution.Amount));
-            item.OriginalAmount = Math.Max(
-                item.OriginalAmount,
-                item.ExtraContributions.Sum(contribution =>
-                    Math.Max(0, contribution.OriginalAmount))
-            );
+            int contributionOriginal = item.ExtraContributions.Sum(contribution =>
+                Math.Max(0, contribution.OriginalAmount));
+            item.OriginalAmount = item.AccountingSchemaVersion >= CurrentSchemaVersion
+                ? contributionOriginal
+                : Math.Max(item.OriginalAmount, contributionOriginal);
             item.ResolvedAmount = item.ExtraContributions.Sum(contribution =>
                 Math.Max(0, contribution.ResolvedAmount));
             item.Stage = item.ExtraContributions.Any(contribution =>

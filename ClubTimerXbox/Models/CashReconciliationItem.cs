@@ -30,7 +30,8 @@ namespace ClubTimerXbox.Models
         OwnerPenaltyOverage,
         OwnerManualPenalty,
         CorrectionCheckpoint,
-        MonthClose
+        MonthClose,
+        CashAcceptanceInputCorrection
     }
 
     public enum CashReconciliationStage
@@ -66,6 +67,35 @@ namespace ClubTimerXbox.Models
         OwnerManual,
         MonthClose,
         Legacy
+    }
+
+    public enum CashSettlementKind
+    {
+        PairedTender,
+        ExtraSettlement,
+        InputCorrection,
+        MonthClose
+    }
+
+    public class CashSettlementEntry
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
+
+        public CashSettlementKind Kind { get; set; } = CashSettlementKind.ExtraSettlement;
+
+        public Guid SourceId { get; set; }
+
+        public Guid TargetId { get; set; }
+
+        public int Amount { get; set; }
+
+        public int CashDelta { get; set; }
+
+        public int CashlessDelta { get; set; }
+
+        public string Note { get; set; } = "";
     }
 
     public class CashLossAllocation
@@ -110,6 +140,14 @@ namespace ClubTimerXbox.Models
         public int Amount { get; set; }
 
         public int ResolvedAmount { get; set; }
+
+        public int ExpectedAmount { get; set; }
+
+        public int ActualAmount { get; set; }
+
+        public int ProgramExpectedAmount { get; set; }
+
+        public string OperationId { get; set; } = "";
     }
 
     public class CashReconciliationItem
@@ -154,6 +192,8 @@ namespace ClubTimerXbox.Models
 
         public List<CashLossAllocation> LossAllocations { get; set; } = new();
 
+        public List<CashSettlementEntry> Settlements { get; set; } = new();
+
         public int Amount { get; set; }
 
         public int OriginalAmount { get; set; }
@@ -167,6 +207,8 @@ namespace ClubTimerXbox.Models
         public int ExpectedAmount { get; set; }
 
         public int ActualAmount { get; set; }
+
+        public int ProgramExpectedAmount { get; set; }
 
         public string CheckedByEmployeeName { get; set; } = "";
 

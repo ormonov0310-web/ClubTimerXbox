@@ -112,6 +112,11 @@ function formatClubEventBody(clubEvent) {
       `Время смены: ${eventTime(clubEvent)}`,
     ].join("\n");
   }
+  if (type === "salary_taken_cash") {
+    return `${employee} взял зарплату наличными: ${
+      Math.max(0, amount(clubEvent.amount))
+    } сом`;
+  }
   if (type === "acceptance_completed") {
     return [
       `${previous} → ${current}`,

@@ -73,11 +73,23 @@ namespace ClubTimerXbox.Services
                 .Where(item => item.CreatedAt < toExclusive)
                 .OrderByDescending(item => item.CreatedAt)
                 .FirstOrDefault();
+            var latestCheckpoint = CashBalanceCheckpointService.Items
+                .Where(item => item.CreatedAt < toExclusive)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstOrDefault();
 
-            if (latestAcceptance == null)
+            if (latestAcceptance == null && latestCheckpoint == null)
                 return null;
 
-            DateTime checkpoint = latestAcceptance.CreatedAt;
+            bool useCheckpoint = latestCheckpoint != null &&
+                (latestAcceptance == null ||
+                 latestCheckpoint.CreatedAt >= latestAcceptance.CreatedAt);
+            DateTime checkpoint = useCheckpoint
+                ? latestCheckpoint!.CreatedAt
+                : latestAcceptance!.CreatedAt;
+            int checkpointAmount = useCheckpoint
+                ? latestCheckpoint!.CashAmount
+                : latestAcceptance!.ActualCashAmount;
 
             int cashIncomeAfterCheckpoint = PaymentService.Records
                 .Where(record =>
@@ -93,7 +105,7 @@ namespace ClubTimerXbox.Services
                     record.PaymentMethod == "Наличные")
                 .Sum(record => record.Amount);
 
-            return latestAcceptance.ActualCashAmount +
+            return checkpointAmount +
                    cashIncomeAfterCheckpoint -
                    cashExpensesAfterCheckpoint;
         }
@@ -120,11 +132,23 @@ namespace ClubTimerXbox.Services
                 .Where(record => record.UpdatedAt < toExclusive)
                 .OrderByDescending(record => record.UpdatedAt)
                 .FirstOrDefault();
+            var latestCheckpoint = CashlessBalanceCheckpointService.Items
+                .Where(item => item.CreatedAt < toExclusive)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstOrDefault();
 
-            if (latestVerification == null)
+            if (latestVerification == null && latestCheckpoint == null)
                 return null;
 
-            DateTime checkpoint = latestVerification.UpdatedAt;
+            bool useCheckpoint = latestCheckpoint != null &&
+                (latestVerification == null ||
+                 latestCheckpoint.CreatedAt >= latestVerification.UpdatedAt);
+            DateTime checkpoint = useCheckpoint
+                ? latestCheckpoint!.CreatedAt
+                : latestVerification!.UpdatedAt;
+            int checkpointAmount = useCheckpoint
+                ? latestCheckpoint!.CashlessAmount
+                : latestVerification!.Amount;
 
             int cashlessIncomeAfterCheckpoint = PaymentService.Records
                 .Where(record =>
@@ -140,7 +164,7 @@ namespace ClubTimerXbox.Services
                     record.PaymentMethod == "Безнал")
                 .Sum(record => record.Amount);
 
-            return latestVerification.Amount +
+            return checkpointAmount +
                    cashlessIncomeAfterCheckpoint -
                    cashlessExpensesAfterCheckpoint;
         }
@@ -200,7 +224,12 @@ namespace ClubTimerXbox.Services
                 .Where(item => item.CreatedAt < toExclusive)
                 .OrderByDescending(item => item.CreatedAt)
                 .FirstOrDefault();
-            if (checkpoint != null)
+            var acceptance = CashAcceptanceService.Items
+                .Where(item => item.CreatedAt < toExclusive)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstOrDefault();
+            if (checkpoint != null &&
+                (acceptance == null || checkpoint.CreatedAt >= acceptance.CreatedAt))
             {
                 return CalculateCashBalanceAfterCheckpoint(
                     checkpoint.CashAmount,
@@ -208,10 +237,6 @@ namespace ClubTimerXbox.Services
                     toExclusive);
             }
 
-            var acceptance = CashAcceptanceService.Items
-                .Where(item => item.CreatedAt < toExclusive)
-                .OrderByDescending(item => item.CreatedAt)
-                .FirstOrDefault();
             if (acceptance != null)
             {
                 return CalculateCashBalanceAfterCheckpoint(
@@ -229,7 +254,12 @@ namespace ClubTimerXbox.Services
                 .Where(item => item.CreatedAt < toExclusive)
                 .OrderByDescending(item => item.CreatedAt)
                 .FirstOrDefault();
-            if (checkpoint != null)
+            var verification = CashlessService.Records
+                .Where(item => item.UpdatedAt < toExclusive && item.ExpectedAmount.HasValue)
+                .OrderByDescending(item => item.UpdatedAt)
+                .FirstOrDefault();
+            if (checkpoint != null &&
+                (verification == null || checkpoint.CreatedAt >= verification.UpdatedAt))
             {
                 return CalculateCashlessBalanceAfterCheckpoint(
                     checkpoint.CashlessAmount,
@@ -238,10 +268,6 @@ namespace ClubTimerXbox.Services
                     toExclusive);
             }
 
-            var verification = CashlessService.Records
-                .Where(item => item.UpdatedAt < toExclusive && item.ExpectedAmount.HasValue)
-                .OrderByDescending(item => item.UpdatedAt)
-                .FirstOrDefault();
             if (verification != null)
             {
                 return CalculateCashlessBalanceAfterCheckpoint(

@@ -720,6 +720,7 @@ namespace ClubTimerXbox.Services
                         remainingAmount = item.Amount,
                         expectedAmount = item.ExpectedAmount,
                         actualAmount = item.ActualAmount,
+                        programExpectedAmount = item.ProgramExpectedAmount,
                         checkedByEmployeeName = item.CheckedByEmployeeName,
                         responsibleEmployeeName = item.ResponsibleEmployeeName,
                         suspectedEmployeeName = item.SuspectedEmployeeName,
@@ -728,6 +729,41 @@ namespace ClubTimerXbox.Services
                         resolvedAt = item.ResolvedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
                         resolvedBy = item.ResolvedBy,
                         resolutionNote = item.ResolutionNote,
+                        extraContributions = (item.ExtraContributions ??
+                            new List<CashExtraContribution>())
+                            .Select(contribution => new
+                            {
+                                id = contribution.Id.ToString(),
+                                investigationId = contribution.InvestigationId.ToString(),
+                                createdAt = contribution.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                                employeeName = contribution.EmployeeName,
+                                kind = contribution.Kind.ToString(),
+                                origin = contribution.Origin.ToString(),
+                                stage = contribution.Stage.ToString(),
+                                originalAmount = contribution.OriginalAmount,
+                                amount = contribution.Amount,
+                                resolvedAmount = contribution.ResolvedAmount,
+                                expectedAmount = contribution.ExpectedAmount,
+                                actualAmount = contribution.ActualAmount,
+                                programExpectedAmount = contribution.ProgramExpectedAmount,
+                                operationId = contribution.OperationId
+                            })
+                            .ToList(),
+                        settlements = (item.Settlements ??
+                            new List<CashSettlementEntry>())
+                            .Select(settlement => new
+                            {
+                                id = settlement.Id.ToString(),
+                                createdAt = settlement.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                                kind = settlement.Kind.ToString(),
+                                sourceId = settlement.SourceId.ToString(),
+                                targetId = settlement.TargetId.ToString(),
+                                amount = settlement.Amount,
+                                cashDelta = settlement.CashDelta,
+                                cashlessDelta = settlement.CashlessDelta,
+                                note = settlement.Note
+                            })
+                            .ToList(),
                         lossAllocations = (item.LossAllocations ??
                             new List<CashLossAllocation>())
                             .Select(allocation => new
@@ -3920,6 +3956,7 @@ namespace ClubTimerXbox.Services
 
         private static CashReconciliationItem ApplyResolveCashReconciliation(FirebaseCommand command)
         {
+            CashPenaltyPostingService.Recover();
             if (!Guid.TryParse(command.ReconciliationId, out Guid reconciliationId))
                 throw new Exception("Не указан корректный reconciliationId.");
 
@@ -3989,43 +4026,29 @@ namespace ClubTimerXbox.Services
 
             if (command.ResolutionType == "RealShortage" &&
                 actionAmount > 0 &&
-                item.Kind == CashReconciliationKind.CashShortage)
+                (item.Kind == CashReconciliationKind.CashShortage ||
+                 item.Kind == CashReconciliationKind.CashlessShortage))
             {
+                var allocation = item.LossAllocations
+                    .OrderByDescending(entry => entry.CreatedAt)
+                    .ThenByDescending(entry => entry.Id)
+                    .First(entry => entry.Amount == actionAmount);
                 CashPenaltyPostingService.Post(
                     new[]
                     {
                         new CashAccountingAssignment
                         {
-                            EmployeeName = item.ResponsibleEmployeeName,
+                            AllocationId = allocation.Id,
+                            EmployeeName = allocation.EmployeeName,
                             Amount = actionAmount,
                             ReconciliationId = item.Id,
                             Reason =
-                                $"Владелец подтвердил недостачу наличных. " +
+                                $"Владелец подтвердил недостачу кассы. " +
                                 $"Должно быть {item.ExpectedAmount} сом, " +
                                 $"фактически {item.ActualAmount} сом."
                         }
                     },
-                    "Сверка налички закрыта владельцем как реальная недостача."
-                );
-            }
-
-            if (command.ResolutionType == "RealShortage" &&
-                actionAmount > 0 &&
-                item.Kind == CashReconciliationKind.CashlessShortage)
-            {
-                var monthStart = ResolveReconciliationMonth(command, item);
-                var nextMonthStart = monthStart.AddMonths(1);
-
-                DistributeCashlessShortage(
-                    actionAmount,
-                    monthStart,
-                    nextMonthStart,
-                    item.ExpectedAmount,
-                    item.ActualAmount
-                );
-                CashReconciliationService.MarkFormalizedPosted(
-                    item.Id,
-                    item.FormalizedAmount
+                    "Недостача закрыта владельцем как реальная потеря."
                 );
             }
 
@@ -4189,20 +4212,26 @@ namespace ClubTimerXbox.Services
             );
 
             int actualCashless = command.Amount;
-            int expectedCashlessBalance = CalculateExpectedCashlessBalanceForVerification(
+            int programExpectedCashlessBalance = CalculateExpectedCashlessBalanceForVerification(
                 monthStart,
                 nextMonthStart,
                 command.ExpectedAmount >= 0
                     ? command.ExpectedAmount
                     : calculatedExpectedCashlessBalance
             );
+            int observationExpectedCashlessBalance =
+                CalculateExpectedCashlessBalanceForObservation(
+                    monthStart,
+                    nextMonthStart,
+                    programExpectedCashlessBalance);
             DateTime cashlessSuspectFrom = GetLatestCashlessVerificationTime(
                 monthStart,
                 nextMonthStart
             ) ?? reconciliationCycleStart;
             if (cashlessSuspectFrom < reconciliationCycleStart)
                 cashlessSuspectFrom = reconciliationCycleStart;
-            int difference = actualCashless - expectedCashlessBalance;
+            int difference = actualCashless - observationExpectedCashlessBalance;
+            int programDifference = actualCashless - programExpectedCashlessBalance;
             int shortage = Math.Max(0, -difference);
             string suspectedEmployee = shortage > 0
                 ? FindCashlessShortageSuspect(
@@ -4215,41 +4244,37 @@ namespace ClubTimerXbox.Services
             {
                 $"Поступило безнала по программе: {expectedCashlessIncome} сом.",
                 $"Расходы безнала: {cashlessExpenses} сом.",
-                $"Ожидаемый остаток безнала: {expectedCashlessBalance} сом.",
+                $"Безнал по программе: {programExpectedCashlessBalance} сом.",
+                $"Ожидаемый факт от прошлого снимка: {observationExpectedCashlessBalance} сом.",
                 $"Фактический остаток: {actualCashless} сом.",
-                $"Разница: {difference:+#;-#;0} сом."
+                $"Новая дельта разбора: {difference:+#;-#;0} сом.",
+                $"Разница с программой: {programDifference:+#;-#;0} сом."
             };
             if (!string.IsNullOrWhiteSpace(suspectedEmployee))
                 notes.Add($"Рекомендация системы: проверить безнал-операции сотрудника {suspectedEmployee}.");
 
+            var result = CashReconciliationService.ProcessCashlessVerification(
+                monthStart,
+                nextMonthStart,
+                observationExpectedCashlessBalance,
+                actualCashless,
+                suspectedEmployee,
+                string.Join("\n", notes),
+                commandId,
+                programExpectedCashlessBalance
+            );
             CashlessService.SetAmountForToday(
                 amount: actualCashless,
                 note: string.IsNullOrWhiteSpace(command.Description)
                     ? "Сверка безнала владельцем"
                     : command.Description,
-                expectedAmount: expectedCashlessBalance
-            );
-
-            var result = CashReconciliationService.ProcessCashlessVerification(
-                monthStart,
-                nextMonthStart,
-                expectedCashlessBalance,
-                actualCashless,
-                suspectedEmployee,
-                string.Join("\n", notes),
-                commandId
-            );
-            PersistCashAssignments(
-                result.Assignments,
-                "Автоматически оформлено связанной сверкой безнала."
+                expectedAmount: programExpectedCashlessBalance
             );
 
             if (result.PairedAmount > 0)
                 notes.Add($"Связанной парой нал/безнал закрыто: {result.PairedAmount} сом.");
             if (result.SettledAmount > 0)
                 notes.Add($"Свободным излишком закрыто по приоритету: {result.SettledAmount} сом.");
-            if (result.Assignments.Count > 0)
-                notes.Add($"Автоматически оформлено подтверждённых потерь: {result.Assignments.Sum(item => item.Amount)} сом.");
             notes.Add($"Разбор после сверки: {result.Breakdown:+#;-#;0} сом.");
             notes.Add($"Рекомендации: {result.RecommendationTotal} сом.");
             return string.Join(" ", notes);
@@ -4365,6 +4390,40 @@ namespace ClubTimerXbox.Services
             );
         }
 
+        private static int CalculateExpectedCashlessBalanceForObservation(
+            DateTime monthStart,
+            DateTime nextMonthStart,
+            int fallbackExpectedCashless)
+        {
+            var latestActual = CashlessService.Records
+                .Where(record =>
+                    record.Date >= monthStart.Date &&
+                    record.Date < nextMonthStart.Date)
+                .OrderByDescending(record => record.UpdatedAt)
+                .FirstOrDefault();
+
+            if (latestActual == null)
+                return Math.Max(0, fallbackExpectedCashless);
+
+            int incomeAfterLatestActual = PaymentService.Records
+                .Where(record =>
+                    record.CreatedAt > latestActual.UpdatedAt &&
+                    record.CreatedAt < nextMonthStart)
+                .Sum(record => record.MBankAmount);
+            int expensesAfterLatestActual = CashService.Records
+                .Where(record =>
+                    record.CreatedAt > latestActual.UpdatedAt &&
+                    record.CreatedAt < nextMonthStart &&
+                    record.Type == CashRecordType.Expense &&
+                    record.PaymentMethod.Equals("Безнал", StringComparison.OrdinalIgnoreCase))
+                .Sum(record => record.Amount);
+
+            return Math.Max(
+                0,
+                latestActual.Amount + incomeAfterLatestActual - expensesAfterLatestActual
+            );
+        }
+
         private static string ApplyBalanceCashlessActual(
             string commandId,
             FirebaseCommand command)
@@ -4402,29 +4461,17 @@ namespace ClubTimerXbox.Services
                 monthStart,
                 nextMonthStart
             );
-            int expectedCash = CalculateExpectedCashBalanceForReconciliation(
-                monthStart,
-                nextMonthStart,
-                actualCash
-            );
-            int calculatedExpectedCashless = CalculateExpectedCashlessBalanceForReconciliation(
+            int programExpectedCashless = CalculateExpectedCashlessBalanceForReconciliation(
                 monthStart,
                 nextMonthStart,
                 actualCashless
             );
-            int expectedCashless = calculatedExpectedCashless;
-            int checkpointBreakdown =
-                CashReconciliationService.GetLatestConstitutionCheckpointBreakdown(
+            int observationExpectedCashless =
+                CalculateExpectedCashlessBalanceForObservation(
                     monthStart,
-                    nextMonthStart
-                );
-            int cashDifference = actualCash.HasValue
-                ? actualCash.Value - expectedCash
-                : 0;
-            int totalDifference = actualCash.HasValue
-                ? actualCash.Value + actualCashless - expectedCash - expectedCashless
-                : actualCashless - expectedCashless;
-            int cashlessDifference = actualCashless - expectedCashless;
+                    nextMonthStart,
+                    programExpectedCashless);
+            int cashlessDifference = actualCashless - observationExpectedCashless;
             string suggestedSuspect = cashlessDifference < 0
                 ? FindCashlessShortageSuspect(
                     Math.Abs(cashlessDifference),
@@ -4436,7 +4483,7 @@ namespace ClubTimerXbox.Services
                 .HasCurrentCashlessVerification(
                     reconciliationCycleStart,
                     nextMonthStart,
-                    expectedCashless,
+                    observationExpectedCashless,
                     actualCashless
                 );
             var verificationResult = cashlessAlreadyVerified
@@ -4444,92 +4491,27 @@ namespace ClubTimerXbox.Services
                 : CashReconciliationService.ProcessCashlessVerification(
                     monthStart,
                     nextMonthStart,
-                    expectedCashless,
+                    observationExpectedCashless,
                     actualCashless,
                     suggestedSuspect,
                     "Связанная сверка безнала внутри итоговой корректировки.",
-                    $"{commandId}:verification"
+                    $"{commandId}:verification",
+                    programExpectedCashless
                 );
-            PersistCashAssignments(
-                verificationResult.Assignments,
-                "Автоматически оформлено связанной сверкой внутри корректировки."
-            );
 
             long checkpointNumber = DateTime.UtcNow.Ticks;
             var correctionResult = CashReconciliationService
                 .ApplyConstitutionCorrection(
                     monthStart,
                     nextMonthStart,
-                    checkpointNumber: 0
+                    checkpointNumber,
+                    commandId,
+                    actualCash,
+                    actualCashless
                 );
             PersistCashAssignments(
                 correctionResult.Assignments,
                 "Оформлено итоговой корректировкой по Конституции кассы."
-            );
-
-            int existingMoneyLosses =
-                CashReconciliationService.GetConstitutionFormalizedTotal(
-                    reconciliationCycleStart,
-                    nextMonthStart
-                );
-            int representedCycleDifference =
-                CashReconciliationService.GetConstitutionBreakdown(
-                    monthStart,
-                    nextMonthStart
-                );
-            int missingDifference = CashConstitutionEngine
-                .CalculateUnrepresentedDifference(
-                    totalDifference,
-                    existingMoneyLosses,
-                    representedCycleDifference,
-                    checkpointBreakdown
-                );
-
-            string suggestedResponsible =
-                CashReconciliationService.GetSuggestedResponsibleForOpenShortages(
-                    monthStart,
-                    nextMonthStart
-                );
-            if (string.IsNullOrWhiteSpace(suggestedSuspect))
-            {
-                suggestedSuspect = CashReconciliationService
-                    .GetSuggestedSuspectForOpenShortages(
-                        monthStart,
-                        nextMonthStart
-                    );
-            }
-            if (string.IsNullOrWhiteSpace(suggestedResponsible) &&
-                string.IsNullOrWhiteSpace(suggestedSuspect))
-            {
-                suggestedSuspect = string.IsNullOrWhiteSpace(
-                    ShiftAcceptanceService.Current.DisplayResponsibleEmployeeName)
-                    ? ShiftAcceptanceService.Current.ResponsibleEmployeeName.Trim()
-                    : ShiftAcceptanceService.Current.DisplayResponsibleEmployeeName.Trim();
-            }
-
-            var rawResult = CashReconciliationService.AddConstitutionRawDifference(
-                monthStart,
-                nextMonthStart,
-                missingDifference,
-                expectedCashless,
-                actualCashless,
-                suggestedResponsible,
-                string.IsNullOrWhiteSpace(suggestedResponsible)
-                    ? suggestedSuspect
-                    : "",
-                $"Не представленная карточками разница итоговой корректировки: {missingDifference:+#;-#;0} сом."
-            );
-            var finalCorrection = CashReconciliationService.ApplyConstitutionCorrection(
-                monthStart,
-                nextMonthStart,
-                checkpointNumber,
-                commandId,
-                actualCash,
-                actualCashless
-            );
-            PersistCashAssignments(
-                finalCorrection.Assignments,
-                "Оформлено после переноса остатка итоговой корректировки."
             );
 
             CompleteCommittedCashCorrection(
@@ -4548,14 +4530,10 @@ namespace ClubTimerXbox.Services
                     monthStart,
                     nextMonthStart
                 );
-            int formalized = verificationResult.Assignments.Sum(item => item.Amount) +
-                             correctionResult.Assignments.Sum(item => item.Amount) +
-                             finalCorrection.Assignments.Sum(item => item.Amount);
+            int formalized = correctionResult.Assignments.Sum(item => item.Amount);
             int settled = verificationResult.PairedAmount +
-                          verificationResult.SettledAmount +
-                          correctionResult.SettledAmount +
-                          rawResult.SettledAmount +
-                          finalCorrection.SettledAmount;
+                           verificationResult.SettledAmount +
+                           correctionResult.SettledAmount;
             string cashFact = actualCash.HasValue
                 ? $"{actualCash.Value} сом"
                 : "нет приёмки";
@@ -4597,136 +4575,6 @@ namespace ClubTimerXbox.Services
             string source)
         {
             CashPenaltyPostingService.Post(assignments, source);
-        }
-
-        private static int ForgiveExistingCashShortagesWithCashlessExtra(
-            int cashlessExtraAmount,
-            DateTime fromInclusive,
-            DateTime toExclusive)
-        {
-            if (cashlessExtraAmount <= 0 ||
-                cashlessExtraAmount > CashReconciliationService.AutoResolveLimit)
-            {
-                return 0;
-            }
-
-            int reducedInCashRecords = CashService.ReduceCashShortagesByPaymentMistake(
-                amount: cashlessExtraAmount,
-                fromInclusive: fromInclusive,
-                toExclusive: toExclusive,
-                titleKeyword: "налич"
-            );
-            int reducedInEmployeeLosses = EmployeeLossService.ForgiveCashShortagesByPaymentMistake(
-                amount: cashlessExtraAmount,
-                fromInclusive: fromInclusive,
-                toExclusive: toExclusive
-            );
-            int consumed = Math.Max(reducedInCashRecords, reducedInEmployeeLosses);
-
-            if (consumed <= 0)
-                return 0;
-
-            return CashReconciliationService.ConsumeOpenCashlessExtra(
-                consumed,
-                fromInclusive,
-                toExclusive
-            );
-        }
-
-        private static void DistributeCashlessShortage(
-            int shortageAmount,
-            DateTime fromInclusive,
-            DateTime toExclusive,
-            int expectedCashless,
-            int actualCashless)
-        {
-            var groups = PaymentService.Records
-                .Where(record =>
-                    record.CreatedAt >= fromInclusive &&
-                    record.CreatedAt < toExclusive &&
-                    record.MBankAmount > 0)
-                .GroupBy(record =>
-                    string.IsNullOrWhiteSpace(record.EmployeeName)
-                        ? "Неизвестно"
-                        : record.EmployeeName)
-                .Select(group => new
-                {
-                    EmployeeName = group.Key,
-                    Amount = group.Sum(record => record.MBankAmount)
-                })
-                .Where(group => group.Amount > 0)
-                .OrderByDescending(group => group.Amount)
-                .ToList();
-
-            if (groups.Count == 0)
-            {
-                AddCashlessShortageForEmployee(
-                    "Неизвестно",
-                    shortageAmount,
-                    expectedCashless,
-                    actualCashless,
-                    isFixed: true
-                );
-
-                return;
-            }
-
-            int total = groups.Sum(group => group.Amount);
-            int distributed = 0;
-
-            for (int index = 0; index < groups.Count; index++)
-            {
-                int amount = index == groups.Count - 1
-                    ? shortageAmount - distributed
-                    : (int)Math.Round(shortageAmount * (groups[index].Amount / (double)total));
-
-                if (amount <= 0)
-                    continue;
-
-                distributed += amount;
-
-                AddCashlessShortageForEmployee(
-                    groups[index].EmployeeName,
-                    amount,
-                    expectedCashless,
-                    actualCashless,
-                    isFixed: true
-                );
-            }
-        }
-
-        private static void AddCashlessShortageForEmployee(
-            string employeeName,
-            int amount,
-            int expectedCashlessBalance,
-            int actualCashless,
-            bool isFixed)
-        {
-            string description =
-                $"Автоматическая сверка безнала владельцем.\n" +
-                $"Ожидаемый остаток безнала: {expectedCashlessBalance} сом\n" +
-                $"Фактический остаток: {actualCashless} сом\n" +
-                $"Доля сотрудника: {amount} сом";
-
-            CashService.AddShortage(
-                checkedByEmployeeName: "Владелец",
-                responsibleEmployeeName: employeeName,
-                title: "Недостача безнала",
-                description: description,
-                amount: amount
-            );
-
-            EmployeeLossService.AddLoss(
-                responsibleEmployeeName: employeeName,
-                checkedByEmployeeName: "Владелец",
-                lossType: "Недостача безнала",
-                title: "Недостача безнала",
-                description: description,
-                amount: amount,
-                note: "Оформлено владельцем из активной корректировки",
-                lossKind: "money",
-                isFixed: isFixed
-            );
         }
 
         private static void ApplyAddSalaryPayment(

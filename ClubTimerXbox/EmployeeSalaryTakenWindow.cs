@@ -246,14 +246,21 @@ namespace ClubTimerXbox
                 return;
             }
 
+            string operationId = $"employee-salary:{Guid.NewGuid():N}";
             BusinessAccountingService.PaySalaryFifo(
                 ownerName: _employeeName,
                 employeeName: _employeeName,
                 amount: amount,
                 paymentMethod: "Наличные",
                 description: "Аванс наличными из кассы сотрудником",
-                throughMonthKey: _monthStart.ToString("yyyy-MM")
+                throughMonthKey: _monthStart.ToString("yyyy-MM"),
+                operationId: operationId
             );
+
+            _ = FirebaseEventService.PublishSalaryTakenCashAsync(
+                operationId,
+                _employeeName,
+                amount);
 
             _onChanged?.Invoke();
             Close();
