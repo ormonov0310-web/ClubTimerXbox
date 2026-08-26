@@ -14,6 +14,19 @@ namespace ClubTimerXbox.Models
 
         public string AcceptanceKey { get; set; } = "";
 
+        public string RootAcceptanceKey { get; set; } = "";
+
+        public System.Collections.Generic.List<string> AttemptKeys { get; set; } =
+            new System.Collections.Generic.List<string>();
+
+        public bool IsProvisional { get; set; }
+
+        public DateTime UpdatedAt { get; set; } = DateTime.Now;
+
+        public DateTime? FinalizeAt { get; set; }
+
+        public DateTime? FinalizedAt { get; set; }
+
         public int ExpectedCashAmount { get; set; }
 
         public int ActualCashAmount { get; set; }

@@ -160,6 +160,12 @@ namespace ClubTimerXbox.Services
                     gross = closedPayroll.AccruedAmount + closedPayroll.BonusAmount;
                     losses = closedPayroll.PenaltyAmount;
                     paid = closedPayroll.PaidAmount;
+                    timeAmount = closedPayroll.TimeAmount;
+                    gameAmount = closedPayroll.GameRevenueAmount;
+                    productBonus = closedPayroll.ProductBonusAmount;
+                    bonusAmount = Math.Max(
+                        0,
+                        gross - timeAmount - gameAmount - productBonus);
                     if (closedPayroll.RatingFinancialEffectCaptured)
                     {
                         timeRatingEarnedAmount = closedPayroll.TimeRatingEarnedAmount;
@@ -232,6 +238,164 @@ namespace ClubTimerXbox.Services
             }
 
             return report;
+        }
+
+        public static List<AutoSalaryDayEarning> BuildDailyEarnings(
+            string employeeName,
+            DateTime monthStart)
+        {
+            employeeName = employeeName.Trim();
+            var period = BusinessCalendarService.GetBusinessMonthByAnchor(monthStart);
+            monthStart = period.StartInclusive;
+            DateTime nextMonthStart = period.EndExclusive;
+            if (BusinessAccountingService.TryGetClosedPayroll(
+                    period.Key,
+                    employeeName,
+                    out var closedPayroll) &&
+                closedPayroll.DailyEarnings.Count > 0)
+            {
+                return closedPayroll.DailyEarnings
+                    .Select(CloneDailyEarning)
+                    .OrderByDescending(item => item.Date)
+                    .ToList();
+            }
+
+            var monthly = BuildReport(monthStart).Employees.FirstOrDefault(item =>
+                item.EmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase));
+            if (monthly == null)
+                return new List<AutoSalaryDayEarning>();
+
+            var bonusInputs = BuildEmployeeBonusInputs(monthStart, nextMonthStart);
+            if (!bonusInputs.TryGetValue(employeeName, out var source))
+            {
+                source = new EmployeeBonusInput
+                {
+                    EmployeeName = employeeName
+                };
+            }
+
+            var result = new Dictionary<DateTime, AutoSalaryDayEarning>();
+            double intervalHours = source.PaidIntervals.Sum(interval =>
+                Math.Max(0, (interval.End - interval.Start).TotalHours));
+            double protectedExtraHours = Math.Max(0, source.WorkHours - intervalHours);
+
+            for (DateTime dayStart = monthStart;
+                 dayStart < nextMonthStart;
+                 dayStart = dayStart.AddDays(1))
+            {
+                DateTime dayEnd = dayStart.AddDays(1);
+                var dailyIntervals = source.PaidIntervals
+                    .Select(interval => new PaidInterval(
+                        Max(interval.Start, dayStart),
+                        Min(interval.End, dayEnd)))
+                    .Where(interval => interval.End > interval.Start)
+                    .ToList();
+                double dailyHours = dailyIntervals.Sum(interval =>
+                    (interval.End - interval.Start).TotalHours);
+                double recoveredHours = dayStart == monthStart
+                    ? protectedExtraHours
+                    : 0;
+                var salaryInput = new EmployeeSalaryInput
+                {
+                    EmployeeName = employeeName,
+                    WorkHours = dailyHours + recoveredHours,
+                    PaidIntervals = dailyIntervals
+                };
+
+                RatingAccrualBreakdown timeAccrual = CalculateTimeAccrual(
+                    salaryInput,
+                    monthStart,
+                    nextMonthStart);
+                RatingAccrualBreakdown gameAccrual = CalculateGameRevenueAccrual(
+                    employeeName,
+                    dayStart,
+                    dayEnd);
+                int productBonus = CalculateProductBonusAmount(
+                    employeeName,
+                    dayStart,
+                    dayEnd);
+
+                if (dailyHours <= 0 && recoveredHours <= 0 &&
+                    timeAccrual.Amount == 0 && gameAccrual.Amount == 0 &&
+                    productBonus == 0)
+                {
+                    continue;
+                }
+
+                DateTime businessDate = BusinessCalendarService.GetBusinessDate(dayStart);
+                result[businessDate] = new AutoSalaryDayEarning
+                {
+                    Date = businessDate,
+                    WorkHours = Math.Round(dailyHours + recoveredHours, 2),
+                    TimeAmount = timeAccrual.Amount,
+                    TimeRatingEarnedAmount = timeAccrual.EarnedAmount,
+                    TimeRatingLostAmount = timeAccrual.LostAmount,
+                    TimeRatingPercents = timeAccrual.RatingPercents.ToList(),
+                    GameAmount = gameAccrual.Amount,
+                    GameRatingEarnedAmount = gameAccrual.EarnedAmount,
+                    GameRatingLostAmount = gameAccrual.LostAmount,
+                    GameRatingPercents = gameAccrual.RatingPercents.ToList(),
+                    ProductServiceBonusAmount = productBonus
+                };
+            }
+
+            DateTime firstBusinessDate = BusinessCalendarService.GetBusinessDate(monthStart);
+            DateTime lastBusinessDate = BusinessCalendarService.GetBusinessDate(
+                nextMonthStart.AddTicks(-1));
+            foreach (var bonus in source.Bonuses.Where(item => item.Amount > 0))
+            {
+                DateTime businessDate = BusinessCalendarService.GetBusinessDate(bonus.CreatedAt);
+                if (businessDate < firstBusinessDate)
+                    businessDate = firstBusinessDate;
+                else if (businessDate > lastBusinessDate)
+                    businessDate = lastBusinessDate;
+
+                if (!result.TryGetValue(businessDate, out var day))
+                {
+                    day = new AutoSalaryDayEarning { Date = businessDate };
+                    result[businessDate] = day;
+                }
+
+                day.OtherBonusAmount += bonus.Amount;
+            }
+
+            var days = result.Values.ToList();
+            EmployeeDailyEarningReconciler.Reconcile(
+                days,
+                firstBusinessDate,
+                monthly.TimeAmount,
+                monthly.GameRevenueAmount,
+                monthly.ProductBonusAmount,
+                monthly.BonusAmount,
+                monthly.TimeRatingEarnedAmount,
+                monthly.TimeRatingLostAmount,
+                monthly.GameRatingEarnedAmount,
+                monthly.GameRatingLostAmount);
+
+            return days
+                .Where(item => item.WorkHours > 0 || item.TotalAmount != 0)
+                .OrderByDescending(item => item.Date)
+                .ToList();
+        }
+
+        private static AutoSalaryDayEarning CloneDailyEarning(
+            AutoSalaryDayEarning source)
+        {
+            return new AutoSalaryDayEarning
+            {
+                Date = source.Date,
+                WorkHours = source.WorkHours,
+                TimeAmount = source.TimeAmount,
+                TimeRatingEarnedAmount = source.TimeRatingEarnedAmount,
+                TimeRatingLostAmount = source.TimeRatingLostAmount,
+                TimeRatingPercents = source.TimeRatingPercents.ToList(),
+                GameAmount = source.GameAmount,
+                GameRatingEarnedAmount = source.GameRatingEarnedAmount,
+                GameRatingLostAmount = source.GameRatingLostAmount,
+                GameRatingPercents = source.GameRatingPercents.ToList(),
+                ProductServiceBonusAmount = source.ProductServiceBonusAmount,
+                OtherBonusAmount = source.OtherBonusAmount
+            };
         }
 
         private static Dictionary<string, EmployeeBonusInput> BuildEmployeeBonusInputs(
@@ -732,7 +896,12 @@ namespace ClubTimerXbox.Services
             return new RatingAccrualBreakdown(
                 Math.Max(0, amount),
                 earnedAmount,
-                lostAmount);
+                lostAmount,
+                groups.Keys
+                    .Select(key => key.Rating)
+                    .Distinct()
+                    .OrderBy(value => value)
+                    .ToList());
         }
 
         private static RatingAccrualBreakdown CalculateGameRevenueAccrual(
@@ -782,8 +951,10 @@ namespace ClubTimerXbox.Services
             double baselineAmount = 0;
             double earnedAmount = 0;
             double lostAmount = 0;
+            var ratingPercents = new HashSet<int>();
             foreach (var group in groups)
             {
+                ratingPercents.Add(group.Key.Rating);
                 int revenue = group.Sum(item => item.Amount);
                 int reserve = Percent(revenue, group.Key.ExpenseReservePercent);
                 int salaryBeforeRating = Percent(
@@ -812,7 +983,11 @@ namespace ClubTimerXbox.Services
             else if (reconciliation < 0)
                 lost += -reconciliation;
 
-            return new RatingAccrualBreakdown(actual, earned, lost);
+            return new RatingAccrualBreakdown(
+                actual,
+                earned,
+                lost,
+                ratingPercents.OrderBy(value => value).ToList());
         }
 
         private static int CalculateProductBonusAmount(
@@ -1075,6 +1250,7 @@ namespace ClubTimerXbox.Services
         private readonly record struct RatingAccrualBreakdown(
             int Amount,
             int EarnedAmount,
-            int LostAmount);
+            int LostAmount,
+            IReadOnlyList<int> RatingPercents);
     }
 }

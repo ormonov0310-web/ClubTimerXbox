@@ -54,10 +54,43 @@ namespace ClubTimerXbox
 
         private void SellNowFromMainScreen(SaleItem item, int quantity, int totalAmount)
         {
+            string employeeName = EmployeeService.CurrentEmployee?.Name ?? "Неизвестно";
+
+            if (item.Type == SaleItemType.Product &&
+                ProductStockService.GetQuantity(item.Name) < quantity)
+            {
+                DecreaseProductStockIfNeeded(item, quantity);
+                return;
+            }
+
+            var checkoutWindow = new CashCheckoutWindow(
+                employeeName,
+                "Продажа товара / услуги",
+                new List<CheckoutItem>
+                {
+                    new CheckoutItem
+                    {
+                        Name = item.Name,
+                        Quantity = quantity,
+                        UnitPrice = item.SalePrice,
+                        PurchasePrice = item.PurchasePrice,
+                        Category = item.Type == SaleItemType.Product ? "Товар" : "Услуга",
+                        ItemType = item.Type.ToString(),
+                        CreatedByEmployeeName = employeeName,
+                        SourceCreatedAt = ClubClock.Current.LocalNow
+                    }
+                })
+            {
+                Owner = this
+            };
+
+            if (checkoutWindow.ShowDialog() != true || checkoutWindow.PaymentRecord == null)
+                return;
+
             if (!DecreaseProductStockIfNeeded(item, quantity))
                 return;
 
-            string employeeName = EmployeeService.CurrentEmployee?.Name ?? "Неизвестно";
+            PaymentService.AddPayment(checkoutWindow.PaymentRecord);
 
             CashService.AddProductOrServiceIncome(
                 employeeName: employeeName,
@@ -67,7 +100,8 @@ namespace ClubTimerXbox
                     $"Количество: {quantity}. " +
                     $"Цена за 1 шт: {item.SalePrice} сом. " +
                     $"Итого: {totalAmount} сом.",
-                amount: totalAmount
+                amount: totalAmount,
+                paymentRecordId: checkoutWindow.PaymentRecord.Id
             );
 
             MessageBox.Show(

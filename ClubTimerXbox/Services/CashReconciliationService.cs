@@ -170,7 +170,8 @@ namespace ClubTimerXbox.Services
             int expectedAmount,
             int actualAmount,
             string note,
-            string operationId = "")
+            string operationId = "",
+            DateTime? occurredAt = null)
         {
             lock (Gate)
             {
@@ -185,7 +186,8 @@ namespace ClubTimerXbox.Services
                         expectedAmount,
                         actualAmount,
                         note,
-                        operationId
+                        operationId,
+                        occurredAt
                     ));
             }
         }

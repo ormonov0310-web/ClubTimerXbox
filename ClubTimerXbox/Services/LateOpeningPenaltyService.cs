@@ -21,7 +21,7 @@ namespace ClubTimerXbox.Services
                 return;
 
             DateTime scheduleStart = GetScheduleStart(shift.StartedAt.Date, settings);
-            ApplyOpeningRating(shift, scheduleStart);
+            var ratingEvent = ApplyOpeningRating(shift, scheduleStart);
 
             int possibleAmount = CalculatePenaltyAmount(shift.StartedAt, scheduleStart, settings);
             if (possibleAmount <= 0 || shift.StartedAt >= shift.StartedAt.Date.AddHours(MoneyCardEndHour))
@@ -36,7 +36,8 @@ namespace ClubTimerXbox.Services
                 shift.StartedAt,
                 scheduleStart,
                 possibleAmount,
-                dayKey);
+                dayKey,
+                ratingEvent);
         }
 
         public static void EvaluatePendingRecommendations()
@@ -87,7 +88,61 @@ namespace ClubTimerXbox.Services
             return item != null && EmployeeLossService.TryCancelViolationRecommendation(id, note);
         }
 
-        private static void ApplyOpeningRating(ShiftLogItem shift, DateTime scheduleStart)
+        public static bool Reassign(
+            Guid id,
+            string newEmployeeName,
+            string changedBy,
+            string reason)
+        {
+            var item = GetPendingRecommendations().FirstOrDefault(value => value.Id == id);
+            var newEmployee = EmployeeService.FindByName(newEmployeeName);
+
+            if (item == null || newEmployee?.IsActive != true)
+                return false;
+
+            string oldEmployeeName = item.ResponsibleEmployeeName.Trim();
+            if (oldEmployeeName.Equals(newEmployee.Name, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            item.ReassignmentHistory ??= new List<EmployeeLossReassignmentItem>();
+            string currentRatingSourceId = string.IsNullOrWhiteSpace(item.RatingSourceId)
+                ? $"opening-rating:{item.CreatedAt:yyyy-MM-dd}"
+                : item.RatingSourceId;
+            string newRatingSourceId = $"{currentRatingSourceId}:reassigned:{item.Id:N}";
+            EmployeeRatingEvent? replacement = null;
+
+            if (EmployeeRatingService.FindBySource(currentRatingSourceId) != null)
+            {
+                replacement = EmployeeRatingService.ReassignRuleEvent(
+                    currentRatingSourceId,
+                    newRatingSourceId,
+                    newEmployee.Name,
+                    $"Переназначено владельцем на {newEmployee.Name}. " +
+                    (string.IsNullOrWhiteSpace(reason) ? "" : reason.Trim()));
+            }
+
+            item.ReassignmentHistory.Add(new EmployeeLossReassignmentItem
+            {
+                CreatedAt = ClubClock.Current.LocalNow,
+                FromEmployeeName = oldEmployeeName,
+                ToEmployeeName = newEmployee.Name,
+                ChangedBy = string.IsNullOrWhiteSpace(changedBy) ? "Владелец" : changedBy.Trim(),
+                Reason = reason.Trim(),
+                PreviousRatingEventId = item.RatingEventId,
+                NewRatingEventId = replacement?.Id
+            });
+            item.ResponsibleEmployeeName = newEmployee.Name;
+            item.RatingSourceId = replacement?.SourceId ?? item.RatingSourceId;
+            item.RatingEventId = replacement?.Id ?? item.RatingEventId;
+            item.Description +=
+                $"\nОтветственность перенесена: {oldEmployeeName} → {newEmployee.Name}.";
+            EmployeeLossService.SaveChanges();
+            return true;
+        }
+
+        private static EmployeeRatingEvent? ApplyOpeningRating(
+            ShiftLogItem shift,
+            DateTime scheduleStart)
         {
             string ruleCode;
             if (shift.StartedAt < scheduleStart)
@@ -96,7 +151,7 @@ namespace ClubTimerXbox.Services
             }
             else if (shift.StartedAt == scheduleStart)
             {
-                return;
+                return null;
             }
             else if (shift.StartedAt <= scheduleStart.AddMinutes(30))
             {
@@ -108,7 +163,7 @@ namespace ClubTimerXbox.Services
             }
 
             string dayKey = shift.StartedAt.ToString("yyyy-MM-dd");
-            EmployeeRatingService.AddRuleEvent(
+            return EmployeeRatingService.AddRuleEvent(
                 shift.EmployeeName,
                 ruleCode,
                 $"opening-rating:{dayKey}",
@@ -122,9 +177,10 @@ namespace ClubTimerXbox.Services
             DateTime openedAt,
             DateTime scheduleStart,
             int possibleAmount,
-            string dayKey)
+            string dayKey,
+            EmployeeRatingEvent? ratingEvent)
         {
-            EmployeeLossService.AddLoss(
+            var item = EmployeeLossService.AddLoss(
                 responsibleEmployeeName: employeeName,
                 checkedByEmployeeName: "Система",
                 lossType: "Рекомендация системы",
@@ -143,6 +199,9 @@ namespace ClubTimerXbox.Services
                 sourceCode: SourceCode,
                 resolutionStatus: "Pending",
                 decisionDueAt: openedAt.Date.AddHours(AutoDecisionHour));
+            item.RatingSourceId = ratingEvent?.SourceId ?? "";
+            item.RatingEventId = ratingEvent?.Id;
+            EmployeeLossService.SaveChanges();
         }
 
         private static bool IsFirstOpeningForDay(ShiftLogItem shift, DateTime dayStart)

@@ -13,6 +13,7 @@ var suite = new CashConstitutionTestSuite();
 suite.Run();
 new BusinessCalendarTestSuite().Run();
 new EmployeeSalaryRuleTestSuite().Run();
+new NextUpdateWorkflowTestSuite().Run();
 new AppUpdateTestSuite().Run();
 
 internal sealed class EmployeeSalaryRuleTestSuite
@@ -257,7 +258,7 @@ internal sealed class EmployeeSalaryRuleTestSuite
             ["TIME_FIRST_OPEN_LATE"] = (2, TimeSpan.FromHours(24)),
             ["TIME_PC_LEFT_UNATTENDED"] = (2, TimeSpan.FromDays(4)),
             ["TIME_EXPIRED_TV_UNATTENDED"] = (2, TimeSpan.FromDays(2)),
-            ["TIME_LATE_CLIENT_REWARD"] = (3, TimeSpan.FromDays(3)),
+            ["TIME_LATE_CLIENT_REWARD"] = (4, TimeSpan.FromDays(3)),
             ["TIME_CONFIRMED_SHIFT_EXTRA"] = (3, TimeSpan.FromHours(36)),
             ["REVENUE_CONFIRMED_LOSS_SMALL"] = (2, TimeSpan.FromDays(4)),
             ["REVENUE_CONFIRMED_LOSS_LARGE"] = (2, TimeSpan.FromDays(4)),
@@ -271,6 +272,12 @@ internal sealed class EmployeeSalaryRuleTestSuite
             Equal(pair.Value.Version, rule.Version, $"{pair.Key} version");
             Equal(pair.Value.Duration, rule.Duration, $"{pair.Key} duration");
         }
+
+        Equal(
+            5,
+            EmployeeRatingRuleCatalog.Get("TIME_LATE_CLIENT_REWARD").ChangePercent,
+            "late client reward percent"
+        );
     }
 
     private void ConfirmedShiftExtraQualification()
@@ -412,6 +419,11 @@ internal sealed class EmployeeSalaryRuleTestSuite
         True(BusinessArchiveService.Verify(month), "sealed");
         month.GameRevenue++;
         True(!BusinessArchiveService.Verify(month), "tampered");
+
+        month = ArchivedMonth();
+        BusinessArchiveService.Seal(month, new DateTime(2026, 9, 1, 6, 0, 0));
+        month.Payroll[0].DailyEarnings[0].TimeAmount++;
+        True(!BusinessArchiveService.Verify(month), "daily earning tampered");
     }
 
     private void ArchiveRetentionGate()
@@ -431,7 +443,21 @@ internal sealed class EmployeeSalaryRuleTestSuite
         GameRevenue = 1000,
         Payroll = new List<EmployeePayrollObligation>
         {
-            new() { EmployeeId = "emp_test", EmployeeName = "Test", AccruedAmount = 100 }
+            new()
+            {
+                EmployeeId = "emp_test",
+                EmployeeName = "Test",
+                AccruedAmount = 100,
+                DailyEarnings = new List<AutoSalaryDayEarning>
+                {
+                    new()
+                    {
+                        Date = new DateTime(2026, 8, 31),
+                        TimeAmount = 100,
+                        TimeRatingPercents = new List<int> { 100 }
+                    }
+                }
+            }
         }
     };
 
@@ -1201,7 +1227,13 @@ internal sealed class CashConstitutionTestSuite
         Test("Known accumulated snapshot incident is repaired once", KnownAccumulatedSnapshotIncidentIsRepairedOnce);
         Test("Связанная сверка полностью закрывает ошибку типа оплаты", PairedFullSettlement);
         Test("Связанная сверка закрывает часть, а корректировка оформляет остаток", PairedPartialSettlement);
-        Test("Старый излишек не спасает подтверждённую новую недостачу", OldExtraDoesNotRescueConfirmedLoss);
+        Test("Излишек за 8 часов покрывает подтверждённую недостачу", RecentOldExtraSettlesConfirmedLoss);
+        Test("Излишек старше 24 часов не покрывает подтверждённую недостачу", ExpiredOldExtraDoesNotSettleConfirmedLoss);
+        Test("Излишек ровно через 24 часа уже не покрывает подтверждённую недостачу", ExactBoundaryExtraDoesNotSettleConfirmedLoss);
+        Test("Новый излишек через 25 часов не покрывает старую подтверждённую недостачу", ExpiredNewExtraDoesNotSettleConfirmedLoss);
+        Test("Сценарий 500 на 500 закрывается без штрафа, старая потеря не участвует", RecentFiveHundredSettlesWithoutTouchingOldLoss);
+        Test("Старый вклад излишка расходуется раньше нового", OldestExtraContributionIsConsumedFirst);
+        Test("Отложенная проводка хранит время факта отдельно от времени зачёта", DeferredAcceptanceKeepsEventAndSettlementTimes);
         Test("Остаток связанного излишка пополняет общую карту", PairedExtraRemainderJoinsPool);
         Test("Свободный излишек сначала закрывает неизвестную потерю", ExtraSettlesUnknownFirst);
         Test("После неизвестной потери излишек закрывает подозреваемую", ExtraSettlesSuspectedSecond);
@@ -1287,10 +1319,10 @@ internal sealed class CashConstitutionTestSuite
         Equal(0, correction.Breakdown, "Разбор после точки");
     }
 
-    private void OldExtraDoesNotRescueConfirmedLoss()
+    private void RecentOldExtraSettlesConfirmedLoss()
     {
         var items = NewLedger();
-        AddReadyExtra(items, 100, Now.AddHours(-1));
+        AddReadyExtra(items, 100, Now.AddHours(-8));
 
         CashConstitutionEngine.RecordCashAcceptance(
             items, MonthStart, NextMonthStart, Now,
@@ -1300,14 +1332,154 @@ internal sealed class CashConstitutionTestSuite
             1000, 1000, "", "Сверка");
 
         Equal(0, result.Assignments.Count, "Сверка не штрафует");
-        Equal(0, result.Breakdown, "Оба ведра до точки");
-        Equal(100, Open(items).Single(IsExtra).Amount, "Активная карта излишка");
+        Equal(0, result.Breakdown, "Излишек закрыл потерю в пределах суток");
+        Equal(0, Open(items).Count, "Открытые карты");
+
+        var correction = CashConstitutionEngine.ApplyCorrection(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(2), 1);
+        Equal(0, correction.Assignments.Count, "Штраф не создаётся");
+        Equal(0, correction.Breakdown, "Разбор после точки");
+    }
+
+    private void ExpiredOldExtraDoesNotSettleConfirmedLoss()
+    {
+        var items = NewLedger();
+        AddReadyExtra(items, 100, Now.AddHours(-25));
+
+        CashConstitutionEngine.RecordCashAcceptance(
+            items, MonthStart, NextMonthStart, Now,
+            "Новый", "Старый", 1000, 900, "Приёмка");
+        var result = CashConstitutionEngine.RecordCashlessVerification(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(1),
+            1000, 1000, "", "Сверка");
+
+        Equal(0, result.Assignments.Count, "Сверка не штрафует");
+        Equal(0, result.Breakdown, "Оба ведра остаются до точки");
+        Equal(100, Open(items).Single(IsExtra).Amount, "Старый излишек сохранён");
 
         var correction = CashConstitutionEngine.ApplyCorrection(
             items, MonthStart, NextMonthStart, Now.AddMinutes(2), 1);
         Equal(1, correction.Assignments.Count, "Число штрафов");
         Equal(100, correction.Assignments[0].Amount, "Штраф");
         Equal(100, correction.Breakdown, "Старый излишек после оформления");
+    }
+
+    private void ExactBoundaryExtraDoesNotSettleConfirmedLoss()
+    {
+        var items = NewLedger();
+        AddReadyExtra(items, 100, Now.AddHours(-24));
+
+        CashConstitutionEngine.RecordCashAcceptance(
+            items, MonthStart, NextMonthStart, Now,
+            "Новый", "Старый", 1000, 900, "Приёмка");
+        CashConstitutionEngine.RecordCashlessVerification(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(1),
+            1000, 1000, "", "Сверка");
+
+        var correction = CashConstitutionEngine.ApplyCorrection(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(2), 1);
+        Equal(1, correction.Assignments.Count, "Граница 24 часа считается истёкшей");
+        Equal(100, correction.Breakdown, "Излишек не израсходован");
+    }
+
+    private void ExpiredNewExtraDoesNotSettleConfirmedLoss()
+    {
+        var items = NewLedger();
+        AddReadyShortage(
+            items,
+            100,
+            CashResponsibilityLevel.Confirmed,
+            Now,
+            responsible: "Ответственный");
+
+        CashConstitutionEngine.RecordCashlessVerification(
+            items, MonthStart, NextMonthStart, Now.AddHours(25),
+            1000, 1100, "", "Поздний излишек");
+        var correction = CashConstitutionEngine.ApplyCorrection(
+            items, MonthStart, NextMonthStart, Now.AddHours(25).AddMinutes(1), 1);
+
+        Equal(1, correction.Assignments.Count, "Старая потеря оформлена");
+        Equal(100, correction.Assignments[0].Amount, "Сумма штрафа");
+        Equal(100, correction.Breakdown, "Поздний излишек сохранён");
+    }
+
+    private void RecentFiveHundredSettlesWithoutTouchingOldLoss()
+    {
+        var items = NewLedger();
+        AddReadyShortage(
+            items,
+            5,
+            CashResponsibilityLevel.Confirmed,
+            Now.AddDays(-8),
+            responsible: "Старый долг");
+        AddReadyExtra(items, 500, Now);
+        AddReadyShortage(
+            items,
+            500,
+            CashResponsibilityLevel.Confirmed,
+            Now.AddMinutes(14),
+            responsible: "Арген");
+
+        var correction = CashConstitutionEngine.ApplyCorrection(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(15), 1);
+
+        Equal(1, correction.Assignments.Count, "Оформлена только старая потеря");
+        Equal("Старый долг", correction.Assignments[0].EmployeeName, "Сотрудник");
+        Equal(5, correction.Assignments[0].Amount, "Старая сумма");
+        Equal(0, correction.Breakdown, "Свежие 500 взаимно закрыты");
+        Equal(0, Open(items).Count, "Открытые карты");
+    }
+
+    private void OldestExtraContributionIsConsumedFirst()
+    {
+        var items = NewLedger();
+        AddReadyExtra(items, 500, Now.AddHours(-30));
+        AddReadyExtra(items, 1, Now.AddHours(-1));
+        AddReadyShortage(
+            items,
+            500,
+            CashResponsibilityLevel.Unknown,
+            Now);
+
+        CashConstitutionEngine.Normalize(items, MonthStart, NextMonthStart);
+        var correction = CashConstitutionEngine.ApplyCorrection(
+            items, MonthStart, NextMonthStart, Now.AddMinutes(1), 1);
+        var contributions = Open(items).Single(IsExtra).ExtraContributions
+            .OrderBy(item => item.CreatedAt)
+            .ToList();
+
+        Equal(0, contributions[0].Amount, "Старый вклад");
+        Equal(1, contributions[1].Amount, "Новый вклад сохранён");
+        Equal(1, correction.Breakdown, "Остаток излишка");
+    }
+
+    private void DeferredAcceptanceKeepsEventAndSettlementTimes()
+    {
+        var items = NewLedger();
+        DateTime acceptedAt = Now;
+        DateTime cashlessAt = Now.AddMinutes(5);
+        DateTime finalizedAt = Now.AddMinutes(10);
+
+        CashConstitutionEngine.RecordCashlessVerification(
+            items, MonthStart, NextMonthStart, cashlessAt,
+            1000, 900, "", "Недостача безнала");
+        CashConstitutionEngine.RecordCashAcceptance(
+            items, MonthStart, NextMonthStart, finalizedAt,
+            "Новый", "Старый", 1000, 1100, "Отложенная приёмка",
+            operationId: "deferred-1",
+            occurredAt: acceptedAt);
+
+        var contribution = items
+            .Where(IsExtra)
+            .SelectMany(item => item.ExtraContributions)
+            .Single();
+        var settlement = items
+            .SelectMany(item => item.Settlements)
+            .Single(item => item.Kind == CashSettlementKind.PairedTender);
+
+        Equal(acceptedAt, contribution.CreatedAt, "Время финансового факта");
+        Equal(finalizedAt, settlement.CreatedAt, "Время выполненного зачёта");
+        Equal(0, Open(items).Count, "Карты закрыты");
     }
 
     private void PairedExtraRemainderJoinsPool()

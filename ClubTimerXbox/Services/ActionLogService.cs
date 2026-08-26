@@ -26,6 +26,18 @@ namespace ClubTimerXbox.Services
 
             Shifts = data.Shifts ?? new List<ShiftLogItem>();
             GameSessions = data.GameSessions ?? new List<GameSessionLogItem>();
+
+            bool changed = false;
+            foreach (var session in GameSessions.Where(item => !item.IsClosed))
+            {
+                foreach (var line in session.SaleLines)
+                {
+                    changed |= SessionSaleSettlementService.NormalizeActiveUnpaidLine(line);
+                }
+            }
+
+            if (changed)
+                SaveLogs();
         }
 
         public static ShiftLogItem? CurrentShift
@@ -121,11 +133,48 @@ namespace ClubTimerXbox.Services
 
                 foreach (var sale in session.SaleLines)
                 {
-                    if (!EmployeeReferenceRenameService.Matches(sale.EmployeeName, oldEmployeeName))
-                        continue;
+                    if (EmployeeReferenceRenameService.Matches(sale.EmployeeName, oldEmployeeName))
+                    {
+                        sale.EmployeeName = newEmployeeName;
+                        sessionChanged = true;
+                    }
 
-                    sale.EmployeeName = newEmployeeName;
-                    sessionChanged = true;
+                    if (EmployeeReferenceRenameService.Matches(sale.CreatedByEmployeeName, oldEmployeeName))
+                    {
+                        sale.CreatedByEmployeeName = newEmployeeName;
+                        sessionChanged = true;
+                    }
+
+                    if (EmployeeReferenceRenameService.Matches(sale.PaidByEmployeeName, oldEmployeeName))
+                    {
+                        sale.PaidByEmployeeName = newEmployeeName;
+                        sessionChanged = true;
+                    }
+
+                    if (EmployeeReferenceRenameService.Matches(sale.DebtResponsibleEmployeeName, oldEmployeeName))
+                    {
+                        sale.DebtResponsibleEmployeeName = newEmployeeName;
+                        sessionChanged = true;
+                    }
+                }
+
+                foreach (var item in session.DeferredCheckoutItems ?? new List<CheckoutItem>())
+                {
+                    if (EmployeeReferenceRenameService.Matches(
+                            item.CreatedByEmployeeName,
+                            oldEmployeeName))
+                    {
+                        item.CreatedByEmployeeName = newEmployeeName;
+                        sessionChanged = true;
+                    }
+
+                    if (EmployeeReferenceRenameService.Matches(
+                            item.DebtResponsibleEmployeeName,
+                            oldEmployeeName))
+                    {
+                        item.DebtResponsibleEmployeeName = newEmployeeName;
+                        sessionChanged = true;
+                    }
                 }
 
                 if (!sessionChanged)
@@ -579,11 +628,16 @@ namespace ClubTimerXbox.Services
                 return;
 
             int totalAmount = item.SalePrice * quantity;
+            var employee = EmployeeService.FindByName(employeeName);
 
             session.SaleLines.Add(new GameSessionSaleLine
             {
                 CreatedAt = ClubClock.Current.LocalNow,
                 EmployeeName = employeeName,
+                SettlementSchemaVersion = SessionSaleSettlementService.CurrentSchemaVersion,
+                CreatedByEmployeeId = employee?.EmployeeId ?? "",
+                CreatedByEmployeeName = employeeName,
+                CreatedShiftId = CurrentShift?.Id,
                 ItemName = item.Name,
                 ItemType = item.Type,
                 UnitPrice = item.SalePrice,
@@ -678,14 +732,189 @@ namespace ClubTimerXbox.Services
             if (session == null)
                 return;
 
-            foreach (var line in session.SaleLines)
+            // Старый вход оставлен только для двоичной совместимости.
+            // Новые операции обязаны передавать ID платежа через MarkCheckoutItemsPaid.
+        }
+
+        public static int MarkCheckoutItemsPaid(
+            IEnumerable<CheckoutItem> checkoutItems,
+            PaymentRecord payment,
+            string paidByEmployeeName)
+        {
+            if (checkoutItems == null || payment == null)
+                return 0;
+
+            var lineIds = checkoutItems
+                .Where(item => item.SourceSaleLineId.HasValue)
+                .Select(item => item.SourceSaleLineId!.Value)
+                .Distinct()
+                .ToHashSet();
+
+            if (lineIds.Count == 0)
+                return 0;
+
+            var employee = EmployeeService.FindByName(paidByEmployeeName);
+            Guid? shiftId = CurrentShift?.Id;
+            int changed = 0;
+
+            foreach (var line in GameSessions.SelectMany(item => item.SaleLines))
             {
-                line.IsPaid = true;
+                if (!lineIds.Contains(line.Id))
+                    continue;
+
+                if (SessionSaleSettlementService.IsFinanciallyPaid(line) &&
+                    line.PaymentRecordId == payment.Id)
+                {
+                    continue;
+                }
+
+                if (line.IsPaid && line.PaymentRecordId != payment.Id)
+                    continue;
+
+                SessionSaleSettlementService.MarkPaid(
+                    line,
+                    payment.Id,
+                    payment.CreatedAt,
+                    employee?.EmployeeId ?? "",
+                    paidByEmployeeName,
+                    shiftId);
+                changed++;
             }
 
-            session.ProductsAndServicesAmount = session.SaleLines.Sum(line => line.TotalAmount);
+            if (changed > 0)
+                SaveLogs();
 
+            return changed;
+        }
+
+        public static bool TryMarkGameIncomePosted(
+            Guid? gameSessionId,
+            string incomeEmployeeName,
+            DateTime postedAt)
+        {
+            if (!gameSessionId.HasValue)
+                return false;
+
+            var session = GameSessions.FirstOrDefault(item => item.Id == gameSessionId.Value);
+
+            if (session == null || session.IsGameIncomePosted)
+                return false;
+
+            session.IsGameIncomePosted = true;
+            session.GameIncomePostedAt = postedAt;
+            session.GameIncomeEmployeeName = incomeEmployeeName;
             SaveLogs();
+            return true;
+        }
+
+        public static GameSessionLogItem? GetGameSession(Guid? gameSessionId)
+        {
+            if (!gameSessionId.HasValue)
+                return null;
+
+            return GameSessions.FirstOrDefault(item => item.Id == gameSessionId.Value);
+        }
+
+        public static IReadOnlyList<OutstandingCustomerDebtItem> GetOutstandingCustomerDebts()
+        {
+            var activeDeferredSaleLineIds = GameSessions
+                .Where(session => !session.IsClosed)
+                .SelectMany(session => session.DeferredCheckoutItems ?? new List<CheckoutItem>())
+                .Where(item => item.SourceSaleLineId.HasValue)
+                .Select(item => item.SourceSaleLineId!.Value)
+                .ToHashSet();
+            var result = new List<OutstandingCustomerDebtItem>();
+
+            foreach (var session in GameSessions)
+            {
+                foreach (var line in session.SaleLines.Where(line => !line.IsPaid))
+                {
+                    if (activeDeferredSaleLineIds.Contains(line.Id))
+                        continue;
+
+                    result.Add(new OutstandingCustomerDebtItem
+                    {
+                        SessionId = session.Id,
+                        SaleLineId = line.Id,
+                        PlaceName = session.PlaceName,
+                        ItemName = line.ItemName,
+                        Quantity = line.Quantity,
+                        Amount = line.TotalAmount,
+                        CreatedAt = line.CreatedAt,
+                        CreatedByEmployeeName =
+                            SessionSaleSettlementService.GetCreatedByEmployeeName(line),
+                        ResponsibleEmployeeName = line.DebtResponsibleEmployeeName
+                    });
+                }
+
+                if (session.IsClosed)
+                    continue;
+
+                foreach (var item in session.DeferredCheckoutItems ?? new List<CheckoutItem>())
+                {
+                    result.Add(new OutstandingCustomerDebtItem
+                    {
+                        SessionId = session.Id,
+                        SaleLineId = item.SourceSaleLineId,
+                        PlaceName = session.PlaceName,
+                        ItemName = item.Name,
+                        Quantity = item.Quantity,
+                        Amount = item.TotalAmount,
+                        CreatedAt = item.SourceCreatedAt ?? session.StartedAt,
+                        CreatedByEmployeeName = item.CreatedByEmployeeName,
+                        ResponsibleEmployeeName = item.DebtResponsibleEmployeeName
+                    });
+                }
+            }
+
+            return result
+                .OrderBy(item => item.CreatedAt)
+                .ThenBy(item => item.PlaceName)
+                .ToList();
+        }
+
+        public static int AcceptOutstandingDebtResponsibility(
+            string employeeName,
+            Guid? shiftId)
+        {
+            DateTime acceptedAt = ClubClock.Current.LocalNow;
+            int logicalDebtCount = GetOutstandingCustomerDebts().Count;
+            int changed = 0;
+
+            foreach (var line in GameSessions
+                         .SelectMany(session => session.SaleLines)
+                         .Where(line => !line.IsPaid))
+            {
+                SessionSaleSettlementService.AcceptDebtResponsibility(
+                    line,
+                    employeeName,
+                    shiftId,
+                    acceptedAt);
+                changed++;
+            }
+
+            foreach (var item in GameSessions
+                         .Where(session => !session.IsClosed)
+                         .SelectMany(session => session.DeferredCheckoutItems ??
+                             new List<CheckoutItem>()))
+            {
+                item.DebtResponsibleEmployeeName = employeeName.Trim();
+                item.DebtResponsibleShiftId = shiftId;
+                item.DebtAcceptedAt = acceptedAt;
+                changed++;
+            }
+
+            if (changed > 0)
+            {
+                Add(
+                    employeeName,
+                    "Приняты долги клиентов",
+                    "",
+                    $"Сотрудник принял ответственность за {logicalDebtCount} неоплаченных позиций.");
+                SaveLogs();
+            }
+
+            return logicalDebtCount;
         }
 
         public static void MoveActiveGameSession(
@@ -733,11 +962,6 @@ namespace ClubTimerXbox.Services
             int productsAndServicesAmount = session.SaleLines.Sum(line => line.TotalAmount);
             int deferredAmount = session.DeferredCheckoutItems.Sum(item => item.TotalAmount);
 
-            foreach (var line in session.SaleLines)
-            {
-                line.IsPaid = true;
-            }
-
             session.ClosedByEmployeeName = closedByEmployeeName;
             session.ClosedAt = ClubClock.Current.LocalNow;
             session.ActualPlayedAmount = actualPlayedAmount;
@@ -761,7 +985,15 @@ namespace ClubTimerXbox.Services
                 UnitPrice = item.UnitPrice,
                 PurchasePrice = item.PurchasePrice,
                 Category = item.Category,
-                ItemType = item.ItemType
+                ItemType = item.ItemType,
+                SourceSaleLineId = item.SourceSaleLineId,
+                SourceGameSessionId = item.SourceGameSessionId,
+                SourcePlaceName = item.SourcePlaceName,
+                CreatedByEmployeeName = item.CreatedByEmployeeName,
+                SourceCreatedAt = item.SourceCreatedAt,
+                DebtResponsibleEmployeeName = item.DebtResponsibleEmployeeName,
+                DebtResponsibleShiftId = item.DebtResponsibleShiftId,
+                DebtAcceptedAt = item.DebtAcceptedAt
             };
         }
 

@@ -54,15 +54,18 @@ namespace ClubTimerXbox.Services
                     Session = session,
                     Line = line
                 }))
-                .Where(item => MatchesEmployee(item.Line.EmployeeName))
+                .Where(item => SessionSaleSettlementService.IsFinanciallyPaid(item.Line))
+                .Where(item => MatchesEmployee(
+                    SessionSaleSettlementService.GetFinancialEmployeeName(item.Line)))
                 .Select(item => new ProductServiceRevenueEntry
                 {
-                    OccurredAt = item.Line.CreatedAt,
-                    EmployeeName = item.Line.EmployeeName,
+                    OccurredAt = SessionSaleSettlementService.GetFinancialOccurredAt(item.Line),
+                    EmployeeName = SessionSaleSettlementService.GetFinancialEmployeeName(item.Line),
                     Title = item.Line.ItemName,
                     Description =
                         $"Количество: {item.Line.Quantity}. " +
-                        $"Цена: {item.Line.UnitPrice} сом.",
+                        $"Цена: {item.Line.UnitPrice} сом. " +
+                        $"Оформил: {SessionSaleSettlementService.GetCreatedByEmployeeName(item.Line)}.",
                     PlaceName = item.Session.PlaceName,
                     Amount = item.Line.TotalAmount
                 });

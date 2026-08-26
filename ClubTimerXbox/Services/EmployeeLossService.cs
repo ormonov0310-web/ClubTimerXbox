@@ -46,6 +46,26 @@ namespace ClubTimerXbox.Services
                     itemChanged = true;
                 }
 
+                foreach (var history in item.ReassignmentHistory ??
+                             new List<EmployeeLossReassignmentItem>())
+                {
+                    if (EmployeeReferenceRenameService.Matches(
+                            history.FromEmployeeName,
+                            oldEmployeeName))
+                    {
+                        history.FromEmployeeName = newEmployeeName;
+                        itemChanged = true;
+                    }
+
+                    if (EmployeeReferenceRenameService.Matches(
+                            history.ToEmployeeName,
+                            oldEmployeeName))
+                    {
+                        history.ToEmployeeName = newEmployeeName;
+                        itemChanged = true;
+                    }
+                }
+
                 if (!itemChanged)
                     continue;
 
@@ -392,6 +412,11 @@ namespace ClubTimerXbox.Services
             Save();
 
             return item;
+        }
+
+        public static void SaveChanges()
+        {
+            Save();
         }
 
         public static bool TryFormalizeViolationRecommendation(Guid id, string note)

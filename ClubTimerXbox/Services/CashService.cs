@@ -99,7 +99,8 @@ namespace ClubTimerXbox.Services
             string description,
             int amount,
             Guid? gameSessionId = null,
-            DateTime? businessOccurredAt = null)
+            DateTime? businessOccurredAt = null,
+            Guid? paymentRecordId = null)
         {
             if (amount <= 0)
                 return;
@@ -120,6 +121,7 @@ namespace ClubTimerXbox.Services
                 PaymentMethod = "Не указано",
                 PlaceName = placeName,
                 GameSessionId = gameSessionId,
+                PaymentRecordId = paymentRecordId,
                 IsAttachedToGameSession = gameSessionId != null
             });
         }
@@ -130,7 +132,8 @@ namespace ClubTimerXbox.Services
             string description,
             int amount,
             string placeName = "",
-            Guid? gameSessionId = null)
+            Guid? gameSessionId = null,
+            Guid? paymentRecordId = null)
         {
             if (amount <= 0)
                 return;
@@ -150,6 +153,7 @@ namespace ClubTimerXbox.Services
                 PaymentMethod = "Не указано",
                 PlaceName = placeName,
                 GameSessionId = gameSessionId,
+                PaymentRecordId = paymentRecordId,
                 IsAttachedToGameSession = gameSessionId != null
             });
         }

@@ -2,170 +2,65 @@
 using ClubTimerXbox.Services;
 
 using System;
-using System.Windows.Media.Animation;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace ClubTimerXbox
 {
     public partial class MainWindow
     {
-        private readonly DispatcherTimer _employeeRatingLikeDelayTimer = new()
+        private readonly DispatcherTimer _employeeRatingBorderAnimationTimer = new()
         {
-            Interval = TimeSpan.FromSeconds(3)
+            Interval = TimeSpan.FromMilliseconds(120)
         };
-        private string _scheduledRatingLikeEmployeeName = "";
+        private bool _isEmployeeRatingBorderActive;
 
-        private void InitializeEmployeeRatingLikeAnimation()
+        private void InitializeEmployeeRatingBorderAnimation()
         {
-            _employeeRatingLikeDelayTimer.Tick += (_, _) =>
+            _employeeRatingBorderAnimationTimer.Tick += (_, _) =>
             {
-                _employeeRatingLikeDelayTimer.Stop();
-                PlayEmployeeRatingLikeIfEligible();
+                if (_isEmployeeRatingBorderActive)
+                    CurrentEmployeeButton.BorderBrush = CreateEmployeeRatingBorderBrush();
             };
         }
 
-        private void ScheduleEmployeeRatingLike()
+        private void UpdateCurrentEmployeeRatingBorderState()
         {
-            _employeeRatingLikeDelayTimer.Stop();
-            ResetEmployeeRatingLikeVisual();
+            string employeeName = EmployeeService.CurrentEmployee?.Name.Trim() ?? "";
+            _isEmployeeRatingBorderActive = !string.IsNullOrWhiteSpace(employeeName) &&
+                EmployeeRatingService
+                    .GetSnapshot(employeeName, ClubClock.Current.LocalNow)
+                    .OverallPercent > 100;
 
-            _scheduledRatingLikeEmployeeName =
-                EmployeeService.CurrentEmployee?.Name.Trim() ?? "";
-            if (!string.IsNullOrWhiteSpace(_scheduledRatingLikeEmployeeName))
-                _employeeRatingLikeDelayTimer.Start();
-        }
-
-        private void PlayEmployeeRatingLikeIfEligible()
-        {
-            string currentEmployeeName =
-                EmployeeService.CurrentEmployee?.Name.Trim() ?? "";
-            if (string.IsNullOrWhiteSpace(currentEmployeeName) ||
-                !currentEmployeeName.Equals(
-                    _scheduledRatingLikeEmployeeName,
-                    StringComparison.OrdinalIgnoreCase))
+            if (_isEmployeeRatingBorderActive)
             {
+                CurrentEmployeeButton.BorderThickness = new Thickness(2);
+                CurrentEmployeeButton.BorderBrush = CreateEmployeeRatingBorderBrush();
+                if (!_employeeRatingBorderAnimationTimer.IsEnabled)
+                    _employeeRatingBorderAnimationTimer.Start();
                 return;
             }
 
-            int overallRating = EmployeeRatingService
-                .GetSnapshot(currentEmployeeName, ClubClock.Current.LocalNow)
-                .OverallPercent;
-            if (overallRating <= 100)
-                return;
-
-            var hostOpacity = new DoubleAnimationUsingKeyFrames
-            {
-                Duration = TimeSpan.FromSeconds(2.2)
-            };
-            hostOpacity.KeyFrames.Add(new DiscreteDoubleKeyFrame(
-                0,
-                KeyTime.FromTimeSpan(TimeSpan.Zero)));
-            hostOpacity.KeyFrames.Add(new EasingDoubleKeyFrame(
-                1,
-                KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(160)),
-                new CubicEase { EasingMode = EasingMode.EaseOut }));
-            hostOpacity.KeyFrames.Add(new DiscreteDoubleKeyFrame(
-                1,
-                KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(1550))));
-            hostOpacity.KeyFrames.Add(new EasingDoubleKeyFrame(
-                0,
-                KeyTime.FromTimeSpan(TimeSpan.FromSeconds(2.2)),
-                new CubicEase { EasingMode = EasingMode.EaseIn }));
-            EmployeeRatingLikeHost.BeginAnimation(OpacityProperty, hostOpacity);
-
-            var scale = new DoubleAnimationUsingKeyFrames
-            {
-                Duration = TimeSpan.FromMilliseconds(900)
-            };
-            scale.KeyFrames.Add(new EasingDoubleKeyFrame(
-                0.55,
-                KeyTime.FromTimeSpan(TimeSpan.Zero)));
-            scale.KeyFrames.Add(new EasingDoubleKeyFrame(
-                1.22,
-                KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(260)),
-                new BackEase { Amplitude = 0.35, EasingMode = EasingMode.EaseOut }));
-            scale.KeyFrames.Add(new EasingDoubleKeyFrame(
-                1,
-                KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(700)),
-                new CubicEase { EasingMode = EasingMode.EaseInOut }));
-            EmployeeRatingLikeGlyphScale.BeginAnimation(
-                System.Windows.Media.ScaleTransform.ScaleXProperty,
-                scale);
-            EmployeeRatingLikeGlyphScale.BeginAnimation(
-                System.Windows.Media.ScaleTransform.ScaleYProperty,
-                scale.Clone());
-
-            EmployeeRatingLikeGlyphRotate.BeginAnimation(
-                System.Windows.Media.RotateTransform.AngleProperty,
-                new DoubleAnimation(-12, 0, TimeSpan.FromMilliseconds(620))
-                {
-                    EasingFunction = new BackEase
-                    {
-                        Amplitude = 0.2,
-                        EasingMode = EasingMode.EaseOut
-                    }
-                });
-            EmployeeRatingLikeGlyphMove.BeginAnimation(
-                System.Windows.Media.TranslateTransform.YProperty,
-                new DoubleAnimation(6, -2, TimeSpan.FromMilliseconds(620))
-                {
-                    EasingFunction = new CubicEase
-                    {
-                        EasingMode = EasingMode.EaseOut
-                    }
-                });
-
-            var ringScale = new DoubleAnimation(
-                0.5,
-                1.75,
-                TimeSpan.FromMilliseconds(820))
-            {
-                EasingFunction = new CubicEase
-                {
-                    EasingMode = EasingMode.EaseOut
-                }
-            };
-            EmployeeRatingLikeRingScale.BeginAnimation(
-                System.Windows.Media.ScaleTransform.ScaleXProperty,
-                ringScale);
-            EmployeeRatingLikeRingScale.BeginAnimation(
-                System.Windows.Media.ScaleTransform.ScaleYProperty,
-                ringScale.Clone());
-            EmployeeRatingLikeRing.BeginAnimation(
-                OpacityProperty,
-                new DoubleAnimation(0.9, 0, TimeSpan.FromMilliseconds(820)));
+            _employeeRatingBorderAnimationTimer.Stop();
+            CurrentEmployeeButton.ClearValue(
+                System.Windows.Controls.Control.BorderBrushProperty);
+            CurrentEmployeeButton.ClearValue(
+                System.Windows.Controls.Control.BorderThicknessProperty);
         }
 
-        private void ResetEmployeeRatingLikeVisual()
+        private static Brush CreateEmployeeRatingBorderBrush()
         {
-            EmployeeRatingLikeHost.BeginAnimation(OpacityProperty, null);
-            EmployeeRatingLikeHost.Opacity = 0;
-            EmployeeRatingLikeGlyphScale.BeginAnimation(
-                System.Windows.Media.ScaleTransform.ScaleXProperty,
-                null);
-            EmployeeRatingLikeGlyphScale.BeginAnimation(
-                System.Windows.Media.ScaleTransform.ScaleYProperty,
-                null);
-            EmployeeRatingLikeGlyphScale.ScaleX = 0.55;
-            EmployeeRatingLikeGlyphScale.ScaleY = 0.55;
-            EmployeeRatingLikeGlyphRotate.BeginAnimation(
-                System.Windows.Media.RotateTransform.AngleProperty,
-                null);
-            EmployeeRatingLikeGlyphRotate.Angle = -12;
-            EmployeeRatingLikeGlyphMove.BeginAnimation(
-                System.Windows.Media.TranslateTransform.YProperty,
-                null);
-            EmployeeRatingLikeGlyphMove.Y = 6;
-            EmployeeRatingLikeRing.BeginAnimation(OpacityProperty, null);
-            EmployeeRatingLikeRing.Opacity = 0;
-            EmployeeRatingLikeRingScale.BeginAnimation(
-                System.Windows.Media.ScaleTransform.ScaleXProperty,
-                null);
-            EmployeeRatingLikeRingScale.BeginAnimation(
-                System.Windows.Media.ScaleTransform.ScaleYProperty,
-                null);
-            EmployeeRatingLikeRingScale.ScaleX = 0.5;
-            EmployeeRatingLikeRingScale.ScaleY = 0.5;
+            double angle = Environment.TickCount64 % 5200 / 5200.0 * 360.0;
+            var brush = new LinearGradientBrush
+            {
+                StartPoint = new Point(0, 0.5),
+                EndPoint = new Point(1, 0.5),
+                RelativeTransform = new RotateTransform(angle, 0.5, 0.5)
+            };
+            brush.GradientStops.Add(new GradientStop(Color.FromRgb(20, 83, 45), 0));
+            brush.GradientStops.Add(new GradientStop(Color.FromRgb(134, 239, 172), 0.48));
+            brush.GradientStops.Add(new GradientStop(Color.FromRgb(20, 83, 45), 1));
+            return brush;
         }
 
         private void UpdateCurrentEmployeeText()
@@ -173,10 +68,12 @@ namespace ClubTimerXbox
             if (EmployeeService.CurrentEmployee == null)
             {
                 CurrentEmployeeButton.Content = "Смена: не выбрана";
+                UpdateCurrentEmployeeRatingBorderState();
                 return;
             }
 
             CurrentEmployeeButton.Content = $"Смена: {EmployeeService.CurrentEmployee.Name}";
+            UpdateCurrentEmployeeRatingBorderState();
         }
 
         private void CurrentEmployeeButton_Click(object sender, RoutedEventArgs e)
@@ -237,8 +134,6 @@ namespace ClubTimerXbox
                     $"Активные места не сброшены. Таймеры продолжают работать.",
                     "Смена сотрудника"
                 );
-
-                ScheduleEmployeeRatingLike();
             }
         }
 

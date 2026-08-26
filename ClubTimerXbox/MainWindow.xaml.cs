@@ -48,7 +48,8 @@ namespace ClubTimerXbox
             AppUpdateRuntimeGuard.MarkRunning();
             VisualThemeService.ThemeChanged += VisualThemeService_ThemeChanged;
             AppUpdateService.StateChanged += AppUpdateService_StateChanged;
-            InitializeEmployeeRatingLikeAnimation();
+            InitializeEmployeeRatingBorderAnimation();
+            InitializeFloorPlanView();
 
             UpdateCurrentEmployeeText();
 
@@ -106,8 +107,6 @@ namespace ClubTimerXbox
                 {
                     ShowExpiredAlarmWindowIfAllowed(expiredPlace);
                 }
-
-                ScheduleEmployeeRatingLike();
             };
 
             Closing += MainWindow_UpdateClosing;
@@ -128,7 +127,8 @@ namespace ClubTimerXbox
             _updateAnimationTimer.Stop();
             _tuyaRefreshTimer.Stop();
             _tuyaInactivityTimer.Stop();
-            _employeeRatingLikeDelayTimer.Stop();
+            _employeeRatingBorderAnimationTimer.Stop();
+            _floorPlanSelectionAnimationTimer.Stop();
 
             CloseAllAlarmWindows();
             SaveActivePlacesToStorage();
@@ -507,6 +507,14 @@ namespace ClubTimerXbox
             _tuyaInactivityTimer.Stop();
             UpdateMainViewButtons();
 
+            if (_placesDisplayMode == PlacesDisplayMode.Alternative)
+            {
+                DrawAlternativePlaces();
+                return;
+            }
+
+            ShowClassicPlacesHost();
+
             PlacesItemsControl.Items.Clear();
 
             foreach (var place in _places)
@@ -708,31 +716,42 @@ namespace ClubTimerXbox
         private ContextMenu CreateContextMenu(ClubPlace place)
         {
             var menu = new ContextMenu();
-            var tariff = GetTariffForPlace(place);
-            bool isNewBranchPromoAvailable = IsNewBranchPromoAvailableForPlace(place);
-
-            if (isNewBranchPromoAvailable)
-                AddNewBranchPromoTariffMenuItem(menu, place);
-
-            AddTariffMenuItem(menu, place, tariff.OneHourPrice);
-            AddTariffMenuItem(menu, place, tariff.HalfHourPrice);
-            AddTariffMenuItem(menu, place, tariff.FiveMinutesPrice);
-
-            menu.Items.Add(new Separator());
-
-            if (isNewBranchPromoAvailable)
+            if (!place.IsBusy)
             {
-                menu.Items.Add(CreateTariffMenuItem("Открытый режим акция", () => StartOpenMode(place, isPromo: true)));
-            }
-            else
-            {
-                menu.Items.Add(CreateMenuItem("Открытый режим", () => StartOpenMode(place)));
+                var tariff = GetTariffForPlace(place);
+                bool isNewBranchPromoAvailable = IsNewBranchPromoAvailableForPlace(place);
+
+                if (isNewBranchPromoAvailable)
+                    AddNewBranchPromoTariffMenuItem(menu, place);
+
+                AddTariffMenuItem(menu, place, tariff.OneHourPrice);
+                AddTariffMenuItem(menu, place, tariff.HalfHourPrice);
+                AddTariffMenuItem(menu, place, tariff.FiveMinutesPrice);
+                menu.Items.Add(new Separator());
+
+                if (isNewBranchPromoAvailable)
+                    menu.Items.Add(CreateTariffMenuItem("Открытый режим акция", () => StartOpenMode(place, isPromo: true)));
+                else
+                    menu.Items.Add(CreateMenuItem("Открытый режим", () => StartOpenMode(place)));
+
+                menu.Items.Add(CreateClockMenuItem("Любое время", () => OpenFlexibleStartWindow(place)));
+                return menu;
             }
 
-            menu.Items.Add(new Separator());
-            menu.Items.Add(CreateMenuItem("Добавить время", () => OpenAddTimeWindow(place)));
-            menu.Items.Add(CreateMenuItem("Добавить штраф", () => OpenPenaltyWindow(place)));
-            menu.Items.Add(CreateMenuItem("Пересадить", () => MoveClient(place)));
+            if (place.IsTimeExpiredAwaitingAcknowledgement)
+            {
+                menu.Items.Add(CreateMenuItem("Завершить расчёт", () => AcknowledgeExpiredPlace(place.Name)));
+                return menu;
+            }
+
+            if (!place.IsOpenMode && !place.IsCalculating)
+                menu.Items.Add(CreateMenuItem("Добавить время", () => OpenAddTimeWindow(place)));
+
+            if (!place.IsCalculating)
+            {
+                menu.Items.Add(CreateMenuItem("Добавить штраф", () => OpenPenaltyWindow(place)));
+                menu.Items.Add(CreateMenuItem("Пересадить", () => MoveClient(place)));
+            }
 
             menu.Items.Add(new Separator());
             menu.Items.Add(CreateMenuItem("Остановить", () => StopPlace(place)));
@@ -813,6 +832,32 @@ namespace ClubTimerXbox
             return item;
         }
 
+        private MenuItem CreateClockMenuItem(string title, Action action)
+        {
+            var header = new StackPanel { Orientation = Orientation.Horizontal };
+            header.Children.Add(new TextBlock
+            {
+                Text = "\uE823",
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 15,
+                Margin = new Thickness(0, 0, 8, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            header.Children.Add(new TextBlock
+            {
+                Text = title,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+
+            var item = new MenuItem { Header = header };
+            item.Click += (_, _) =>
+            {
+                UiSoundService.PlayTariffAction();
+                action();
+            };
+            return item;
+        }
+
         private MenuItem CreateTariffMenuItem(string title, Action action)
         {
             var item = new MenuItem
@@ -882,8 +927,6 @@ namespace ClubTimerXbox
             if (checkoutResult != true || checkoutWindow.PaymentRecord == null)
                 return;
 
-            PaymentService.AddPayment(checkoutWindow.PaymentRecord);
-
             CloseAlarmWindowForPlace(place.Name);
             _oneMinuteWarningShownPlaceNames.Remove(place.Name);
 
@@ -896,7 +939,7 @@ namespace ClubTimerXbox
             place.PrepaidCashAmount = checkoutWindow.PaymentRecord.CashAmount;
             place.PrepaidMBankAmount = checkoutWindow.PaymentRecord.MBankAmount;
             place.StartTime = DateTime.Now;
-            place.TotalMinutes = seconds / 60;
+            place.TotalMinutes = (int)Math.Ceiling(seconds / 60.0);
             place.RemainingSeconds = seconds;
             place.ActivePricePerMinute = activePricePerMinuteOverride ?? place.PricePerMinute;
             place.AccruedAmountBeforeCurrentSegment = 0;
@@ -904,13 +947,23 @@ namespace ClubTimerXbox
             place.StartedByEmployeeName = employeeName;
             place.IncomeEmployeeName = employeeName;
 
-            ActionLogService.StartGameSession(
+            var session = ActionLogService.StartGameSession(
                 placeName: place.Name,
                 employeeName: employeeName,
                 isOpenMode: false,
                 tariffText: tariffText,
                 paidAmount: paidAmount
             );
+
+            checkoutWindow.PaymentRecord.GameSessionId = session.Id;
+            foreach (var item in checkoutWindow.PaymentRecord.Items)
+            {
+                item.SourceGameSessionId = session.Id;
+                item.SourcePlaceName = place.Name;
+                item.CreatedByEmployeeName = employeeName;
+                item.SourceCreatedAt = session.StartedAt;
+            }
+            PaymentService.AddPayment(checkoutWindow.PaymentRecord);
 
             DrawPlaces();
             SaveActivePlacesToStorage();
@@ -967,6 +1020,29 @@ namespace ClubTimerXbox
             SaveActivePlacesToStorage();
         }
 
+        private void OpenFlexibleStartWindow(ClubPlace place)
+        {
+            if (place.IsBusy)
+                return;
+
+            var window = new FlexibleTimeWindow(
+                place,
+                GetTariffForPlace(place),
+                isAddTime: false)
+            {
+                Owner = this
+            };
+
+            if (window.ShowDialog() != true)
+                return;
+
+            StartPrepaid(
+                place,
+                window.Seconds,
+                window.Amount,
+                $"{TariffService.FormatMenuTime(window.Seconds)} — {window.Amount} сом");
+        }
+
         private void OpenAddTimeWindow(ClubPlace place)
         {
             if (!place.IsBusy)
@@ -993,7 +1069,10 @@ namespace ClubTimerXbox
                 return;
             }
 
-            var window = new AddTimeWindow(place)
+            var window = new FlexibleTimeWindow(
+                place,
+                GetTariffForPlace(place),
+                isAddTime: true)
             {
                 Owner = this
             };
@@ -1009,18 +1088,29 @@ namespace ClubTimerXbox
             {
                 new CheckoutItem
                 {
-                    Name = $"Добавить время: {place.Name} — {window.MinutesToAdd} мин.",
+                    Name = $"Добавить время: {place.Name} — {TariffService.FormatMenuTime(window.Seconds)}",
                     Quantity = 1,
-                    UnitPrice = window.PriceToAdd,
+                    UnitPrice = window.Amount,
                     Category = "Игры"
                 }
             };
+
+            var activeSession = ActionLogService.GetActiveGameSessionByPlace(place.Name);
+            Guid? gameSessionId = activeSession?.Id;
+            foreach (var item in checkoutItems)
+            {
+                item.SourceGameSessionId = gameSessionId;
+                item.SourcePlaceName = place.Name;
+                item.CreatedByEmployeeName = employeeName;
+                item.SourceCreatedAt = ClubClock.Current.LocalNow;
+            }
 
             var checkoutWindow = new CashCheckoutWindow(
                 employeeName: employeeName,
                 operationTitle: "Добавить время",
                 items: checkoutItems,
-                placeName: place.Name
+                placeName: place.Name,
+                gameSessionId: gameSessionId
             )
             {
                 Owner = this
@@ -1035,8 +1125,8 @@ namespace ClubTimerXbox
 
             AddTime(
                 place,
-                window.MinutesToAdd,
-                window.PriceToAdd,
+                window.Seconds,
+                window.Amount,
                 checkoutWindow.PaymentRecord.CashAmount,
                 checkoutWindow.PaymentRecord.MBankAmount
             );
@@ -1044,7 +1134,7 @@ namespace ClubTimerXbox
 
         private void AddTime(
             ClubPlace place,
-            int minutes,
+            int seconds,
             int price,
             int cashAmount,
             int mBankAmount)
@@ -1054,8 +1144,8 @@ namespace ClubTimerXbox
 
             SyncPrepaidRemainingFromClock(place, now);
 
-            place.TotalMinutes += minutes;
-            place.RemainingSeconds += minutes * 60;
+            place.TotalMinutes += (int)Math.Ceiling(seconds / 60.0);
+            place.RemainingSeconds += seconds;
             place.StartTime = now;
             place.PaidAmount += price;
             place.PrepaidCashAmount += cashAmount;
@@ -1068,7 +1158,7 @@ namespace ClubTimerXbox
                 type: "Добавлено время",
                 employeeName: employeeName,
                 description:
-                    $"Добавлено время: {minutes} мин, сумма {price} сом. " +
+                    $"Добавлено время: {TariffService.FormatMenuTime(seconds)}, сумма {price} сом. " +
                     $"Итого оплачено: {place.PaidAmount} сом.",
                 amount: price
             );
@@ -1384,149 +1474,107 @@ namespace ClubTimerXbox
             }
 
             bool wasOpenMode = place.IsOpenMode;
-            int gameAmount = GetActualPrice(place);
 
+            if (!wasOpenMode)
+                SyncPrepaidRemainingFromClock(place, DateTime.Now);
+
+            int gameAmount = GetActualPrice(place);
             var activeSession = ActionLogService.GetActiveGameSessionByPlace(place.Name);
             Guid? sessionId = activeSession?.Id;
-
-            int productsAmount = GetActiveSessionPendingCheckoutTotal(place.Name);
+            int productsAmount = GetActiveSessionProductsAndServicesTotal(place.Name);
             int deferredCheckoutAmount = GetActiveSessionDeferredCheckoutTotal(place.Name);
             int pendingCheckoutAmount = productsAmount + deferredCheckoutAmount;
             string productsDescription = BuildActiveSessionSalesDescription(place.Name);
             string deferredCheckoutDescription = BuildActiveSessionDeferredCheckoutDescription(place.Name);
-
-            string incomeEmployeeName;
+            string closedByEmployeeName = GetCurrentEmployeeName();
+            string incomeEmployeeName = wasOpenMode
+                ? closedByEmployeeName
+                : place.IncomeEmployeeName ?? place.StartedByEmployeeName ?? closedByEmployeeName;
 
             if (wasOpenMode)
-            {
-                incomeEmployeeName = GetCurrentEmployeeName();
                 place.IncomeEmployeeName = incomeEmployeeName;
-            }
-            else
-            {
-                incomeEmployeeName = place.IncomeEmployeeName ?? place.StartedByEmployeeName ?? GetCurrentEmployeeName();
-            }
 
             int refund = 0;
             int needToPayForGame = 0;
-            int gameCashIncome = gameAmount;
             int refundCashAmount = 0;
             int refundMBankAmount = 0;
 
             if (!wasOpenMode)
             {
-                refund = place.PaidAmount - gameAmount;
+                int gameDifference = place.PaidAmount - gameAmount;
 
-                if (refund < 0)
+                if (gameDifference < 0)
+                    needToPayForGame = Math.Abs(gameDifference);
+                else if (gameDifference > 0)
                 {
-                    needToPayForGame = gameAmount - place.PaidAmount;
-                    refund = 0;
+                    refund = gameDifference;
+                    (refundCashAmount, refundMBankAmount) =
+                        CalculateRefundByOriginalPayment(place, refund);
                 }
-                else if (refund > 0)
+            }
+
+            var checkoutItems = new List<CheckoutItem>();
+
+            int gameDueNow = wasOpenMode ? gameAmount : needToPayForGame;
+            if (gameDueNow > 0)
+            {
+                checkoutItems.Add(new CheckoutItem
                 {
-                    (refundCashAmount, refundMBankAmount) = CalculateRefundByOriginalPayment(place, refund);
-                }
+                    Name = wasOpenMode
+                        ? $"Открытый режим: {place.Name}"
+                        : $"Доплата за игру: {place.Name}",
+                    Quantity = 1,
+                    UnitPrice = gameDueNow,
+                    Category = "Игры",
+                    SourceGameSessionId = sessionId,
+                    SourcePlaceName = place.Name,
+                    CreatedByEmployeeName = activeSession?.StartedByEmployeeName ?? "",
+                    SourceCreatedAt = activeSession?.StartedAt
+                });
             }
 
-            int totalClientMustPayNow;
-
-            if (wasOpenMode)
+            if (activeSession != null)
             {
-                totalClientMustPayNow = gameAmount + pendingCheckoutAmount;
-            }
-            else
-            {
-                if (refund > 0)
-                    totalClientMustPayNow = pendingCheckoutAmount - refund;
-                else
-                    totalClientMustPayNow = needToPayForGame + pendingCheckoutAmount;
+                foreach (var line in activeSession.SaleLines.Where(line => !line.IsPaid))
+                    checkoutItems.Add(CreateCheckoutItem(activeSession, line));
             }
 
-            string closedByEmployeeName = GetCurrentEmployeeName();
+            checkoutItems.AddRange(
+                ActionLogService.GetActiveSessionDeferredCheckoutItems(place.Name));
 
-            if (wasOpenMode && totalClientMustPayNow > 0)
+            PaymentRecord? settlementPayment = null;
+            int totalClientMustPayNow = checkoutItems.Sum(item => item.TotalAmount);
+
+            if (totalClientMustPayNow > 0)
             {
-                // Ставим открытый режим на паузу, пока открыта ККМ.
-                // Если админ нажмёт "Отмена", сеанс продолжится с этой суммы,
-                // а время ожидания в окне кассы не будет добавлено клиенту.
                 place.IsCalculating = true;
                 place.StartTime = null;
-                place.AccruedAmountBeforeCurrentSegment = gameAmount;
+
+                if (wasOpenMode)
+                    place.AccruedAmountBeforeCurrentSegment = gameAmount;
 
                 DrawPlaces();
                 SaveActivePlacesToStorage();
 
-                var checkoutItems = new List<CheckoutItem>();
-
-                if (gameAmount > 0)
-                {
-                    checkoutItems.Add(new CheckoutItem
-                    {
-                        Name = $"Открытый режим: {place.Name}",
-                        Quantity = 1,
-                        UnitPrice = gameAmount,
-                        Category = "Игры"
-                    });
-                }
-
-                if (productsAmount > 0 && activeSession != null)
-                {
-                    var unpaidSaleLines = activeSession.SaleLines
-                        .Where(line => !line.IsPaid)
-                        .ToList();
-
-                    foreach (var line in unpaidSaleLines)
-                    {
-                        checkoutItems.Add(new CheckoutItem
-                        {
-                            Name = line.ItemName,
-                            Quantity = line.Quantity,
-                            UnitPrice = line.UnitPrice,
-                            PurchasePrice = line.PurchasePrice,
-                            Category = line.ItemType == SaleItemType.Product ? "Товар" : "Услуга",
-                            ItemType = line.ItemType.ToString()
-                        });
-                    }
-                }
-
-                var deferredCheckoutItems = ActionLogService.GetActiveSessionDeferredCheckoutItems(place.Name);
-
-                foreach (var item in deferredCheckoutItems)
-                {
-                    checkoutItems.Add(item);
-                }
-
                 var checkoutWindow = new CashCheckoutWindow(
                     employeeName: closedByEmployeeName,
-                    operationTitle: "Закрытие открытого режима",
+                    operationTitle: wasOpenMode
+                        ? "Закрытие открытого режима"
+                        : "Закрытие тарифа и неоплаченных позиций",
                     items: checkoutItems,
                     placeName: place.Name,
                     gameSessionId: sessionId,
-                    allowTransferToPlace: true
-                )
+                    allowTransferToPlace: wasOpenMode)
                 {
                     Owner = this
                 };
 
                 bool? checkoutResult = checkoutWindow.ShowDialog();
 
-                if (checkoutResult != true)
+                if (checkoutResult == true &&
+                    checkoutWindow.ResultType == CashCheckoutResultType.TransferToPlace)
                 {
-                    place.IsCalculating = false;
-                    place.IsTimeExpiredAwaitingAcknowledgement = false;
-                    place.IsOpenMode = true;
-                    place.StartTime = DateTime.Now;
-                    place.AccruedAmountBeforeCurrentSegment = gameAmount;
-
-                    DrawPlaces();
-                    SaveActivePlacesToStorage();
-
-                    return;
-                }
-
-                if (checkoutWindow.ResultType == CashCheckoutResultType.TransferToPlace)
-                {
-                    var transferred = TryTransferCheckoutToAnotherPlace(
+                    bool transferred = TryTransferCheckoutToAnotherPlace(
                         sourcePlace: place,
                         checkoutItems: checkoutItems,
                         sourceGameAmount: gameAmount,
@@ -1541,42 +1589,30 @@ namespace ClubTimerXbox
                         SaveActivePlacesToStorage();
                         return;
                     }
+                }
 
-                    place.IsCalculating = false;
-                    place.IsTimeExpiredAwaitingAcknowledgement = false;
-                    place.IsOpenMode = true;
-                    place.StartTime = DateTime.Now;
-                    place.AccruedAmountBeforeCurrentSegment = gameAmount;
-
-                    DrawPlaces();
-                    SaveActivePlacesToStorage();
-
+                if (checkoutResult != true || checkoutWindow.PaymentRecord == null)
+                {
+                    RestorePlaceAfterCancelledCheckout(place, wasOpenMode, gameAmount);
                     return;
                 }
 
-                if (checkoutWindow.PaymentRecord == null)
+                settlementPayment = checkoutWindow.PaymentRecord;
+
+                if (pendingCheckoutAmount > 0)
                 {
-                    place.IsCalculating = false;
-                    place.IsTimeExpiredAwaitingAcknowledgement = false;
-                    place.IsOpenMode = true;
-                    place.StartTime = DateTime.Now;
-                    place.AccruedAmountBeforeCurrentSegment = gameAmount;
-
-                    DrawPlaces();
-                    SaveActivePlacesToStorage();
-
-                    return;
-                }
-
-                if (productsAmount > 0 || deferredCheckoutAmount > 0)
-                {
-                    checkoutWindow.PaymentRecord.Comment = BuildCheckoutPaymentComment(
+                    settlementPayment.Comment = BuildCheckoutPaymentComment(
                         place.Name,
                         productsDescription,
                         deferredCheckoutDescription);
                 }
 
-                PaymentService.AddPayment(checkoutWindow.PaymentRecord);
+                PaymentService.AddPayment(settlementPayment);
+                ActionLogService.MarkCheckoutItemsPaid(
+                    settlementPayment.Items,
+                    settlementPayment,
+                    closedByEmployeeName);
+                PostDeferredGameIncome(settlementPayment, closedByEmployeeName);
             }
 
             if (!wasOpenMode && refund > 0)
@@ -1587,8 +1623,7 @@ namespace ClubTimerXbox
                     gameSessionId: sessionId,
                     refundAmount: refund,
                     cashAmount: refundCashAmount,
-                    mBankAmount: refundMBankAmount
-                ));
+                    mBankAmount: refundMBankAmount));
             }
 
             ActionLogService.CloseActiveGameSession(
@@ -1597,36 +1632,38 @@ namespace ClubTimerXbox
                 actualPlayedAmount: gameAmount,
                 refundAmount: refund,
                 needToPayAmount: needToPayForGame,
-                cashIncomeAmount: gameCashIncome,
-                incomeEmployeeName: incomeEmployeeName
-            );
+                cashIncomeAmount: gameAmount,
+                incomeEmployeeName: incomeEmployeeName);
 
-            CashService.AddGameSessionIncome(
-                employeeName: closedByEmployeeName,
-                incomeEmployeeName: incomeEmployeeName,
-                placeName: place.Name,
-                title: "Игровой сеанс",
-                description:
-                    $"{place.Name}. Клиент играл/штраф: {gameAmount} сом. " +
-                    $"Оплачено: {place.PaidAmount} сом. " +
-                    $"Возврат по игре: {refund} сом. Доплата по игре: {needToPayForGame} сом.",
-                amount: gameCashIncome,
-                gameSessionId: sessionId,
-                businessOccurredAt: wasOpenMode ? null : activeSession?.StartedAt
-            );
+            PostGameIncomeFromRecordedPayments(
+                sessionId,
+                closedByEmployeeName,
+                incomeEmployeeName,
+                place.Name,
+                gameAmount,
+                $"{place.Name}. Клиент играл/штраф: {gameAmount} сом. " +
+                $"Оплачено заранее: {place.PaidAmount} сом. " +
+                $"Возврат по игре: {refund} сом. Доплата по игре: {needToPayForGame} сом.",
+                wasOpenMode ? ClubClock.Current.LocalNow : activeSession?.StartedAt);
 
-            if (productsAmount > 0)
+            int paidProductsAmount = settlementPayment?.Items
+                .Where(item => item.SourceSaleLineId.HasValue)
+                .Sum(item => item.TotalAmount) ?? 0;
+
+            if (paidProductsAmount > 0)
             {
                 CashService.AddProductOrServiceIncome(
                     employeeName: closedByEmployeeName,
                     title: "Товары/услуги по сеансу",
                     description:
-                        $"{place.Name}. Оплачено при закрытии сеанса.\n" +
-                        productsDescription,
-                    amount: productsAmount,
+                        $"{place.Name}. Фактически оплачено через ККМ.\n" +
+                        BuildCheckoutPaymentComment(
+                            place.Name,
+                            productsDescription,
+                            deferredCheckoutDescription),
+                    amount: paidProductsAmount,
                     placeName: place.Name,
-                    gameSessionId: sessionId
-                );
+                    gameSessionId: sessionId);
             }
 
             place.IsCalculating = true;
@@ -1661,6 +1698,192 @@ namespace ClubTimerXbox
             ClearPlace(place);
             DrawPlaces();
             SaveActivePlacesToStorage();
+        }
+
+        private static CheckoutItem CreateCheckoutItem(
+            GameSessionLogItem session,
+            GameSessionSaleLine line)
+        {
+            return new CheckoutItem
+            {
+                Name = line.ItemName,
+                Quantity = line.Quantity,
+                UnitPrice = line.UnitPrice,
+                PurchasePrice = line.PurchasePrice,
+                Category = line.ItemType == SaleItemType.Product ? "Товар" : "Услуга",
+                ItemType = line.ItemType.ToString(),
+                SourceSaleLineId = line.Id,
+                SourceGameSessionId = session.Id,
+                SourcePlaceName = session.PlaceName,
+                CreatedByEmployeeName =
+                    SessionSaleSettlementService.GetCreatedByEmployeeName(line),
+                SourceCreatedAt = line.CreatedAt
+            };
+        }
+
+        private void RestorePlaceAfterCancelledCheckout(
+            ClubPlace place,
+            bool wasOpenMode,
+            int accruedGameAmount)
+        {
+            place.IsCalculating = false;
+            place.IsTimeExpiredAwaitingAcknowledgement = false;
+            place.IsOpenMode = wasOpenMode;
+            place.StartTime = DateTime.Now;
+
+            if (wasOpenMode)
+                place.AccruedAmountBeforeCurrentSegment = accruedGameAmount;
+
+            DrawPlaces();
+            SaveActivePlacesToStorage();
+        }
+
+        private void PostDeferredGameIncome(
+            PaymentRecord payment,
+            string paidByEmployeeName)
+        {
+            var deferredGames = (payment.Items ?? new List<CheckoutItem>())
+                .Where(item =>
+                    item.Category == "Игры" &&
+                    item.SourceGameSessionId.HasValue &&
+                    item.SourceGameSessionId != payment.GameSessionId)
+                .GroupBy(item => item.SourceGameSessionId!.Value);
+
+            foreach (var group in deferredGames)
+            {
+                var session = ActionLogService.GetGameSession(group.Key);
+
+                if (session == null)
+                    continue;
+
+                string incomeEmployeeName =
+                    session.IncomeEmployeeName.Length > 0
+                        ? session.IncomeEmployeeName
+                        : session.StartedByEmployeeName;
+
+                int amount = group.Sum(item => item.TotalAmount);
+                PostGamePaymentIncome(
+                    session.Id,
+                    payment,
+                    paidByEmployeeName,
+                    session.PlaceName,
+                    amount,
+                    $"{session.PlaceName}. Оплата долга принята при расчёте {payment.PlaceName}.");
+                ActionLogService.TryMarkGameIncomePosted(
+                    session.Id,
+                    incomeEmployeeName,
+                    ClubClock.Current.LocalNow);
+            }
+        }
+
+        private void PostGameIncomeFromRecordedPayments(
+            Guid? gameSessionId,
+            string operationEmployeeName,
+            string fallbackIncomeEmployeeName,
+            string placeName,
+            int finalAmount,
+            string fallbackDescription,
+            DateTime? fallbackOccurredAt)
+        {
+            if (!gameSessionId.HasValue || finalAmount <= 0)
+                return;
+
+            var session = ActionLogService.GetGameSession(gameSessionId);
+            if (session == null || session.IsGameIncomePosted)
+                return;
+
+            bool hasLegacyPostedIncome = CashService.Records.Any(record =>
+                record.Type == CashRecordType.GameSession &&
+                record.GameSessionId == gameSessionId &&
+                !record.PaymentRecordId.HasValue &&
+                record.Amount > 0);
+            if (hasLegacyPostedIncome)
+            {
+                ActionLogService.TryMarkGameIncomePosted(
+                    gameSessionId,
+                    fallbackIncomeEmployeeName,
+                    ClubClock.Current.LocalNow);
+                return;
+            }
+
+            int allocated = GamePaymentAttributionService.GetLegacyPrepaidAllocation(
+                session,
+                PaymentService.Records,
+                finalAmount);
+            if (allocated > 0)
+            {
+                CashService.AddGameSessionIncome(
+                    operationEmployeeName,
+                    fallbackIncomeEmployeeName,
+                    placeName,
+                    "Игровой сеанс",
+                    $"{placeName}. Предоплаченный тариф старой версии: {allocated} сом.",
+                    allocated,
+                    gameSessionId,
+                    session.StartedAt);
+            }
+
+            foreach (var allocation in GamePaymentAttributionService.Allocate(
+                         PaymentService.Records,
+                         gameSessionId.Value,
+                         finalAmount - allocated))
+            {
+                PostGamePaymentIncome(
+                    gameSessionId.Value,
+                    allocation.Payment,
+                    allocation.Payment.EmployeeName,
+                    placeName,
+                    allocation.Amount,
+                    $"{placeName}. Игровая оплата принята через ККМ: {allocation.Amount} сом.");
+                allocated += allocation.Amount;
+            }
+
+            int legacyRemainder = finalAmount - allocated;
+            if (legacyRemainder > 0)
+            {
+                CashService.AddGameSessionIncome(
+                    operationEmployeeName,
+                    fallbackIncomeEmployeeName,
+                    placeName,
+                    "Игровой сеанс",
+                    fallbackDescription,
+                    legacyRemainder,
+                    gameSessionId,
+                    fallbackOccurredAt);
+            }
+
+            ActionLogService.TryMarkGameIncomePosted(
+                gameSessionId,
+                fallbackIncomeEmployeeName,
+                ClubClock.Current.LocalNow);
+        }
+
+        private void PostGamePaymentIncome(
+            Guid gameSessionId,
+            PaymentRecord payment,
+            string incomeEmployeeName,
+            string placeName,
+            int amount,
+            string description)
+        {
+            if (amount <= 0 || CashService.Records.Any(record =>
+                    record.Type == CashRecordType.GameSession &&
+                    record.GameSessionId == gameSessionId &&
+                    record.PaymentRecordId == payment.Id))
+            {
+                return;
+            }
+
+            CashService.AddGameSessionIncome(
+                payment.EmployeeName,
+                incomeEmployeeName,
+                placeName,
+                "Игровой сеанс",
+                description,
+                amount,
+                gameSessionId,
+                payment.CreatedAt,
+                payment.Id);
         }
 
         private bool TryTransferCheckoutToAnotherPlace(
@@ -1726,35 +1949,8 @@ namespace ClubTimerXbox
                 actualPlayedAmount: sourceGameAmount,
                 refundAmount: 0,
                 needToPayAmount: 0,
-                cashIncomeAmount: sourceGameAmount,
+                cashIncomeAmount: 0,
                 incomeEmployeeName: incomeEmployeeName);
-
-            CashService.AddGameSessionIncome(
-                employeeName: closedByEmployeeName,
-                incomeEmployeeName: incomeEmployeeName,
-                placeName: sourcePlace.Name,
-                title: "Игровой сеанс",
-                description:
-                    $"{sourcePlace.Name}. Клиент играл: {sourceGameAmount} сом. " +
-                    $"Оплата перенесена на {targetPlaceName}.",
-                amount: sourceGameAmount,
-                gameSessionId: sessionId,
-                businessOccurredAt: activeSession?.IsOpenMode == false
-                    ? activeSession.StartedAt
-                    : null);
-
-            if (sourceProductsAmount > 0)
-            {
-                CashService.AddProductOrServiceIncome(
-                    employeeName: closedByEmployeeName,
-                    title: "Товары/услуги по сеансу",
-                    description:
-                        $"{sourcePlace.Name}. Оплата перенесена на {targetPlaceName}.\n" +
-                        sourceProductsDescription,
-                    amount: sourceProductsAmount,
-                    placeName: sourcePlace.Name,
-                    gameSessionId: sessionId);
-            }
 
             int transferredTotal = checkoutItems.Sum(item => item.TotalAmount);
 
@@ -1950,6 +2146,7 @@ namespace ClubTimerXbox
             UpdateSettingsButtonUpdateState();
             UpdateNewBranchPromoTimerText();
             UpdateBusinessCalendarText();
+            UpdateCurrentEmployeeRatingBorderState();
 
             foreach (var place in _places)
             {
@@ -2046,46 +2243,29 @@ namespace ClubTimerXbox
 
             var activeSession = ActionLogService.GetActiveGameSessionByPlace(place.Name);
             Guid? sessionId = activeSession?.Id;
-            int productsAmount = GetActiveSessionProductsAndServicesTotal(place.Name);
-            string productsDescription = BuildActiveSessionSalesDescription(place.Name);
 
             if (activeSession != null)
             {
-                ActionLogService.CloseActiveGameSession(
-                    placeName: place.Name,
-                    closedByEmployeeName: "Автоматически",
-                    actualPlayedAmount: place.PaidAmount,
-                    refundAmount: 0,
-                    needToPayAmount: 0,
-                    cashIncomeAmount: place.PaidAmount,
-                    incomeEmployeeName: incomeEmployeeName
-                );
+                PostGameIncomeFromRecordedPayments(
+                    sessionId,
+                    "Автоматически",
+                    incomeEmployeeName,
+                    place.Name,
+                    place.PaidAmount,
+                    $"{place.Name}. Время закончилось автоматически. " +
+                    $"Оплачено: {place.PaidAmount} сом.",
+                    activeSession.StartedAt);
 
-                CashService.AddGameSessionIncome(
-                    employeeName: "Автоматически",
-                    incomeEmployeeName: incomeEmployeeName,
-                    placeName: place.Name,
-                    title: "Игровой сеанс",
-                    description:
-                        $"{place.Name}. Время закончилось автоматически. " +
-                        $"Оплачено: {place.PaidAmount} сом.",
-                    amount: place.PaidAmount,
-                    gameSessionId: sessionId,
-                    businessOccurredAt: activeSession.StartedAt
-                );
-
-                if (productsAmount > 0)
+                if (GetActiveSessionPendingCheckoutTotal(place.Name) == 0)
                 {
-                    CashService.AddProductOrServiceIncome(
-                        employeeName: "Автоматически",
-                        title: "Товары/услуги по сеансу",
-                        description:
-                            $"{place.Name}. Оплачено при автоматическом закрытии.\n" +
-                            productsDescription,
-                        amount: productsAmount,
+                    ActionLogService.CloseActiveGameSession(
                         placeName: place.Name,
-                        gameSessionId: sessionId
-                    );
+                        closedByEmployeeName: "Автоматически",
+                        actualPlayedAmount: place.PaidAmount,
+                        refundAmount: 0,
+                        needToPayAmount: 0,
+                        cashIncomeAmount: place.PaidAmount,
+                        incomeEmployeeName: incomeEmployeeName);
                 }
             }
 
@@ -2116,12 +2296,100 @@ namespace ClubTimerXbox
             if (!place.IsTimeExpiredAwaitingAcknowledgement)
                 return;
 
+            if (!TrySettleExpiredSessionDebt(place))
+                return;
+
             ExpiredSessionViolationService.Complete(
                 place,
                 ClubClock.Current.LocalNow);
             ClearPlace(place);
             DrawPlaces();
             SaveActivePlacesToStorage();
+        }
+
+        private bool TrySettleExpiredSessionDebt(ClubPlace place)
+        {
+            var session = ActionLogService.GetActiveGameSessionByPlace(place.Name);
+
+            if (session == null)
+                return true;
+
+            var checkoutItems = session.SaleLines
+                .Where(line => !line.IsPaid)
+                .Select(line => CreateCheckoutItem(session, line))
+                .Concat(ActionLogService.GetActiveSessionDeferredCheckoutItems(place.Name))
+                .ToList();
+
+            if (checkoutItems.Count == 0)
+            {
+                ActionLogService.CloseActiveGameSession(
+                    place.Name,
+                    GetCurrentEmployeeName(),
+                    place.PaidAmount,
+                    0,
+                    0,
+                    place.PaidAmount,
+                    place.IncomeEmployeeName ?? place.StartedByEmployeeName ?? GetCurrentEmployeeName());
+                return true;
+            }
+
+            string employeeName = GetCurrentEmployeeName();
+            string productsDescription = BuildActiveSessionSalesDescription(place.Name);
+            string deferredDescription = BuildActiveSessionDeferredCheckoutDescription(place.Name);
+            var checkoutWindow = new CashCheckoutWindow(
+                employeeName,
+                "Оплата позиций после окончания времени",
+                checkoutItems,
+                place.Name,
+                session.Id)
+            {
+                Owner = this
+            };
+
+            bool? result = checkoutWindow.ShowDialog();
+
+            if (result != true || checkoutWindow.PaymentRecord == null)
+            {
+                MessageBox.Show(
+                    "ТВ останется в состоянии «Время вышло», пока неоплаченные позиции не будут рассчитаны через ККМ.",
+                    "Есть долг клиента");
+                return false;
+            }
+
+            var payment = checkoutWindow.PaymentRecord;
+            payment.Comment = BuildCheckoutPaymentComment(
+                place.Name,
+                productsDescription,
+                deferredDescription);
+            PaymentService.AddPayment(payment);
+            ActionLogService.MarkCheckoutItemsPaid(payment.Items, payment, employeeName);
+            PostDeferredGameIncome(payment, employeeName);
+
+            int paidProductsAmount = payment.Items
+                .Where(item => item.SourceSaleLineId.HasValue)
+                .Sum(item => item.TotalAmount);
+
+            if (paidProductsAmount > 0)
+            {
+                CashService.AddProductOrServiceIncome(
+                    employeeName,
+                    "Товары/услуги по завершённому сеансу",
+                    $"{place.Name}. Оплата подтверждена через ККМ.\n{payment.Comment}",
+                    paidProductsAmount,
+                    place.Name,
+                    session.Id);
+            }
+
+            ActionLogService.CloseActiveGameSession(
+                place.Name,
+                employeeName,
+                place.PaidAmount,
+                0,
+                0,
+                place.PaidAmount,
+                place.IncomeEmployeeName ?? place.StartedByEmployeeName ?? employeeName);
+
+            return true;
         }
 
         private void CheckOneMinuteWarning(ClubPlace place)
@@ -2349,6 +2617,8 @@ namespace ClubTimerXbox
         private async void TuyaViewButton_Click(object sender, RoutedEventArgs e)
         {
             _isTuyaDevicesView = true;
+            SetFloorPlanEditorEnabled(false);
+            ShowClassicPlacesHost();
             UpdateMainViewButtons();
             ResetTuyaInactivityTimer();
             await DrawTuyaDevicesAsync();
@@ -4030,7 +4300,7 @@ namespace ClubTimerXbox
                     $"кол-во: {line.Quantity}, " +
                     $"цена: {line.UnitPrice} сом, " +
                     $"сумма: {line.TotalAmount} сом, " +
-                    $"оформил: {line.EmployeeName}\n";
+                    $"оформил: {SessionSaleSettlementService.GetCreatedByEmployeeName(line)}\n";
             }
 
             return text.Trim();

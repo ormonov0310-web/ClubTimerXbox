@@ -503,6 +503,62 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        public static EmployeeRatingEvent? FindBySource(string sourceId)
+        {
+            EnsureActivated();
+            lock (Gate)
+            {
+                return State.Events.FirstOrDefault(item =>
+                    item.SourceId.Equals(sourceId.Trim(), StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        public static EmployeeRatingEvent ReassignRuleEvent(
+            string sourceId,
+            string newSourceId,
+            string newEmployeeName,
+            string resolutionNote)
+        {
+            EnsureActivated();
+            lock (Gate)
+            {
+                var original = State.Events.FirstOrDefault(item =>
+                    item.SourceId.Equals(sourceId.Trim(), StringComparison.OrdinalIgnoreCase))
+                    ?? throw new InvalidOperationException("Связанное событие рейтинга не найдено.");
+                var employee = EmployeeService.FindByName(newEmployeeName);
+
+                if (employee?.IsActive != true)
+                    throw new InvalidOperationException("Новый сотрудник не найден или неактивен.");
+
+                var existing = State.Events.FirstOrDefault(item =>
+                    item.SourceId.Equals(newSourceId.Trim(), StringComparison.OrdinalIgnoreCase));
+
+                EmployeeRatingReassignmentService.CancelOriginal(
+                    original,
+                    resolutionNote);
+
+                if (existing != null)
+                {
+                    Save();
+                    return existing;
+                }
+
+                DateTime now = ClubClock.Current.LocalNow;
+                var profile = GetOrCreateProfileUnsafe(employee.EmployeeId, employee.Name);
+                int basePercent = GetBasePercentUnsafe(profile, original.Branch, now);
+                var replacement = EmployeeRatingReassignmentService.CreateReplacement(
+                    original,
+                    employee,
+                    newSourceId.Trim(),
+                    resolutionNote,
+                    now,
+                    basePercent);
+                State.Events.Add(replacement);
+                Save();
+                return replacement;
+            }
+        }
+
         public static EmployeeRatingEvent EndEvent(
             Guid eventId,
             bool cancelAsError,

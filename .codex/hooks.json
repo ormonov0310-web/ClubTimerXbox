@@ -1,0 +1,57 @@
+{
+  "description": "Project safety and validation hooks for ClubTimerXbox.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -NonInteractive -Command \"$root = (& git rev-parse --show-toplevel 2>$null); if ($LASTEXITCODE -ne 0) { exit 0 }; Write-Output ('ClubTimerXbox source: ' + $root); Write-Output 'Policy: local changes are drafts. Package, tag, push, GitHub release, and Firebase deployment require an exact owner release command.'; & git -C $root status --short --branch; & git -C $root describe --tags --always --dirty\"",
+            "timeout": 10,
+            "statusMessage": "Checking ClubTimerXbox workspace",
+            "additionalContextLimit": 800
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -NonInteractive -Command \"$raw = [Console]::In.ReadToEnd(); try { $event = $raw | ConvertFrom-Json -Depth 100 } catch { exit 0 }; $cmd = [string]$event.tool_input.command; if ([string]::IsNullOrWhiteSpace($cmd)) { exit 0 }; $lower = $cmd.ToLowerInvariant(); $releaseApproved = $lower -match 'clubtimer_release_approved[^;|]*yes'; $liveApproved = $lower -match 'clubtimer_live_write_approved[^;|]*yes'; $releaseCommand = $lower.Contains('package-release.ps1') -or $lower.Contains('dotnet publish') -or ($lower -match '(^|[;&| ])git[^;&|]* +(push|tag)( |$)') -or ($lower -match '(^|[;&| ])gh[^;&|]* +release( |$)') -or ($lower -match '(^|[;&| ])firebase[^;&|]* +deploy( |$)'); $liveCommand = ($lower -match '(^|[;&| ])firebase[^;&|]* +database:(set|update|remove)( |$)') -or ($lower.Contains('firebaseio.com') -and ($lower -match '-method +(put|patch|post|delete)')); $reason = $null; if ($releaseCommand -and -not $releaseApproved) { $reason = 'Release command blocked. Run it only after the owner gives an exact release command, and include CLUBTIMER_RELEASE_APPROVED=YES in that same shell command.' } elseif ($liveCommand -and -not $liveApproved) { $reason = 'Live Firebase write blocked. Run it only for an explicit owner-approved data change, and include CLUBTIMER_LIVE_WRITE_APPROVED=YES in that same shell command.' }; if ($reason) { [ordered]@{ hookSpecificOutput = [ordered]@{ hookEventName = 'PreToolUse'; permissionDecision = 'deny'; permissionDecisionReason = $reason } } | ConvertTo-Json -Compress -Depth 6 }\"",
+            "timeout": 15,
+            "statusMessage": "Checking release and live-data safety"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(apply_patch|Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -NonInteractive -Command \"$raw = [Console]::In.ReadToEnd(); try { $event = $raw | ConvertFrom-Json -Depth 100 } catch { exit 0 }; $root = (& git rev-parse --show-toplevel 2>$null); if ($LASTEXITCODE -ne 0) { exit 0 }; $patch = [string]$event.tool_input.command; $lowerPatch = $patch.ToLowerInvariant(); $categories = @(); if ($patch -match '(?i)[.](cs|xaml|csproj|slnx|ps1)([^a-z0-9]|$)') { $categories += 'dotnet' }; if ($lowerPatch.Contains('firebase-functions') -and $lowerPatch.Contains('.js')) { $categories += 'firebase-js' }; if ($lowerPatch.Contains('firebase.json') -or $lowerPatch.Contains('firebase-database.rules.json')) { $categories += 'firebase-json' }; if ($categories.Count -gt 0) { $stateRoot = Join-Path $env:TEMP 'ClubTimerXbox-CodexHooks'; New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null; $key = (('{0}-{1}' -f $event.session_id, $event.turn_id) -replace '[^a-zA-Z0-9_-]', '_'); $marker = Join-Path $stateRoot ($key + '.changed'); Add-Content -LiteralPath $marker -Value $categories -Encoding utf8 }; $issues = @(); $diffOutput = (& git -C $root diff --check 2>&1 | Out-String); if ($LASTEXITCODE -ne 0) { $issues += $diffOutput.Trim() }; $trackedLocalSecrets = @(& git -C $root ls-files -- .local-secrets); if ($trackedLocalSecrets.Count -gt 0) { $issues += ('Tracked local secrets: ' + ($trackedLocalSecrets -join ', ')) }; $credentialFiles = @((& git -C $root ls-files) | Where-Object { $_ -match '(?i)(firebase_auth[.]json|service[-_.]?account|tuya_settings[.]json|[.](pfx|pem|key)$)' }); if ($credentialFiles.Count -gt 0) { $issues += ('Potential credential files are tracked: ' + ($credentialFiles -join ', ')) }; if ($issues.Count -gt 0) { [ordered]@{ hookSpecificOutput = [ordered]@{ hookEventName = 'PostToolUse'; additionalContext = ('ClubTimerXbox hygiene check found: ' + ($issues -join ' | ')) } } | ConvertTo-Json -Compress -Depth 6 }\"",
+            "timeout": 20,
+            "statusMessage": "Checking changed files"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -NonInteractive -Command \"$raw = [Console]::In.ReadToEnd(); try { $event = $raw | ConvertFrom-Json -Depth 100 } catch { [ordered]@{ continue = $true } | ConvertTo-Json -Compress; exit 0 }; $stateRoot = Join-Path $env:TEMP 'ClubTimerXbox-CodexHooks'; $key = (('{0}-{1}' -f $event.session_id, $event.turn_id) -replace '[^a-zA-Z0-9_-]', '_'); $marker = Join-Path $stateRoot ($key + '.changed'); if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) { [ordered]@{ continue = $true } | ConvertTo-Json -Compress; exit 0 }; $root = (& git rev-parse --show-toplevel 2>$null); if ($LASTEXITCODE -ne 0) { [ordered]@{ continue = $true } | ConvertTo-Json -Compress; exit 0 }; $categories = @(Get-Content -LiteralPath $marker -ErrorAction SilentlyContinue | Select-Object -Unique); $failures = @(); $diffOutput = (& git -C $root diff --check 2>&1 | Out-String); if ($LASTEXITCODE -ne 0) { $failures += ('git diff --check: ' + $diffOutput.Trim()) }; $trackedLocalSecrets = @(& git -C $root ls-files -- .local-secrets); if ($trackedLocalSecrets.Count -gt 0) { $failures += ('Tracked local secrets: ' + ($trackedLocalSecrets -join ', ')) }; if ($categories -contains 'dotnet') { $outputDir = Join-Path $root '.codex-build\\hooks'; New-Item -ItemType Directory -Force -Path $outputDir | Out-Null; $project = Join-Path $root 'ClubTimerXbox.RegressionTests\\ClubTimerXbox.RegressionTests.csproj'; $buildOutput = (& dotnet build $project -c Debug '-p:SkipCopyUpdater=true' -o $outputDir 2>&1 | Out-String); $buildExit = $LASTEXITCODE; if ($buildExit -ne 0) { $failures += ('dotnet build failed: ' + $buildOutput.Trim()) } else { $testDll = Join-Path $outputDir 'ClubTimerXbox.RegressionTests.dll'; $testOutput = (& dotnet $testDll 2>&1 | Out-String); if ($LASTEXITCODE -ne 0) { $failures += ('Regression tests failed: ' + $testOutput.Trim()) } } }; if ($categories -contains 'firebase-js') { $nodeCommand = Get-Command node -ErrorAction SilentlyContinue; $nodePath = if ($null -ne $nodeCommand) { $nodeCommand.Source } else { Join-Path $env:USERPROFILE '.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe' }; if (Test-Path -LiteralPath $nodePath -PathType Leaf) { $nodeOutput = (& $nodePath --check (Join-Path $root 'firebase-functions\\index.js') 2>&1 | Out-String); if ($LASTEXITCODE -ne 0) { $failures += ('Firebase JavaScript syntax check failed: ' + $nodeOutput.Trim()) } } else { $failures += 'Node.js is unavailable; Firebase JavaScript syntax was not checked.' } }; if ($categories -contains 'firebase-json') { foreach ($jsonName in @('firebase.json', 'firebase-database.rules.json')) { try { $null = Get-Content -LiteralPath (Join-Path $root $jsonName) -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100 } catch { $failures += ($jsonName + ' is invalid JSON: ' + $_.Exception.Message) } } }; if ($failures.Count -eq 0) { [System.IO.File]::Delete($marker); [ordered]@{ continue = $true } | ConvertTo-Json -Compress; exit 0 }; $reason = 'ClubTimerXbox validation failed. ' + ($failures -join ' | '); if ($reason.Length -gt 3500) { $reason = $reason.Substring($reason.Length - 3500) }; if ([bool]$event.stop_hook_active) { [ordered]@{ continue = $true; systemMessage = $reason } | ConvertTo-Json -Compress -Depth 5 } else { [ordered]@{ decision = 'block'; reason = $reason } | ConvertTo-Json -Compress -Depth 5 }\"",
+            "timeout": 120,
+            "statusMessage": "Building ClubTimerXbox and running regression tests"
+          }
+        ]
+      }
+    ]
+  }
+}

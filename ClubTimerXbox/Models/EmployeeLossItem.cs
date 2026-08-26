@@ -31,6 +31,12 @@ namespace ClubTimerXbox.Models
 
         public string SourceCode { get; set; } = "";
 
+        public string RatingSourceId { get; set; } = "";
+
+        public Guid? RatingEventId { get; set; }
+
+        public System.Collections.Generic.List<EmployeeLossReassignmentItem> ReassignmentHistory { get; set; } = new();
+
         public string ResolutionStatus { get; set; } = "";
 
         public DateTime? DecisionDueAt { get; set; }
@@ -50,5 +56,22 @@ namespace ClubTimerXbox.Models
         public DateTime? PaidAt { get; set; }
 
         public string Note { get; set; } = "";
+    }
+
+    public sealed class EmployeeLossReassignmentItem
+    {
+        public DateTime CreatedAt { get; set; }
+
+        public string FromEmployeeName { get; set; } = "";
+
+        public string ToEmployeeName { get; set; } = "";
+
+        public string ChangedBy { get; set; } = "";
+
+        public string Reason { get; set; } = "";
+
+        public Guid? PreviousRatingEventId { get; set; }
+
+        public Guid? NewRatingEventId { get; set; }
     }
 }

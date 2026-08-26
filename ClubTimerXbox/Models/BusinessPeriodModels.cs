@@ -52,6 +52,8 @@ namespace ClubTimerXbox.Models
 
         public bool RatingFinancialEffectCaptured { get; set; }
 
+        public List<AutoSalaryDayEarning> DailyEarnings { get; set; } = new();
+
         public int RemainingAmount =>
             AccruedAmount + BonusAmount - PenaltyAmount - PaidAmount;
     }
@@ -135,6 +137,8 @@ namespace ClubTimerXbox.Models
 
     public sealed class BusinessMonthLedger
     {
+        public int ArchiveSchemaVersion { get; set; }
+
         public string MonthKey { get; set; } = "";
 
         public int GameRevenue { get; set; }

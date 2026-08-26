@@ -170,7 +170,10 @@ namespace ClubTimerXbox.Services
                         TimeRatingLostAmount = item.TimeRatingLostAmount,
                         GameRatingEarnedAmount = item.GameRatingEarnedAmount,
                         GameRatingLostAmount = item.GameRatingLostAmount,
-                        RatingFinancialEffectCaptured = true
+                        RatingFinancialEffectCaptured = true,
+                        DailyEarnings = AutoSalaryService.BuildDailyEarnings(
+                            item.EmployeeName,
+                            period.StartInclusive)
                     }).ToList();
                 ledger.SalaryPolicyVersions = SalaryPolicyHistoryService.GetVersions(
                     period.StartInclusive,
@@ -433,8 +436,9 @@ namespace ClubTimerXbox.Services
             int sessionCost = ActionLogService.GetAllGameSessions()
                 .SelectMany(session => session.SaleLines)
                 .Where(line => line.ItemType == SaleItemType.Product &&
-                               line.CreatedAt >= period.StartInclusive &&
-                               line.CreatedAt < period.EndExclusive)
+                               SessionSaleSettlementService.IsFinanciallyPaid(line) &&
+                               SessionSaleSettlementService.GetFinancialOccurredAt(line) >= period.StartInclusive &&
+                               SessionSaleSettlementService.GetFinancialOccurredAt(line) < period.EndExclusive)
                 .Sum(line => ResolvePurchasePrice(line.ItemName, line.PurchasePrice) * line.Quantity);
             return standaloneCost + sessionCost;
         }

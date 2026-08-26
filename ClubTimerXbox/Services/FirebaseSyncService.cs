@@ -638,7 +638,9 @@ namespace ClubTimerXbox.Services
                     })
                     .ToList();
 
-                var stockItems = ProductStockService.StockItems
+                var productPopularity = ProductPopularityService.GetLifetimePaidQuantities();
+                var stockItems = ProductPopularityService
+                    .OrderStock(ProductStockService.StockItems, productPopularity)
                     .Select(item => new
                     {
                         itemType = "Product",
@@ -647,6 +649,9 @@ namespace ClubTimerXbox.Services
                         quantity = item.Quantity,
                         purchasePrice = item.PurchasePrice,
                         salePrice = item.SalePrice,
+                        soldQuantity = productPopularity.TryGetValue(item.ProductName, out int sold)
+                            ? sold
+                            : 0,
                         minimumQuantity = item.MinimumQuantity,
                         isLowStock = ProductStockService.IsLowStock(item.ProductName),
                         updatedAt = item.UpdatedAt.ToString("yyyy-MM-dd HH:mm:ss")
@@ -662,6 +667,7 @@ namespace ClubTimerXbox.Services
                         quantity = 0,
                         purchasePrice = 0,
                         salePrice = item.SalePrice,
+                        soldQuantity = 0,
                         minimumQuantity = 0,
                         isLowStock = false,
                         updatedAt = ""
@@ -804,11 +810,14 @@ namespace ClubTimerXbox.Services
                         isCompleted = ShiftAcceptanceService.Current.IsCompleted,
                         productsAccepted = ShiftAcceptanceService.Current.ProductsAccepted,
                         cashAccepted = ShiftAcceptanceService.Current.CashAccepted,
+                        debtAcceptanceRequired = ShiftAcceptanceService.Current.DebtAcceptanceRequired,
+                        debtsAccepted = ShiftAcceptanceService.Current.DebtsAccepted,
                         newEmployeeName = ShiftAcceptanceService.Current.NewEmployeeName,
                         responsibleEmployeeName = ShiftAcceptanceService.Current.ResponsibleEmployeeName,
                         createdAt = ShiftAcceptanceService.Current.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                         productsAcceptedAt = ShiftAcceptanceService.Current.ProductsAcceptedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
                         cashAcceptedAt = ShiftAcceptanceService.Current.CashAcceptedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
+                        debtsAcceptedAt = ShiftAcceptanceService.Current.DebtsAcceptedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
                         completedAt = ShiftAcceptanceService.Current.CompletedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? ""
                     },
 
@@ -929,16 +938,43 @@ namespace ClubTimerXbox.Services
 
                     lateOpeningPenalties = LateOpeningPenaltyService
                         .GetPendingRecommendations()
-                        .Select(item => new
+                        .Select(item =>
                         {
-                            id = item.Id.ToString(),
-                            createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
-                            employeeName = item.ResponsibleEmployeeName,
-                            title = item.Title,
-                            description = item.Description,
-                            amount = item.Amount,
-                            decisionDueAt = item.DecisionDueAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
-                            status = item.ResolutionStatus
+                            string ratingSourceId = string.IsNullOrWhiteSpace(item.RatingSourceId)
+                                ? $"opening-rating:{item.CreatedAt:yyyy-MM-dd}"
+                                : item.RatingSourceId;
+                            var rating = EmployeeRatingService.FindBySource(ratingSourceId);
+                            int remainingSeconds = rating == null
+                                ? 0
+                                : Math.Max(0, (int)Math.Ceiling(
+                                    (rating.EffectiveUntil - ClubClock.Current.LocalNow).TotalSeconds));
+                            return new
+                            {
+                                id = item.Id.ToString(),
+                                createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                                employeeName = item.ResponsibleEmployeeName,
+                                title = item.Title,
+                                description = item.Description,
+                                amount = item.Amount,
+                                decisionDueAt = item.DecisionDueAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
+                                status = item.ResolutionStatus,
+                                ratingBranch = rating?.Branch.ToString() ?? "",
+                                ratingDirection = rating?.Direction.ToString() ?? "",
+                                ratingChangePercent = rating?.ChangePercent ?? 0,
+                                ratingUntil = rating?.EffectiveUntil.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
+                                ratingRemainingSeconds = remainingSeconds,
+                                reassignmentHistory = (item.ReassignmentHistory ??
+                                        new List<EmployeeLossReassignmentItem>())
+                                    .Select(history => new
+                                    {
+                                        createdAt = history.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                                        fromEmployeeName = history.FromEmployeeName,
+                                        toEmployeeName = history.ToEmployeeName,
+                                        changedBy = history.ChangedBy,
+                                        reason = history.Reason
+                                    })
+                                    .ToList()
+                            };
                         })
                         .ToList(),
 
@@ -1387,7 +1423,7 @@ namespace ClubTimerXbox.Services
         {
             var latestAcceptance = CashAcceptanceService
                 .Items
-                .Where(item => item.CreatedAt < toExclusive)
+                .Where(item => !item.IsProvisional && item.CreatedAt < toExclusive)
                 .OrderByDescending(item => item.CreatedAt)
                 .FirstOrDefault();
 
@@ -1803,10 +1839,11 @@ namespace ClubTimerXbox.Services
             foreach (var session in ActionLogService.GetAllGameSessions())
             {
                 foreach (var line in session.SaleLines.Where(line =>
-                             line.CreatedAt >= fromInclusive &&
-                             line.CreatedAt < toExclusive))
+                             SessionSaleSettlementService.IsFinanciallyPaid(line) &&
+                             SessionSaleSettlementService.GetFinancialOccurredAt(line) >= fromInclusive &&
+                             SessionSaleSettlementService.GetFinancialOccurredAt(line) < toExclusive))
                 {
-                    AddProductServiceSale(summary, line);
+                    AddProductServiceSale(summary, line, session.PlaceName);
                 }
             }
 
@@ -1888,8 +1925,12 @@ namespace ClubTimerXbox.Services
 
         private static void AddProductServiceSale(
             ProductServiceMonthSummary summary,
-            GameSessionSaleLine line)
+            GameSessionSaleLine line,
+            string placeName)
         {
+            DateTime paidAt = SessionSaleSettlementService.GetFinancialOccurredAt(line);
+            string paidBy = SessionSaleSettlementService.GetFinancialEmployeeName(line);
+
             if (line.ItemType == SaleItemType.Product)
             {
                 int purchasePrice = ResolvePurchasePrice(line.ItemName, line.PurchasePrice);
@@ -1898,7 +1939,7 @@ namespace ClubTimerXbox.Services
 
                 summary.Sales.Add(new ProductServiceSaleRow
                 {
-                    CreatedAt = line.CreatedAt,
+                    CreatedAt = paidAt,
                     ItemName = line.ItemName,
                     ItemType = "Товар",
                     Quantity = line.Quantity,
@@ -1906,8 +1947,8 @@ namespace ClubTimerXbox.Services
                     PurchasePrice = purchasePrice,
                     TotalAmount = line.TotalAmount,
                     ProfitAmount = profit,
-                    EmployeeName = line.EmployeeName,
-                    PlaceName = ""
+                    EmployeeName = paidBy,
+                    PlaceName = placeName
                 });
 
                 summary.ProductRevenue += line.TotalAmount;
@@ -1919,7 +1960,7 @@ namespace ClubTimerXbox.Services
 
             summary.Sales.Add(new ProductServiceSaleRow
             {
-                CreatedAt = line.CreatedAt,
+                CreatedAt = paidAt,
                 ItemName = line.ItemName,
                 ItemType = "Услуга",
                 Quantity = line.Quantity,
@@ -1927,8 +1968,8 @@ namespace ClubTimerXbox.Services
                 PurchasePrice = 0,
                 TotalAmount = line.TotalAmount,
                 ProfitAmount = line.TotalAmount,
-                EmployeeName = line.EmployeeName,
-                PlaceName = ""
+                EmployeeName = paidBy,
+                PlaceName = placeName
             });
             summary.ServiceRevenue += line.TotalAmount;
         }
@@ -2782,6 +2823,7 @@ namespace ClubTimerXbox.Services
                         quantity = item.Quantity,
                         purchasePrice = item.PurchasePrice,
                         salePrice = item.SalePrice,
+                        soldQuantity = ProductPopularityService.GetLifetimePaidQuantity(item.ProductName),
                         minimumQuantity = item.MinimumQuantity,
                         totalAmount = item.TotalAmount
                     }).ToArray()
@@ -2896,7 +2938,9 @@ namespace ClubTimerXbox.Services
                     quantity = line.Quantity,
                     unitPrice = line.UnitPrice,
                     totalAmount = line.TotalAmount,
-                    employeeName = line.EmployeeName,
+                    employeeName = SessionSaleSettlementService.GetCreatedByEmployeeName(line),
+                    createdByEmployeeName = SessionSaleSettlementService.GetCreatedByEmployeeName(line),
+                    debtResponsibleEmployeeName = line.DebtResponsibleEmployeeName,
                     createdAt = line.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss")
                 })
                 .Cast<object>()
@@ -3216,6 +3260,18 @@ namespace ClubTimerXbox.Services
                         commandId,
                         command,
                         "Рекомендация штрафа за опоздание отменена.");
+
+                    return;
+                }
+
+                if (command.Type == "ReassignLateOpeningPenalty")
+                {
+                    ApplyReassignLateOpeningPenalty(command);
+
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Опоздание переназначено на {command.NewEmployeeName}.");
 
                     return;
                 }
@@ -4184,6 +4240,20 @@ namespace ClubTimerXbox.Services
                 throw new Exception("Не указан корректный id рекомендации опоздания.");
             if (!LateOpeningPenaltyService.Cancel(id, command.Reason))
                 throw new Exception("Рекомендация уже оформлена, отменена или не найдена.");
+        }
+
+        private static void ApplyReassignLateOpeningPenalty(FirebaseCommand command)
+        {
+            if (!Guid.TryParse(command.RecordId, out Guid id))
+                throw new Exception("Не указан корректный id рекомендации опоздания.");
+            if (!LateOpeningPenaltyService.Reassign(
+                    id,
+                    command.NewEmployeeName,
+                    "Владелец",
+                    command.Reason))
+            {
+                throw new Exception("Не удалось переназначить опоздание.");
+            }
         }
 
         private static string ApplyVerifyCashlessActual(

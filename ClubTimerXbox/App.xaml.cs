@@ -100,6 +100,7 @@ namespace ClubTimerXbox
 
             KnownDataRepairService.Apply();
             CashPenaltyPostingService.Recover();
+            CashAcceptancePostingService.Start();
             CashMonthCloseService.Start();
             BusinessAccountingService.EnsureActivated();
             BusinessDayTransitionService.Start();

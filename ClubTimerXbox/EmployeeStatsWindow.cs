@@ -470,7 +470,7 @@ namespace ClubTimerXbox
             return _section switch
             {
                 StatsSection.TakenHistory => "История выдач",
-                StatsSection.Salary => "Зарплата",
+                StatsSection.Salary => "Общая",
                 StatsSection.Bonuses => "Премии и бонусы",
                 StatsSection.Rating => "Рейтинг",
                 StatsSection.Time => "Время",
@@ -486,7 +486,7 @@ namespace ClubTimerXbox
                 return "История авансов и выдач зарплаты за выбранный месяц.";
 
             if (_section == StatsSection.Salary)
-                return $"Осталось выдать: {autoSalary?.RemainingAmount ?? 0} сом.";
+                return "Итоги начислений по каждому рабочему дню выбранного месяца.";
 
             if (_section == StatsSection.Bonuses)
                 return $"Бонусы за выбранный месяц: {(autoSalary?.BonusAmount ?? 0) + (autoSalary?.ProductBonusAmount ?? 0)} сом.";
@@ -759,39 +759,248 @@ namespace ClubTimerXbox
             EmployeeStatsSummary summary,
             AutoSalaryEmployeeResult? autoSalary)
         {
-            int timeAmount = autoSalary?.TimeAmount ?? 0;
-            int gameAmount = autoSalary?.GameRevenueAmount ?? 0;
-            int productBonus = autoSalary?.ProductBonusAmount ?? 0;
-            int automaticBonuses = autoSalary?.BonusAmount ?? 0;
-            int losses = autoSalary?.LossesAmount ?? summary.MonthUnpaidLosses;
             int paid = autoSalary?.PaidAmount ?? 0;
-            int gross = autoSalary?.GrossAmount
-                ?? timeAmount + gameAmount + productBonus + automaticBonuses;
-            int remaining = autoSalary?.RemainingAmount
-                ?? gross - paid - losses;
+            int gross = autoSalary?.GrossAmount ?? 0;
+            int remaining = autoSalary?.RemainingAmount ?? gross - paid;
 
             _contentPanel.Children.Add(CreateCard(new StackPanel
             {
                 Children =
                 {
-                    CreateBigLine("Зарплата за выбранный месяц"),
-                    CreateLine($"Общее время: {EmployeeStatsService.FormatTime(GetDisplayedWorkTime(summary, autoSalary))}"),
-                    CreateLine($"Заработал по времени: {timeAmount} сом"),
-                    CreateLine(""),
-                    CreateLine($"Общая игровая выручка: {summary.MonthGameIncome} сом"),
-                    CreateLine($"Заработал по выручке: {gameAmount} сом"),
-                    CreateLine(""),
-                    CreateLine($"Товары/услуги: {summary.MonthProductsIncome} сом"),
-                    CreateLine($"Бонус за товары/услуги: {productBonus} сом"),
-                    CreateLine(""),
-                    CreateLine($"Бонусы: {automaticBonuses} сом"),
-                    CreateLine($"Всего начислено: {gross} сом"),
-                    CreateLine($"Штрафы: -{losses} сом"),
-                    CreateLine($"Взял: -{paid} сом"),
-                    CreateBigLine($"Итог осталось: {remaining} сом")
+                    CreateBigLine("Итоги за выбранный месяц"),
+                    CreateLine($"Заработал: {gross} сом"),
+                    CreateLine($"Забрал: {paid} сом"),
+                    CreateBigLine($"Осталось: {remaining} сом")
                 }
             }));
 
+            var days = AutoSalaryService.BuildDailyEarnings(_employeeName, _monthStart);
+            if (days.Count == 0)
+            {
+                _contentPanel.Children.Add(CreateMutedText(
+                    "За выбранный месяц начислений по дням пока нет."));
+                return;
+            }
+
+            foreach (var day in days)
+            {
+                _contentPanel.Children.Add(CreateDailyEarningCard(day));
+            }
+        }
+
+        private Border CreateDailyEarningCard(AutoSalaryDayEarning day)
+        {
+            var panel = new Grid
+            {
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            panel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            panel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var dateText = CreateDailyText(
+                day.Date.ToString("dd.MM.yyyy"),
+                Brushes.White,
+                18,
+                FontWeights.Bold);
+            dateText.Margin = new Thickness(0, 0, 18, 12);
+            Grid.SetRow(dateText, 0);
+            Grid.SetColumn(dateText, 0);
+            panel.Children.Add(dateText);
+
+            var totalText = CreateDailyText(
+                $"Итог дня: {day.TotalAmount} сом",
+                Brushes.White,
+                18,
+                FontWeights.Bold);
+            totalText.HorizontalAlignment = HorizontalAlignment.Right;
+            totalText.Margin = new Thickness(40, 0, 0, 12);
+            Grid.SetRow(totalText, 0);
+            Grid.SetColumn(totalText, 1);
+            panel.Children.Add(totalText);
+
+            AddRatedDailyRow(
+                panel,
+                1,
+                "Рейтинг времени",
+                day.TimeRatingPercents,
+                day.TimeBaseAmount,
+                day.TimeAmount);
+            AddRatedDailyRow(
+                panel,
+                2,
+                "Рейтинг игр",
+                day.GameRatingPercents,
+                day.GameBaseAmount,
+                day.GameAmount);
+
+            var bonusRow = CreateDailyRowGrid();
+            var bonusTitle = CreateDailyText(
+                "Бонусы",
+                new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+                15,
+                FontWeights.Normal);
+            var bonusAmount = CreateDailyText(
+                $"{day.BonusAmount} сом",
+                Brushes.White,
+                15,
+                FontWeights.SemiBold);
+            bonusAmount.Margin = new Thickness(18, 0, 0, 0);
+            Grid.SetColumn(bonusTitle, 0);
+            Grid.SetColumn(bonusAmount, 1);
+            Grid.SetColumnSpan(bonusAmount, 3);
+            bonusRow.Children.Add(bonusTitle);
+            bonusRow.Children.Add(bonusAmount);
+            Grid.SetRow(bonusRow, 3);
+            Grid.SetColumnSpan(bonusRow, 2);
+            panel.Children.Add(bonusRow);
+
+            return CreateCard(panel);
+        }
+
+        private void AddRatedDailyRow(
+            Grid parent,
+            int row,
+            string title,
+            IReadOnlyCollection<int> ratings,
+            int baseAmount,
+            int actualAmount)
+        {
+            var line = CreateDailyRowGrid();
+            Brush ratingBrush = GetDailyRatingBrush(ratings);
+            Brush amountBrush = baseAmount != actualAmount
+                ? actualAmount > baseAmount
+                    ? new SolidColorBrush(Color.FromRgb(74, 222, 128))
+                    : new SolidColorBrush(Color.FromRgb(248, 113, 113))
+                : ratingBrush;
+
+            var titleText = CreateDailyText(
+                title,
+                new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+                15,
+                FontWeights.Normal);
+            var ratingText = CreateDailyText(
+                FormatDailyRatings(ratings),
+                ratingBrush,
+                15,
+                FontWeights.SemiBold);
+            var firstArrow = CreateDailyText(
+                "→",
+                new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                16,
+                FontWeights.Normal);
+            firstArrow.HorizontalAlignment = HorizontalAlignment.Center;
+
+            var amounts = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            bool hasNonNeutralRating = ratings.Any(value => value != 100);
+            if (baseAmount != actualAmount || hasNonNeutralRating)
+            {
+                var baseText = CreateDailyText(
+                    $"{baseAmount} сом",
+                    new SolidColorBrush(Color.FromRgb(170, 180, 195)),
+                    15,
+                    FontWeights.Normal);
+                baseText.TextDecorations = TextDecorations.Strikethrough;
+                amounts.Children.Add(baseText);
+
+                var secondArrow = CreateDailyText(
+                    "→",
+                    new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                    16,
+                    FontWeights.Normal);
+                secondArrow.Margin = new Thickness(10, 0, 10, 0);
+                amounts.Children.Add(secondArrow);
+            }
+
+            amounts.Children.Add(CreateDailyText(
+                $"{actualAmount} сом",
+                amountBrush,
+                15,
+                FontWeights.SemiBold));
+            if (baseAmount == actualAmount && hasNonNeutralRating)
+            {
+                amounts.ToolTip =
+                    "Рейтинг действовал, но после округления сумма не изменилась.";
+            }
+
+            Grid.SetColumn(titleText, 0);
+            Grid.SetColumn(ratingText, 1);
+            Grid.SetColumn(firstArrow, 2);
+            Grid.SetColumn(amounts, 3);
+            line.Children.Add(titleText);
+            line.Children.Add(ratingText);
+            line.Children.Add(firstArrow);
+            line.Children.Add(amounts);
+            Grid.SetRow(line, row);
+            Grid.SetColumnSpan(line, 2);
+            parent.Children.Add(line);
+        }
+
+        private static Grid CreateDailyRowGrid()
+        {
+            var line = new Grid
+            {
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            line.ColumnDefinitions.Add(new ColumnDefinition
+            {
+                Width = new GridLength(180)
+            });
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(30) });
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            return line;
+        }
+
+        private static TextBlock CreateDailyText(
+            string text,
+            Brush foreground,
+            double fontSize,
+            FontWeight fontWeight)
+        {
+            return new TextBlock
+            {
+                Text = text,
+                Foreground = foreground,
+                FontSize = fontSize,
+                FontWeight = fontWeight,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextWrapping = TextWrapping.Wrap
+            };
+        }
+
+        private static string FormatDailyRatings(IReadOnlyCollection<int> ratings)
+        {
+            var values = ratings
+                .Distinct()
+                .OrderBy(value => value)
+                .ToList();
+            return values.Count switch
+            {
+                0 => "100%",
+                1 => $"{values[0]}%",
+                _ => $"{values.First()}–{values.Last()}%"
+            };
+        }
+
+        private static Brush GetDailyRatingBrush(IReadOnlyCollection<int> ratings)
+        {
+            bool hasIncrease = ratings.Any(value => value > 100);
+            bool hasDecrease = ratings.Any(value => value < 100);
+            if (hasIncrease && !hasDecrease)
+                return new SolidColorBrush(Color.FromRgb(74, 222, 128));
+            if (hasDecrease && !hasIncrease)
+                return new SolidColorBrush(Color.FromRgb(248, 113, 113));
+            if (hasIncrease && hasDecrease)
+                return new SolidColorBrush(Color.FromRgb(250, 204, 21));
+            return Brushes.White;
         }
 
         private static TimeSpan GetDisplayedWorkTime(

@@ -27,9 +27,10 @@ namespace ClubTimerXbox.Services
             // Услуги берём из отдельного сервиса услуг.
             items.AddRange(CustomServiceService.GetActiveServices());
 
-            return items
-                .OrderBy(item => item.Type)
-                .ThenBy(item => item.Name)
+            var popularity = ProductPopularityService.GetLifetimePaidQuantities();
+
+            return ProductPopularityService
+                .OrderSalesCatalog(items, popularity)
                 .ToList();
         }
 

@@ -493,6 +493,9 @@ namespace ClubTimerXbox.Services
             PaymentRecord record,
             CheckoutItem item)
         {
+            if (item.SourceSaleLineId.HasValue)
+                return record.CreatedAt;
+
             if (record.GameSessionId == null || IsGameItem(item))
                 return record.CreatedAt;
 

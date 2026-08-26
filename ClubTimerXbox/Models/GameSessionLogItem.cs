@@ -17,6 +17,14 @@ namespace ClubTimerXbox.Models
         public string TariffText { get; set; } = "";
         public int PaidAmount { get; set; }
 
+        // Игровая часть может быть завершена раньше товарного долга.
+        // Поля защищают повторную проводку игровой выручки после перезапуска.
+        public bool IsGameIncomePosted { get; set; }
+
+        public DateTime? GameIncomePostedAt { get; set; }
+
+        public string GameIncomeEmployeeName { get; set; } = "";
+
         // Дополнительные действия внутри сеанса:
         // штраф, добавление времени, пересадка и т.д.
         public List<GameSessionExtraLine> ExtraLines { get; set; } = new List<GameSessionExtraLine>();
@@ -68,8 +76,17 @@ namespace ClubTimerXbox.Models
 
         public DateTime CreatedAt { get; set; } = DateTime.Now;
 
-        // Кто оформил товар/услугу.
+        // Старое поле хранится для совместимости закрытой истории.
+        // Для новых записей оно совпадает с CreatedByEmployeeName.
         public string EmployeeName { get; set; } = "";
+
+        public int SettlementSchemaVersion { get; set; }
+
+        public string CreatedByEmployeeId { get; set; } = "";
+
+        public string CreatedByEmployeeName { get; set; } = "";
+
+        public Guid? CreatedShiftId { get; set; }
 
         public string ItemName { get; set; } = "";
 
@@ -86,5 +103,42 @@ namespace ClubTimerXbox.Models
         // Пока товар/услуга оформлены на сеанс, но ещё не оплачены.
         // При закрытии сеанса станет true.
         public bool IsPaid { get; set; }
+
+        public Guid? PaymentRecordId { get; set; }
+
+        public DateTime? PaidAt { get; set; }
+
+        public string PaidByEmployeeId { get; set; } = "";
+
+        public string PaidByEmployeeName { get; set; } = "";
+
+        public Guid? PaidShiftId { get; set; }
+
+        public string DebtResponsibleEmployeeName { get; set; } = "";
+
+        public Guid? DebtResponsibleShiftId { get; set; }
+
+        public DateTime? DebtAcceptedAt { get; set; }
+    }
+
+    public sealed class OutstandingCustomerDebtItem
+    {
+        public Guid SessionId { get; set; }
+
+        public Guid? SaleLineId { get; set; }
+
+        public string PlaceName { get; set; } = "";
+
+        public string ItemName { get; set; } = "";
+
+        public int Quantity { get; set; }
+
+        public int Amount { get; set; }
+
+        public DateTime CreatedAt { get; set; }
+
+        public string CreatedByEmployeeName { get; set; } = "";
+
+        public string ResponsibleEmployeeName { get; set; } = "";
     }
 }

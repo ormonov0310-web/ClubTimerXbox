@@ -5,7 +5,8 @@ namespace ClubTimerXbox.Services
 {
     public static class ShiftAcceptanceService
     {
-        private const int CashCorrectionWindowMinutes = 15;
+        public const int InitialCorrectionWindowMinutes =
+            ShiftAcceptanceCorrectionPolicy.OriginalEmployeeResponsibilityMinutes;
         private const string CashCorrectionKeySuffix = ":cash-correction";
         private const string ProductsCorrectionKeySuffix = ":products-correction";
 
@@ -156,11 +157,16 @@ namespace ClubTimerXbox.Services
                 return;
             }
 
+            bool debtAcceptanceRequired =
+                ActionLogService.GetOutstandingCustomerDebts().Count > 0;
+
             Current = new ShiftAcceptanceStatus
             {
                 IsRequired = true,
                 ProductsAccepted = false,
                 CashAccepted = false,
+                DebtAcceptanceRequired = debtAcceptanceRequired,
+                DebtsAccepted = !debtAcceptanceRequired,
                 AcceptanceKey = acceptanceKey,
                 NewEmployeeName = newEmployeeName.Trim(),
                 ResponsibleEmployeeName = responsibleEmployeeName.Trim(),
@@ -169,6 +175,7 @@ namespace ClubTimerXbox.Services
                 CreatedAt = ClubClock.Current.LocalNow,
                 ProductsAcceptedAt = null,
                 CashAcceptedAt = null,
+                DebtsAcceptedAt = debtAcceptanceRequired ? null : ClubClock.Current.LocalNow,
                 CompletedAt = null,
                 IsManualSelfAcceptance = false,
                 ManualSelfAcceptanceAvailable = false,
@@ -207,6 +214,9 @@ namespace ClubTimerXbox.Services
             Current.IsRequired = false;
             Current.ProductsAccepted = true;
             Current.CashAccepted = true;
+            Current.DebtAcceptanceRequired = false;
+            Current.DebtsAccepted = true;
+            Current.DebtsAcceptedAt = ClubClock.Current.LocalNow;
             Current.AcceptanceKey = acceptanceKey;
             Current.NewEmployeeName = employeeName;
             Current.ResponsibleEmployeeName = employeeName;
@@ -264,6 +274,8 @@ namespace ClubTimerXbox.Services
                 IsRequired = true,
                 ProductsAccepted = false,
                 CashAccepted = false,
+                DebtAcceptanceRequired = false,
+                DebtsAccepted = true,
                 AcceptanceKey = Current.ManualSelfAcceptanceKey.Trim(),
                 NewEmployeeName = employeeName,
                 ResponsibleEmployeeName = employeeName,
@@ -272,6 +284,7 @@ namespace ClubTimerXbox.Services
                 CreatedAt = ClubClock.Current.LocalNow,
                 ProductsAcceptedAt = null,
                 CashAcceptedAt = null,
+                DebtsAcceptedAt = ClubClock.Current.LocalNow,
                 CompletedAt = null,
                 IsManualSelfAcceptance = true,
                 ManualSelfAcceptanceAvailable = false,
@@ -296,19 +309,19 @@ namespace ClubTimerXbox.Services
 
             bool isProductsCorrection = IsProductsCorrectionAcceptanceKey(Current.AcceptanceKey);
             string originalAcceptanceKey = Current.CashCorrectionAcceptanceKey.Trim();
-            string correctionNewEmployeeName = Current.CashCorrectionNewEmployeeName.Trim();
 
             Current.ProductsAccepted = true;
             Current.ProductsAcceptedAt = ClubClock.Current.LocalNow;
 
             TryComplete();
+            ScheduleProvisionalCashFinalization();
 
             if (isProductsCorrection)
             {
                 if (!string.IsNullOrWhiteSpace(originalAcceptanceKey))
                     Current.AcceptanceKey = originalAcceptanceKey;
 
-                CompleteSectionCorrection(correctionNewEmployeeName);
+                CompleteSectionCorrection();
             }
             else
             {
@@ -325,19 +338,20 @@ namespace ClubTimerXbox.Services
 
             bool isCashCorrection = IsCashCorrectionAcceptanceKey(Current.AcceptanceKey);
             string originalAcceptanceKey = Current.CashCorrectionAcceptanceKey.Trim();
-            string correctionNewEmployeeName = Current.CashCorrectionNewEmployeeName.Trim();
 
             Current.CashAccepted = true;
             Current.CashAcceptedAt = ClubClock.Current.LocalNow;
+            CashAcceptanceRecountPolicy.Clear(Current);
 
             TryComplete();
+            ScheduleProvisionalCashFinalization();
 
             if (isCashCorrection)
             {
                 if (!string.IsNullOrWhiteSpace(originalAcceptanceKey))
                     Current.AcceptanceKey = originalAcceptanceKey;
 
-                CompleteSectionCorrection(correctionNewEmployeeName);
+                CompleteSectionCorrection();
             }
             else
             {
@@ -347,10 +361,91 @@ namespace ClubTimerXbox.Services
             Save();
         }
 
+        public static CashRecountDecision CheckCashRecount(
+            int expectedAmount,
+            int actualAmount)
+        {
+            var decision = CashAcceptanceRecountPolicy.Evaluate(
+                Current,
+                Current.AcceptanceKey,
+                expectedAmount,
+                actualAmount,
+                ClubClock.Current.LocalNow);
+            Save();
+            return decision;
+        }
+
+        public static bool IsCashRecountRequired()
+        {
+            return Current.CashRecountRequired &&
+                   Current.CashRecountAcceptanceKey.Equals(
+                       Current.AcceptanceKey.Trim(),
+                       StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static bool IsCashRecountLocked()
+        {
+            return CashAcceptanceRecountPolicy.IsLocked(
+                Current,
+                Current.AcceptanceKey,
+                ClubClock.Current.LocalNow);
+        }
+
+        public static string GetRootAcceptanceKey()
+        {
+            if ((IsCashCorrectionAcceptanceKey(Current.AcceptanceKey) ||
+                 IsProductsCorrectionAcceptanceKey(Current.AcceptanceKey)) &&
+                !string.IsNullOrWhiteSpace(Current.CashCorrectionAcceptanceKey))
+            {
+                return Current.CashCorrectionAcceptanceKey.Trim();
+            }
+
+            return Current.AcceptanceKey.Trim();
+        }
+
+        public static bool ShouldStageCashAcceptance(DateTime now)
+        {
+            return ShiftAcceptanceCorrectionPolicy.ShouldStageInitialCashAcceptance(
+                Current,
+                GetRootAcceptanceKey(),
+                now);
+        }
+
+        public static void ScheduleProvisionalCashFinalization()
+        {
+            if (Current.InitialProductsAndCashAcceptedAt == null)
+                return;
+
+            string rootAcceptanceKey = GetRootAcceptanceKey();
+            if (string.IsNullOrWhiteSpace(rootAcceptanceKey))
+                return;
+
+            CashAcceptanceService.ScheduleProvisional(
+                rootAcceptanceKey,
+                Current.InitialProductsAndCashAcceptedAt.Value
+                    .AddMinutes(InitialCorrectionWindowMinutes));
+        }
+
+        public static void AcceptDebts()
+        {
+            if (!Current.IsRequired || !Current.DebtAcceptanceRequired)
+                return;
+
+            Current.DebtsAccepted = true;
+            Current.DebtsAcceptedAt = ClubClock.Current.LocalNow;
+            TryComplete();
+            TryStartCashCorrectionWindowAfterStandardCompletion();
+            Save();
+        }
+
         public static void MarkCompleted()
         {
             Current.ProductsAccepted = true;
             Current.CashAccepted = true;
+            Current.InitialProductsAndCashAcceptedAt ??= ClubClock.Current.LocalNow;
+            Current.DebtAcceptanceRequired = false;
+            Current.DebtsAccepted = true;
+            Current.DebtsAcceptedAt = ClubClock.Current.LocalNow;
             Current.IsRequired = false;
             Current.CompletedAt = ClubClock.Current.LocalNow;
             Current.IsManualSelfAcceptance = false;
@@ -399,88 +494,41 @@ namespace ClubTimerXbox.Services
 
         public static bool CanCorrectCashAcceptance(string employeeName)
         {
-            ExpireCashCorrectionIfNeeded();
-
             employeeName = employeeName.Trim();
-
-            if (!Current.CashCorrectionAvailable)
-                return false;
-
             if (string.IsNullOrWhiteSpace(employeeName))
                 return false;
-
-            if (Current.CashCorrectionUntil == null ||
-                Current.CashCorrectionUntil.Value <= ClubClock.Current.LocalNow)
-            {
-                ExpireCashCorrectionIfNeeded();
+            if (!Current.CashAccepted || string.IsNullOrWhiteSpace(Current.AcceptanceKey))
                 return false;
-            }
-
-            if (string.IsNullOrWhiteSpace(Current.CashCorrectionAcceptanceKey))
+            if (IsCashCorrectionAcceptanceKey(Current.AcceptanceKey) ||
+                IsProductsCorrectionAcceptanceKey(Current.AcceptanceKey))
                 return false;
-
-            if (!Current.CashCorrectionNewEmployeeName.Trim().Equals(
+            if (!Current.NewEmployeeName.Trim().Equals(
                     employeeName,
                     StringComparison.OrdinalIgnoreCase))
-            {
                 return false;
-            }
-
-            string correctionKey = BuildCashCorrectionAcceptanceKey(Current.CashCorrectionAcceptanceKey);
-
-            return !CashAcceptanceService.HasAcceptanceKey(correctionKey);
+            return true;
         }
 
         public static bool CanCorrectProductsAcceptance(string employeeName)
         {
-            ExpireCashCorrectionIfNeeded();
-
             employeeName = employeeName.Trim();
-
-            if (!Current.CashCorrectionAvailable)
-                return false;
-
             if (string.IsNullOrWhiteSpace(employeeName))
                 return false;
-
-            if (Current.CashCorrectionUntil == null ||
-                Current.CashCorrectionUntil.Value <= ClubClock.Current.LocalNow)
-            {
-                ExpireCashCorrectionIfNeeded();
+            if (!Current.ProductsAccepted || string.IsNullOrWhiteSpace(Current.AcceptanceKey))
                 return false;
-            }
-
-            if (string.IsNullOrWhiteSpace(Current.CashCorrectionAcceptanceKey))
+            if (IsCashCorrectionAcceptanceKey(Current.AcceptanceKey) ||
+                IsProductsCorrectionAcceptanceKey(Current.AcceptanceKey))
                 return false;
-
-            if (!Current.CashCorrectionNewEmployeeName.Trim().Equals(
+            if (!Current.NewEmployeeName.Trim().Equals(
                     employeeName,
                     StringComparison.OrdinalIgnoreCase))
-            {
                 return false;
-            }
-
-            string correctionKey = BuildProductsCorrectionAcceptanceKey(Current.CashCorrectionAcceptanceKey);
-
-            return !StockAuditService.HasAcceptanceKey(correctionKey);
+            return true;
         }
 
         public static TimeSpan? GetCashCorrectionRemaining()
         {
-            ExpireCashCorrectionIfNeeded();
-
-            if (!Current.CashCorrectionAvailable ||
-                Current.CashCorrectionUntil == null)
-            {
-                return null;
-            }
-
-            var remaining = Current.CashCorrectionUntil.Value - ClubClock.Current.LocalNow;
-
-            if (remaining <= TimeSpan.Zero)
-                return null;
-
-            return remaining;
+            return null;
         }
 
         public static bool StartCashCorrection(string employeeName)
@@ -488,16 +536,24 @@ namespace ClubTimerXbox.Services
             if (!CanCorrectCashAcceptance(employeeName))
                 return false;
 
+            PrepareSectionCorrection();
+            string responsibleEmployeeName =
+                ShiftAcceptanceCorrectionPolicy.ResolveResponsibleEmployee(
+                    Current,
+                    Current.CashCorrectionResponsibleEmployeeName,
+                    employeeName,
+                    ClubClock.Current.LocalNow);
+
             Current.IsRequired = true;
-            Current.ProductsAccepted = true;
             Current.CashAccepted = false;
-            Current.AcceptanceKey = BuildCashCorrectionAcceptanceKey(Current.CashCorrectionAcceptanceKey);
+            Current.AcceptanceKey = BuildCorrectionAttemptKey(
+                Current.CashCorrectionAcceptanceKey,
+                CashCorrectionKeySuffix);
             Current.NewEmployeeName = Current.CashCorrectionNewEmployeeName.Trim();
-            Current.ResponsibleEmployeeName = Current.CashCorrectionResponsibleEmployeeName.Trim();
-            Current.DisplayResponsibleEmployeeName = Current.CashCorrectionResponsibleEmployeeName.Trim();
+            Current.ResponsibleEmployeeName = responsibleEmployeeName;
+            Current.DisplayResponsibleEmployeeName = responsibleEmployeeName;
             Current.DisplayNewEmployeeName = Current.CashCorrectionNewEmployeeName.Trim();
             Current.CreatedAt = ClubClock.Current.LocalNow;
-            Current.ProductsAcceptedAt = ClubClock.Current.LocalNow;
             Current.CashAcceptedAt = null;
             Current.CompletedAt = null;
             Current.IsManualSelfAcceptance = false;
@@ -513,17 +569,25 @@ namespace ClubTimerXbox.Services
             if (!CanCorrectProductsAcceptance(employeeName))
                 return false;
 
+            PrepareSectionCorrection();
+            string responsibleEmployeeName =
+                ShiftAcceptanceCorrectionPolicy.ResolveResponsibleEmployee(
+                    Current,
+                    Current.CashCorrectionResponsibleEmployeeName,
+                    employeeName,
+                    ClubClock.Current.LocalNow);
+
             Current.IsRequired = true;
             Current.ProductsAccepted = false;
-            Current.CashAccepted = true;
-            Current.AcceptanceKey = BuildProductsCorrectionAcceptanceKey(Current.CashCorrectionAcceptanceKey);
+            Current.AcceptanceKey = BuildCorrectionAttemptKey(
+                Current.CashCorrectionAcceptanceKey,
+                ProductsCorrectionKeySuffix);
             Current.NewEmployeeName = Current.CashCorrectionNewEmployeeName.Trim();
-            Current.ResponsibleEmployeeName = Current.CashCorrectionResponsibleEmployeeName.Trim();
-            Current.DisplayResponsibleEmployeeName = Current.CashCorrectionResponsibleEmployeeName.Trim();
+            Current.ResponsibleEmployeeName = responsibleEmployeeName;
+            Current.DisplayResponsibleEmployeeName = responsibleEmployeeName;
             Current.DisplayNewEmployeeName = Current.CashCorrectionNewEmployeeName.Trim();
             Current.CreatedAt = ClubClock.Current.LocalNow;
             Current.ProductsAcceptedAt = null;
-            Current.CashAcceptedAt = ClubClock.Current.LocalNow;
             Current.CompletedAt = null;
             Current.IsManualSelfAcceptance = false;
             ClearManualSelfAcceptanceAvailability();
@@ -533,12 +597,31 @@ namespace ClubTimerXbox.Services
             return true;
         }
 
+        private static void PrepareSectionCorrection()
+        {
+            Current.CashCorrectionAvailable = true;
+            Current.CashCorrectionAcceptanceKey = Current.AcceptanceKey.Trim();
+            Current.CashCorrectionNewEmployeeName = Current.NewEmployeeName.Trim();
+            Current.CashCorrectionResponsibleEmployeeName = Current.ResponsibleEmployeeName.Trim();
+            Current.CashCorrectionUntil = null;
+        }
+
         private static void TryComplete()
         {
-            if (Current.ProductsAccepted && Current.CashAccepted)
+            bool isCorrectionAttempt =
+                IsCashCorrectionAcceptanceKey(Current.AcceptanceKey) ||
+                IsProductsCorrectionAcceptanceKey(Current.AcceptanceKey);
+            ShiftAcceptanceCorrectionPolicy.CaptureInitialProductsAndCashCompletion(
+                Current,
+                ClubClock.Current.LocalNow,
+                isCorrectionAttempt);
+
+            if (Current.ProductsAccepted &&
+                Current.CashAccepted &&
+                (!Current.DebtAcceptanceRequired || Current.DebtsAccepted))
             {
                 Current.IsRequired = false;
-            Current.CompletedAt = ClubClock.Current.LocalNow;
+                Current.CompletedAt = ClubClock.Current.LocalNow;
                 _ = FirebaseEventService.PublishAcceptanceCompletedAsync(Current);
             }
         }
@@ -578,7 +661,7 @@ namespace ClubTimerXbox.Services
             Current.CashCorrectionNewEmployeeName = Current.NewEmployeeName.Trim();
             Current.CashCorrectionResponsibleEmployeeName = Current.ResponsibleEmployeeName.Trim();
             Current.CashCorrectionUntil =
-                ClubClock.Current.LocalNow.AddMinutes(CashCorrectionWindowMinutes);
+                ClubClock.Current.LocalNow.AddMinutes(InitialCorrectionWindowMinutes);
         }
 
         private static void ExpireCashCorrectionIfNeeded()
@@ -601,6 +684,9 @@ namespace ClubTimerXbox.Services
                 Current.IsRequired = false;
                 Current.ProductsAccepted = true;
                 Current.CashAccepted = true;
+                Current.DebtAcceptanceRequired = false;
+                Current.DebtsAccepted = true;
+                Current.DebtsAcceptedAt ??= ClubClock.Current.LocalNow;
                 Current.CompletedAt ??= ClubClock.Current.LocalNow;
                 Current.IsManualSelfAcceptance = false;
             }
@@ -618,15 +704,9 @@ namespace ClubTimerXbox.Services
             Current.CashCorrectionUntil = null;
         }
 
-        private static void CompleteSectionCorrection(string correctionNewEmployeeName)
+        private static void CompleteSectionCorrection()
         {
-            if (!HasPendingCorrectionOpportunity())
-            {
-                if (!string.IsNullOrWhiteSpace(correctionNewEmployeeName))
-                    Current.ResponsibleEmployeeName = correctionNewEmployeeName;
-
-                ClearCashCorrection();
-            }
+            ClearCashCorrection();
         }
 
         private static bool HasPendingCorrectionOpportunity()
@@ -684,16 +764,21 @@ namespace ClubTimerXbox.Services
 
         private static bool IsCashCorrectionAcceptanceKey(string acceptanceKey)
         {
-            return acceptanceKey
-                .Trim()
-                .EndsWith(CashCorrectionKeySuffix, StringComparison.OrdinalIgnoreCase);
+            string value = acceptanceKey.Trim();
+            return value.EndsWith(CashCorrectionKeySuffix, StringComparison.OrdinalIgnoreCase) ||
+                   value.Contains($"{CashCorrectionKeySuffix}:", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsProductsCorrectionAcceptanceKey(string acceptanceKey)
         {
-            return acceptanceKey
-                .Trim()
-                .EndsWith(ProductsCorrectionKeySuffix, StringComparison.OrdinalIgnoreCase);
+            string value = acceptanceKey.Trim();
+            return value.EndsWith(ProductsCorrectionKeySuffix, StringComparison.OrdinalIgnoreCase) ||
+                   value.Contains($"{ProductsCorrectionKeySuffix}:", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string BuildCorrectionAttemptKey(string acceptanceKey, string suffix)
+        {
+            return $"{acceptanceKey.Trim()}{suffix}:{Guid.NewGuid():N}";
         }
     }
 }

@@ -75,6 +75,9 @@ namespace ClubTimerXbox.Models
 
         public Guid? GameSessionId { get; set; }
 
+        // Optional link to the actual KKM payment that funded this revenue row.
+        public Guid? PaymentRecordId { get; set; }
+
         public bool IsAttachedToGameSession { get; set; }
     }
 }

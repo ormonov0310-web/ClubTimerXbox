@@ -129,6 +129,43 @@ namespace ClubTimerXbox.Models
         public List<EmployeeRatingEvent> RatingEvents { get; set; } = new();
     }
 
+    public class AutoSalaryDayEarning
+    {
+        public DateTime Date { get; set; }
+
+        public double WorkHours { get; set; }
+
+        public int TimeAmount { get; set; }
+
+        public int TimeRatingEarnedAmount { get; set; }
+
+        public int TimeRatingLostAmount { get; set; }
+
+        public List<int> TimeRatingPercents { get; set; } = new();
+
+        public int TimeBaseAmount =>
+            Math.Max(0, TimeAmount - TimeRatingEarnedAmount + TimeRatingLostAmount);
+
+        public int GameAmount { get; set; }
+
+        public int GameRatingEarnedAmount { get; set; }
+
+        public int GameRatingLostAmount { get; set; }
+
+        public List<int> GameRatingPercents { get; set; } = new();
+
+        public int GameBaseAmount =>
+            Math.Max(0, GameAmount - GameRatingEarnedAmount + GameRatingLostAmount);
+
+        public int ProductServiceBonusAmount { get; set; }
+
+        public int OtherBonusAmount { get; set; }
+
+        public int BonusAmount => ProductServiceBonusAmount + OtherBonusAmount;
+
+        public int TotalAmount => TimeAmount + GameAmount + BonusAmount;
+    }
+
     public class AutoSalaryReport
     {
         public string MonthKey { get; set; } = "";

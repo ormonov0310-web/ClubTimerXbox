@@ -70,7 +70,7 @@ namespace ClubTimerXbox.Services
         {
             var latestAcceptance = CashAcceptanceService
                 .Items
-                .Where(item => item.CreatedAt < toExclusive)
+                .Where(item => !item.IsProvisional && item.CreatedAt < toExclusive)
                 .OrderByDescending(item => item.CreatedAt)
                 .FirstOrDefault();
             var latestCheckpoint = CashBalanceCheckpointService.Items
@@ -225,7 +225,7 @@ namespace ClubTimerXbox.Services
                 .OrderByDescending(item => item.CreatedAt)
                 .FirstOrDefault();
             var acceptance = CashAcceptanceService.Items
-                .Where(item => item.CreatedAt < toExclusive)
+                .Where(item => !item.IsProvisional && item.CreatedAt < toExclusive)
                 .OrderByDescending(item => item.CreatedAt)
                 .FirstOrDefault();
             if (checkpoint != null &&

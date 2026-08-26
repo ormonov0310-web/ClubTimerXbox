@@ -5,6 +5,8 @@
         Icon="Assets/AppIcon/clubtimer.ico"
         Height="720"
         Width="1180"
+        MinWidth="1120"
+        MinHeight="927"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource Theme.WindowBrush}">
 
@@ -135,57 +137,6 @@
                                 Margin="0,0,8,0"
                                 Click="CurrentEmployeeButton_Click"/>
 
-                        <Grid x:Name="EmployeeRatingLikeHost"
-                              Width="46"
-                              Height="34"
-                              Margin="0,0,8,0"
-                              Opacity="0"
-                              IsHitTestVisible="False"
-                              ClipToBounds="False">
-                            <Ellipse x:Name="EmployeeRatingLikeRing"
-                                     Width="28"
-                                     Height="28"
-                                     Stroke="#86EFAC"
-                                     StrokeThickness="1.5"
-                                     Opacity="0"
-                                     HorizontalAlignment="Center"
-                                     VerticalAlignment="Center"
-                                     RenderTransformOrigin="0.5,0.5">
-                                <Ellipse.RenderTransform>
-                                    <ScaleTransform x:Name="EmployeeRatingLikeRingScale"
-                                                    ScaleX="0.5"
-                                                    ScaleY="0.5"/>
-                                </Ellipse.RenderTransform>
-                            </Ellipse>
-
-                            <TextBlock x:Name="EmployeeRatingLikeGlyph"
-                                       Text="&#xE8E1;"
-                                       FontFamily="Segoe MDL2 Assets"
-                                       FontSize="24"
-                                       Foreground="#4ADE80"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"
-                                       RenderTransformOrigin="0.5,0.5">
-                                <TextBlock.Effect>
-                                    <DropShadowEffect Color="#4ADE80"
-                                                      BlurRadius="12"
-                                                      ShadowDepth="0"
-                                                      Opacity="0.8"/>
-                                </TextBlock.Effect>
-                                <TextBlock.RenderTransform>
-                                    <TransformGroup>
-                                        <ScaleTransform x:Name="EmployeeRatingLikeGlyphScale"
-                                                        ScaleX="0.55"
-                                                        ScaleY="0.55"/>
-                                        <RotateTransform x:Name="EmployeeRatingLikeGlyphRotate"
-                                                         Angle="-12"/>
-                                        <TranslateTransform x:Name="EmployeeRatingLikeGlyphMove"
-                                                            Y="6"/>
-                                    </TransformGroup>
-                                </TextBlock.RenderTransform>
-                            </TextBlock>
-                        </Grid>
-
                         <Button x:Name="PlacesViewButton"
                                 Content="ТВ / Рули"
                                 Width="110"
@@ -193,7 +144,8 @@
                                 FontSize="14"
                                 FontWeight="SemiBold"
                                 Margin="0,0,8,0"
-                                Click="PlacesViewButton_Click"/>
+                                Click="PlacesViewButton_Click"
+                                PreviewMouseRightButtonUp="PlacesViewButton_PreviewMouseRightButtonUp"/>
 
                         <Button x:Name="TuyaViewButton"
                                 Content="WiFi - Розетки"
@@ -266,15 +218,164 @@
             </Grid>
         </Border>
 
-        <!-- Здесь карточки создаются из C# кода -->
-        <ScrollViewer Grid.Row="1">
-            <ItemsControl x:Name="PlacesItemsControl">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <UniformGrid Columns="4"/>
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-            </ItemsControl>
-        </ScrollViewer>
+        <Grid Grid.Row="1">
+            <!-- Классический экран и список розеток используют прежний контейнер. -->
+            <ScrollViewer x:Name="ClassicPlacesScrollViewer">
+                <ItemsControl x:Name="PlacesItemsControl">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <UniformGrid Columns="4"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <Grid x:Name="AlternativePlacesGrid"
+                  Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2*" MinWidth="610"/>
+                    <ColumnDefinition Width="12"/>
+                    <ColumnDefinition Width="360"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0"
+                        Background="{DynamicResource Theme.HeaderBrush}"
+                        BorderBrush="{DynamicResource Theme.BorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="14"
+                        Padding="12">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <Grid Margin="4,0,4,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="План клуба"
+                                           Foreground="White"
+                                           FontSize="22"
+                                           FontWeight="Bold"/>
+                                <TextBlock x:Name="FloorPlanEditorStatusText"
+                                           Text="Схема защищена от случайного перемещения"
+                                           Foreground="#94A3B8"
+                                           FontSize="13"
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+
+                            <Button x:Name="FloorPlanResetButton"
+                                    Grid.Column="1"
+                                    Content="↺"
+                                    Width="38"
+                                    Height="36"
+                                    FontSize="20"
+                                    Visibility="Collapsed"
+                                    ToolTip="Сбросить расстановку"
+                                    Click="FloorPlanResetButton_Click"/>
+
+                            <Button x:Name="FloorPlanEditorButton"
+                                    Grid.Column="3"
+                                    Content="Редактор"
+                                    MinWidth="112"
+                                    Height="36"
+                                    FontSize="14"
+                                    FontWeight="SemiBold"
+                                    Click="FloorPlanEditorButton_Click"/>
+                        </Grid>
+
+                        <Border Grid.Row="1"
+                                BorderBrush="#334155"
+                                BorderThickness="1"
+                                CornerRadius="10"
+                                ClipToBounds="True">
+                            <Canvas x:Name="FloorPlanCanvas"
+                                    MinHeight="500"
+                                    ClipToBounds="True"
+                                    MouseLeftButtonDown="FloorPlanCanvas_MouseLeftButtonDown"
+                                    SizeChanged="FloorPlanCanvas_SizeChanged">
+                                <Canvas.Background>
+                                    <DrawingBrush TileMode="Tile"
+                                                  Viewport="0,0,32,32"
+                                                  ViewportUnits="Absolute">
+                                        <DrawingBrush.Drawing>
+                                            <GeometryDrawing Brush="#18101B2A">
+                                                <GeometryDrawing.Pen>
+                                                    <Pen Brush="#30475F7B" Thickness="1"/>
+                                                </GeometryDrawing.Pen>
+                                                <GeometryDrawing.Geometry>
+                                                    <GeometryGroup>
+                                                        <LineGeometry StartPoint="0,0" EndPoint="32,0"/>
+                                                        <LineGeometry StartPoint="0,0" EndPoint="0,32"/>
+                                                    </GeometryGroup>
+                                                </GeometryDrawing.Geometry>
+                                            </GeometryDrawing>
+                                        </DrawingBrush.Drawing>
+                                    </DrawingBrush>
+                                </Canvas.Background>
+                            </Canvas>
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <Border x:Name="AlternativeDetailsCard"
+                        Grid.Column="2"
+                        Background="{DynamicResource Theme.HeaderBrush}"
+                        BorderBrush="{DynamicResource Theme.BorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="14"
+                        Padding="20">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock x:Name="AlternativeDetailTypeText"
+                                       Foreground="#94A3B8"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"/>
+                            <TextBlock x:Name="AlternativeDetailTitleText"
+                                       Text="Выберите место"
+                                       Foreground="White"
+                                       FontSize="32"
+                                       FontWeight="Bold"
+                                       Margin="0,4,0,0"/>
+                            <TextBlock x:Name="AlternativeDetailStatusText"
+                                       Foreground="#4ADE80"
+                                       FontSize="20"
+                                       FontWeight="SemiBold"
+                                       Margin="0,16,0,0"/>
+                            <TextBlock x:Name="AlternativeDetailTimeText"
+                                       Text="00:00"
+                                       Foreground="White"
+                                       FontSize="52"
+                                       FontWeight="Bold"
+                                       Margin="0,18,0,0"/>
+                            <Border Height="1"
+                                    Background="#334155"
+                                    Margin="0,18,0,16"/>
+                            <TextBlock x:Name="AlternativeDetailMoneyText"
+                                       Foreground="#CBD5E1"
+                                       FontSize="16"
+                                       TextWrapping="Wrap"/>
+                            <TextBlock x:Name="AlternativeDetailEmployeeText"
+                                       Foreground="#94A3B8"
+                                       FontSize="14"
+                                       TextWrapping="Wrap"
+                                       Margin="0,12,0,0"/>
+                            <TextBlock x:Name="AlternativeDetailSalesText"
+                                       Foreground="#FBBF24"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       TextWrapping="Wrap"
+                                       Margin="0,12,0,0"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
+            </Grid>
+        </Grid>
     </Grid>
 </Window>

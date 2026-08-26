@@ -72,6 +72,7 @@ namespace ClubTimerXbox.Services
         public static CashAcceptanceItem? GetLastAcceptance()
         {
             return Items
+                .Where(item => !item.IsProvisional)
                 .OrderByDescending(item => item.CreatedAt)
                 .FirstOrDefault();
         }
@@ -122,9 +123,14 @@ namespace ClubTimerXbox.Services
             {
                 Id = Guid.NewGuid(),
                 CreatedAt = ClubClock.Current.LocalNow,
+                UpdatedAt = ClubClock.Current.LocalNow,
                 CheckedByEmployeeName = checkedByEmployeeName.Trim(),
                 ResponsibleEmployeeName = responsibleEmployeeName.Trim(),
                 AcceptanceKey = acceptanceKey,
+                RootAcceptanceKey = acceptanceKey,
+                AttemptKeys = string.IsNullOrWhiteSpace(acceptanceKey)
+                    ? new List<string>()
+                    : new List<string> { acceptanceKey },
                 ExpectedCashAmount = expectedCashAmount,
                 ActualCashAmount = actualCashAmount,
                 Difference = difference,
@@ -145,7 +151,63 @@ namespace ClubTimerXbox.Services
                 return false;
 
             return Items.Any(item =>
-                item.AcceptanceKey.Equals(acceptanceKey, StringComparison.OrdinalIgnoreCase));
+                item.AcceptanceKey.Equals(acceptanceKey, StringComparison.OrdinalIgnoreCase) ||
+                item.AttemptKeys.Any(key =>
+                    key.Equals(acceptanceKey, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        public static CashAcceptanceItem UpsertProvisional(
+            string rootAcceptanceKey,
+            string attemptKey,
+            string checkedByEmployeeName,
+            string responsibleEmployeeName,
+            int expectedCashAmount,
+            int actualCashAmount,
+            string note)
+        {
+            var item = CashAcceptanceProvisionalPolicy.Upsert(
+                Items,
+                rootAcceptanceKey,
+                attemptKey,
+                checkedByEmployeeName,
+                responsibleEmployeeName,
+                expectedCashAmount,
+                actualCashAmount,
+                note,
+                ClubClock.Current.LocalNow);
+
+            Save();
+            return item;
+        }
+
+        public static void ScheduleProvisional(string rootAcceptanceKey, DateTime finalizeAt)
+        {
+            if (!CashAcceptanceProvisionalPolicy.Schedule(
+                    Items,
+                    rootAcceptanceKey,
+                    finalizeAt))
+            {
+                return;
+            }
+
+            Save();
+        }
+
+        public static List<CashAcceptanceItem> GetDueProvisional(DateTime now)
+        {
+            return CashAcceptanceProvisionalPolicy.GetDue(Items, now);
+        }
+
+        public static void MarkFinalized(Guid id, DateTime finalizedAt)
+        {
+            var item = Items.FirstOrDefault(candidate => candidate.Id == id);
+            if (item == null)
+                return;
+
+            item.IsProvisional = false;
+            item.FinalizedAt = finalizedAt;
+            item.FinalizeAt = null;
+            Save();
         }
 
         public static List<CashAcceptanceItem> GetByPeriod(DateTime fromInclusive, DateTime toExclusive)
@@ -186,6 +248,16 @@ namespace ClubTimerXbox.Services
 
                 if (items == null)
                     return new List<CashAcceptanceItem>();
+
+                foreach (var item in items)
+                {
+                    item.AttemptKeys ??= new List<string>();
+                    item.RootAcceptanceKey = string.IsNullOrWhiteSpace(item.RootAcceptanceKey)
+                        ? item.AcceptanceKey.Trim()
+                        : item.RootAcceptanceKey.Trim();
+                    if (item.UpdatedAt == default)
+                        item.UpdatedAt = item.CreatedAt;
+                }
 
                 return items;
             }

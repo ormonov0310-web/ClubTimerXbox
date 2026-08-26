@@ -368,6 +368,9 @@ FodyWeavers.xsd
 **/.codex-build/
 **/.updater-build/
 
+# Private local credentials and recovery notes
+/.local-secrets/
+
 # Generated release packages
 release/
 

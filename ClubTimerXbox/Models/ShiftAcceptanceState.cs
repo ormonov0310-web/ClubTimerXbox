@@ -10,6 +10,10 @@ namespace ClubTimerXbox.Models
 
         public bool CashAccepted { get; set; }
 
+        public bool DebtAcceptanceRequired { get; set; }
+
+        public bool DebtsAccepted { get; set; }
+
         public string AcceptanceKey { get; set; } = "";
 
         public string NewEmployeeName { get; set; } = "";
@@ -26,7 +30,11 @@ namespace ClubTimerXbox.Models
 
         public DateTime? CashAcceptedAt { get; set; }
 
+        public DateTime? DebtsAcceptedAt { get; set; }
+
         public DateTime? CompletedAt { get; set; }
+
+        public DateTime? InitialProductsAndCashAcceptedAt { get; set; }
 
         public bool IsManualSelfAcceptance { get; set; }
 
@@ -46,11 +54,21 @@ namespace ClubTimerXbox.Models
 
         public DateTime? CashCorrectionUntil { get; set; }
 
+        public bool CashRecountRequired { get; set; }
+
+        public string CashRecountAcceptanceKey { get; set; } = "";
+
+        public int CashRecountFirstAmount { get; set; }
+
+        public DateTime? CashRecountUnlockAt { get; set; }
+
         public bool IsCompleted
         {
             get
             {
-                return !IsRequired || (ProductsAccepted && CashAccepted);
+                return !IsRequired ||
+                       (ProductsAccepted && CashAccepted &&
+                        (!DebtAcceptanceRequired || DebtsAccepted));
             }
         }
     }

@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Enforces cash conservation across reconciliation, correction, restarts, and stock audits, and notifies the owner when an employee takes salary in cash." `
+            -Notes "Adds the alternative club floor plan, safer shift acceptance and corrections, daily employee earnings, and updated rating rewards." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,16 +66,17 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Cash reconciliation now follows a strict two-bucket conservation ledger.
-          Every shortage, extra, settlement, correction, stock-audit difference, and
-          restart keeps one traceable source and cannot create or erase money silently.
+          Adds an optional alternative main screen with a draggable top-down club plan,
+          a selected-place details panel, persistent local layouts, and clear session
+          status and additional-position indicators.
 
-          Repeated acceptance, reconciliation, and correction commands are idempotent.
-          Legacy open items migrate without reopening closed cases, and the expanded
-          regression suite covers the real TeleCom sequence and randomized invariants.
+          Shift acceptance and repeated corrections are safer, game payments and debts
+          keep their actual employee attribution, product lists prioritize available
+          popular items, and flexible time entry supports the same convenient controls.
 
-          When an employee takes salary from the cash desk, the owner now receives a
-          compact notification containing the club, employee, payment method, and amount.
+          Employee statistics now preserve daily earned amounts and rating effects.
+          Late-night work with a real client at 01:00 grants the existing 50 som bonus
+          plus a +5 time-rating reward, while earlier rating events remain unchanged.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {

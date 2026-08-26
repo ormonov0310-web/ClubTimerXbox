@@ -603,21 +603,44 @@ namespace ClubTimerXbox
             {
                 foreach (var line in session.SaleLines)
                 {
-                    if (line.CreatedAt < fromInclusive || line.CreatedAt >= toExclusive)
-                        continue;
-
                     string itemType = line.ItemType == SaleItemType.Product ? "Товар" : "Услуга";
 
-                    rows.Add(new JournalRow
+                    if (line.CreatedAt >= fromInclusive && line.CreatedAt < toExclusive)
                     {
-                        CreatedAt = line.CreatedAt,
-                        Title = $"Оформлено на {session.PlaceName}",
-                        Subtitle =
-                            $"{itemType}: {line.ItemName} × {line.Quantity} = {line.TotalAmount} сом\n" +
-                            $"Админ: {line.EmployeeName}\n" +
-                            (line.IsPaid ? "Статус: оплачено при закрытии сеанса" : "Статус: ожидает оплаты при закрытии"),
-                        AccentText = $"{line.TotalAmount} сом"
-                    });
+                        rows.Add(new JournalRow
+                        {
+                            CreatedAt = line.CreatedAt,
+                            Title = $"Оформлено на {session.PlaceName}",
+                            Subtitle =
+                                $"{itemType}: {line.ItemName} × {line.Quantity} = {line.TotalAmount} сом\n" +
+                                $"Выдал: {SessionSaleSettlementService.GetCreatedByEmployeeName(line)}\n" +
+                                (SessionSaleSettlementService.IsFinanciallyPaid(line)
+                                    ? $"Оплату принял: {SessionSaleSettlementService.GetFinancialEmployeeName(line)}"
+                                    : "Статус: долг клиента, ожидает ККМ"),
+                            AccentText = $"{line.TotalAmount} сом"
+                        });
+                    }
+
+                    if (line.SettlementSchemaVersion >=
+                            SessionSaleSettlementService.CurrentSchemaVersion &&
+                        SessionSaleSettlementService.IsFinanciallyPaid(line))
+                    {
+                        DateTime paidAt =
+                            SessionSaleSettlementService.GetFinancialOccurredAt(line);
+                        if (paidAt >= fromInclusive && paidAt < toExclusive)
+                        {
+                            rows.Add(new JournalRow
+                            {
+                                CreatedAt = paidAt,
+                                Title = $"Оплачено на {session.PlaceName}",
+                                Subtitle =
+                                    $"{itemType}: {line.ItemName} × {line.Quantity} = {line.TotalAmount} сом\n" +
+                                    $"Выдал: {SessionSaleSettlementService.GetCreatedByEmployeeName(line)}\n" +
+                                    $"Оплату принял: {SessionSaleSettlementService.GetFinancialEmployeeName(line)}",
+                                AccentText = $"{line.TotalAmount} сом"
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -709,7 +732,10 @@ namespace ClubTimerXbox
         {
             var panel = new StackPanel();
 
-            panel.Children.Add(CreateTitleText("Приёмка налички"));
+            panel.Children.Add(CreateTitleText(
+                item.IsProvisional
+                    ? "Приёмка налички: предварительно"
+                    : "Приёмка налички"));
 
             string text =
                 $"Дата: {item.CreatedAt:dd.MM.yyyy HH:mm}\n" +
@@ -718,6 +744,12 @@ namespace ClubTimerXbox
                 $"Ответственный: {item.ResponsibleEmployeeName}";
 
             panel.Children.Add(CreateMutedText(text));
+
+            if (item.IsProvisional)
+            {
+                panel.Children.Add(CreateInfoAccentText(
+                    "Ожидается завершение срока исправления. В кассовый разбор ещё не проведено."));
+            }
 
             if (item.Difference < 0)
             {

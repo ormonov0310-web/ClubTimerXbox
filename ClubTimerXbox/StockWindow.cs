@@ -18,6 +18,8 @@ namespace ClubTimerXbox
         private readonly TextBox _newProductQuantityBox = new TextBox();
         private readonly TextBox _newProductPurchasePriceBox = new TextBox();
         private readonly ComboBox _newProductPaymentMethodBox = new ComboBox();
+        private readonly TextBlock _itemsTitleText = new TextBlock();
+        private bool _purchaseCatalogMode;
 
         public StockWindow()
         {
@@ -88,16 +90,44 @@ namespace ClubTimerXbox
             DockPanel.SetDock(subtitleText, Dock.Top);
             root.Children.Add(subtitleText);
 
+            var listModePanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 0, 0, 12)
+            };
+            listModePanel.Children.Add(new TextBlock
+            {
+                Text = "Порядок списка",
+                Foreground = Brushes.White,
+                FontSize = 15,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 12, 0)
+            });
+            var listModeBox = new ComboBox
+            {
+                Width = 230,
+                Height = 38,
+                FontSize = 15,
+                ItemsSource = new[] { "Склад", "Каталог закупки" },
+                SelectedIndex = 0
+            };
+            listModeBox.SelectionChanged += (_, _) =>
+            {
+                _purchaseCatalogMode = listModeBox.SelectedIndex == 1;
+                LoadStockItems();
+            };
+            listModePanel.Children.Add(listModeBox);
+            DockPanel.SetDock(listModePanel, Dock.Top);
+            root.Children.Add(listModePanel);
+
             var mainPanel = new StackPanel();
 
-            mainPanel.Children.Add(new TextBlock
-            {
-                Text = "Товары",
-                Foreground = Brushes.White,
-                FontSize = 24,
-                FontWeight = FontWeights.Bold,
-                Margin = new Thickness(0, 8, 0, 12)
-            });
+            _itemsTitleText.Text = "Товары";
+            _itemsTitleText.Foreground = Brushes.White;
+            _itemsTitleText.FontSize = 24;
+            _itemsTitleText.FontWeight = FontWeights.Bold;
+            _itemsTitleText.Margin = new Thickness(0, 8, 0, 12);
+            mainPanel.Children.Add(_itemsTitleText);
 
             mainPanel.Children.Add(_itemsPanel);
 
@@ -322,8 +352,15 @@ namespace ClubTimerXbox
         private void LoadStockItems()
         {
             _itemsPanel.Children.Clear();
+            _itemsTitleText.Text = _purchaseCatalogMode
+                ? "Каталог закупки"
+                : "Товары";
 
-            foreach (var item in ProductStockService.StockItems)
+            var orderedItems = _purchaseCatalogMode
+                ? ProductPopularityService.OrderPurchaseCatalog(ProductStockService.StockItems)
+                : ProductPopularityService.OrderStock(ProductStockService.StockItems);
+
+            foreach (var item in orderedItems)
             {
                 _itemsPanel.Children.Add(CreateStockCard(item));
             }

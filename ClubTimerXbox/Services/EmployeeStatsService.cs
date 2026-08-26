@@ -300,13 +300,18 @@ namespace ClubTimerXbox.Services
                         Title = $"Закрыл {session.PlaceName}",
                         Description =
                             $"Игра: {session.CashIncomeAmount} сом\n" +
-                            $"Товары/услуги: {session.ProductsAndServicesAmount} сом\n" +
+                            $"Оформлено товаров/услуг: {session.ProductsAndServicesAmount} сом\n" +
                             $"Итого: {session.TotalToPayAmount} сом",
                         Amount = session.TotalToPayAmount
                     });
                 }
 
-                if (session.IncomeEmployeeName == employeeName &&
+                bool hasPaymentAttributedGameIncome = CashService.Records.Any(record =>
+                    record.Type == CashRecordType.GameSession &&
+                    record.GameSessionId == session.Id &&
+                    record.PaymentRecordId.HasValue);
+                if (!hasPaymentAttributedGameIncome &&
+                    session.IncomeEmployeeName == employeeName &&
                     session.IsClosed &&
                     session.ClosedAt != null &&
                     session.ClosedAt.Value >= fromInclusive &&
@@ -320,8 +325,8 @@ namespace ClubTimerXbox.Services
                         Description =
                             $"Выручка относится к сотруднику: {employeeName}\n" +
                             $"Игра: {session.CashIncomeAmount} сом\n" +
-                            $"Товары/услуги: {session.ProductsAndServicesAmount} сом",
-                        Amount = session.TotalToPayAmount
+                            "Товары/услуги учитываются отдельными платежами.",
+                        Amount = session.CashIncomeAmount
                     });
                 }
 
@@ -345,24 +350,54 @@ namespace ClubTimerXbox.Services
 
                 foreach (var sale in session.SaleLines)
                 {
-                    if (sale.EmployeeName != employeeName)
-                        continue;
-
-                    if (sale.CreatedAt < fromInclusive || sale.CreatedAt >= toExclusive)
-                        continue;
-
-                    result.Add(new EmployeeJournalInfo
+                    string createdBy =
+                        SessionSaleSettlementService.GetCreatedByEmployeeName(sale);
+                    if (createdBy.Equals(employeeName, StringComparison.OrdinalIgnoreCase) &&
+                        sale.CreatedAt >= fromInclusive &&
+                        sale.CreatedAt < toExclusive)
                     {
-                        CreatedAt = sale.CreatedAt,
-                        Type = "Товар/услуга",
-                        Title = $"Оформил {sale.ItemName}",
-                        Description =
-                            $"Место: {session.PlaceName}\n" +
-                            $"Количество: {sale.Quantity}\n" +
-                            $"Цена: {sale.UnitPrice} сом\n" +
-                            $"Сумма: {sale.TotalAmount} сом",
-                        Amount = sale.TotalAmount
-                    });
+                        result.Add(new EmployeeJournalInfo
+                        {
+                            CreatedAt = sale.CreatedAt,
+                            Type = "Товар/услуга",
+                            Title = $"Выдал {sale.ItemName}",
+                            Description =
+                                $"Место: {session.PlaceName}\n" +
+                                $"Количество: {sale.Quantity}\n" +
+                                $"Сумма: {sale.TotalAmount} сом\n" +
+                                (SessionSaleSettlementService.IsFinanciallyPaid(sale)
+                                    ? $"Оплату принял: {SessionSaleSettlementService.GetFinancialEmployeeName(sale)}"
+                                    : "Статус: долг клиента"),
+                            Amount = sale.TotalAmount
+                        });
+                    }
+
+                    if (sale.SettlementSchemaVersion >=
+                            SessionSaleSettlementService.CurrentSchemaVersion &&
+                        SessionSaleSettlementService.IsFinanciallyPaid(sale))
+                    {
+                        DateTime paidAt =
+                            SessionSaleSettlementService.GetFinancialOccurredAt(sale);
+                        string paidBy =
+                            SessionSaleSettlementService.GetFinancialEmployeeName(sale);
+
+                        if (paidBy.Equals(employeeName, StringComparison.OrdinalIgnoreCase) &&
+                            paidAt >= fromInclusive && paidAt < toExclusive)
+                        {
+                            result.Add(new EmployeeJournalInfo
+                            {
+                                CreatedAt = paidAt,
+                                Type = "Оплата товара/услуги",
+                                Title = $"Принял оплату за {sale.ItemName}",
+                                Description =
+                                    $"Место: {session.PlaceName}\n" +
+                                    $"Оформил: {createdBy}\n" +
+                                    $"Количество: {sale.Quantity}\n" +
+                                    $"Сумма: {sale.TotalAmount} сом",
+                                Amount = sale.TotalAmount
+                            });
+                        }
+                    }
                 }
             }
         }

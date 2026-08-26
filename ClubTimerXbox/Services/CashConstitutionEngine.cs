@@ -54,6 +54,8 @@ namespace ClubTimerXbox.Services
 
     public static class CashConstitutionEngine
     {
+        private static readonly TimeSpan ConfirmedLossCoverageWindow = TimeSpan.FromHours(24);
+
         private sealed class MonthCloseShare
         {
             public string EmployeeName { get; init; } = "";
@@ -73,7 +75,8 @@ namespace ClubTimerXbox.Services
             int expectedAmount,
             int actualAmount,
             string note,
-            string operationId = "")
+            string operationId = "",
+            DateTime? occurredAt = null)
         {
             Normalize(items, fromInclusive, toExclusive);
             if (HasAppliedOperation(items, operationId))
@@ -93,6 +96,7 @@ namespace ClubTimerXbox.Services
 
             Guid investigationId = Guid.NewGuid();
             var settlements = new List<CashSettlementEntry>();
+            DateTime eventTime = occurredAt ?? now;
 
             int difference = actualAmount - expectedAmount;
             int eventAmount = Math.Abs(difference);
@@ -105,7 +109,7 @@ namespace ClubTimerXbox.Services
                     items,
                     fromInclusive,
                     toExclusive,
-                    now,
+                    eventTime,
                     CashReconciliationKind.CashExtra,
                     CashReconciliationOrigin.CashAcceptance,
                     CashReconciliationStage.AwaitingCashlessVerification,
@@ -119,7 +123,7 @@ namespace ClubTimerXbox.Services
                     operationId: operationId
                 );
                 var eventContribution = eventItem.ExtraContributions.Last(item =>
-                    item.CreatedAt == now &&
+                    item.CreatedAt == eventTime &&
                     item.Kind == CashReconciliationKind.CashExtra);
                 paired += SettleNewExtraAgainstAwaitingShortages(
                     items,
@@ -155,7 +159,7 @@ namespace ClubTimerXbox.Services
             {
                 eventItem = AddShortage(
                     items,
-                    now,
+                    eventTime,
                     CashReconciliationKind.CashShortage,
                     CashReconciliationOrigin.CashAcceptance,
                     CashReconciliationStage.AwaitingCashlessVerification,
@@ -2089,7 +2093,11 @@ namespace ClubTimerXbox.Services
             if (shortage.ResponsibilityLevel != CashResponsibilityLevel.Confirmed)
                 return true;
 
-            return contribution.CreatedAt >= shortage.CreatedAt;
+            TimeSpan distance = contribution.CreatedAt >= shortage.CreatedAt
+                ? contribution.CreatedAt - shortage.CreatedAt
+                : shortage.CreatedAt - contribution.CreatedAt;
+
+            return distance < ConfirmedLossCoverageWindow;
         }
 
         private static CashSettlementEntry CreateSettlement(
