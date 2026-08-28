@@ -85,7 +85,34 @@ namespace ClubTimerXbox.Services
             string note = string.IsNullOrWhiteSpace(reason)
                 ? "Отменено владельцем по уважительной причине."
                 : $"Отменено владельцем. Причина: {reason.Trim()}";
-            return item != null && EmployeeLossService.TryCancelViolationRecommendation(id, note);
+            if (item == null || !EmployeeLossService.TryCancelViolationRecommendation(id, note))
+                return false;
+
+            CancelLinkedRating(item, note);
+            return true;
+        }
+
+        public static bool IsLateOpeningViolation(EmployeeLossItem? item)
+        {
+            return item != null && item.SourceCode.Equals(
+                SourceCode,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static bool CancelFormalized(Guid id, string reason)
+        {
+            var item = EmployeeLossService.Items.FirstOrDefault(value => value.Id == id);
+            if (item == null || !IsLateOpeningViolation(item))
+                return false;
+
+            string note = string.IsNullOrWhiteSpace(reason)
+                ? "Оформленное опоздание отменено владельцем по уважительной причине."
+                : $"Оформленное опоздание отменено владельцем. Причина: {reason.Trim()}";
+            if (!EmployeeLossService.TryCancelFixedViolation(id, note))
+                return false;
+
+            CancelLinkedRating(item, note);
+            return true;
         }
 
         public static bool Reassign(
@@ -138,6 +165,21 @@ namespace ClubTimerXbox.Services
                 $"\nОтветственность перенесена: {oldEmployeeName} → {newEmployee.Name}.";
             EmployeeLossService.SaveChanges();
             return true;
+        }
+
+        private static void CancelLinkedRating(EmployeeLossItem item, string note)
+        {
+            bool cancelled = !string.IsNullOrWhiteSpace(item.RatingSourceId) &&
+                EmployeeRatingService.CancelEventFromOriginBySource(
+                    item.RatingSourceId,
+                    note);
+
+            if (!cancelled && item.RatingEventId.HasValue)
+            {
+                EmployeeRatingService.CancelEventFromOrigin(
+                    item.RatingEventId.Value,
+                    note);
+            }
         }
 
         private static EmployeeRatingEvent? ApplyOpeningRating(

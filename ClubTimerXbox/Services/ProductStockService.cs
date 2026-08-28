@@ -221,7 +221,7 @@ namespace ClubTimerXbox.Services
                 PurchasePrice = purchasePrice,
                 SalePrice = salePrice,
                 MinimumQuantity = minimumQuantity,
-                    UpdatedAt = ClubClock.Current.LocalNow
+                UpdatedAt = ClubClock.Current.LocalNow
             });
 
             Save();

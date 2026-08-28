@@ -1338,14 +1338,14 @@ namespace ClubTimerXbox.Services
 
                 int useAmount = Math.Min(item.Amount, remaining);
 
-                    ApplyAutomaticSettlement(item, useAmount);
-                    consumed += useAmount;
-                    remaining -= useAmount;
+                ApplyAutomaticSettlement(item, useAmount);
+                consumed += useAmount;
+                remaining -= useAmount;
 
                 if (item.Amount == 0)
                 {
                     item.Status = CashReconciliationStatus.Resolved;
-                item.ResolvedAt = ClubClock.Current.LocalNow;
+                    item.ResolvedAt = ClubClock.Current.LocalNow;
                     item.ResolvedBy = "Система";
                     item.ResolutionNote = "Зачтено как ошибка типа оплаты: безнал был принят наличными.";
                 }
@@ -1388,14 +1388,14 @@ namespace ClubTimerXbox.Services
 
                 int useAmount = Math.Min(item.Amount, remaining);
 
-                    ApplyAutomaticSettlement(item, useAmount);
-                    consumed += useAmount;
-                    remaining -= useAmount;
+                ApplyAutomaticSettlement(item, useAmount);
+                consumed += useAmount;
+                remaining -= useAmount;
 
                 if (item.Amount == 0)
                 {
                     item.Status = CashReconciliationStatus.Resolved;
-                item.ResolvedAt = ClubClock.Current.LocalNow;
+                    item.ResolvedAt = ClubClock.Current.LocalNow;
                     item.ResolvedBy = "Система";
                     item.ResolutionNote = "Зачтено как ошибка типа оплаты: наличка была принята безналом.";
                 }
@@ -1675,7 +1675,7 @@ namespace ClubTimerXbox.Services
                 if (item.Amount == 0)
                 {
                     item.Status = CashReconciliationStatus.Resolved;
-                item.ResolvedAt = ClubClock.Current.LocalNow;
+                    item.ResolvedAt = ClubClock.Current.LocalNow;
                     item.ResolvedBy = string.IsNullOrWhiteSpace(resolvedBy)
                         ? "Владелец"
                         : resolvedBy.Trim();
@@ -1812,7 +1812,7 @@ namespace ClubTimerXbox.Services
                 if (item.Amount == 0)
                 {
                     item.Status = CashReconciliationStatus.Resolved;
-                item.ResolvedAt = ClubClock.Current.LocalNow;
+                    item.ResolvedAt = ClubClock.Current.LocalNow;
                     item.ResolvedBy = checkedByEmployeeName;
                     item.ResolutionNote = "Закрыто повторной приёмкой: сотрудник исправил свою ошибку ввода налички.";
                 }
@@ -1930,7 +1930,7 @@ namespace ClubTimerXbox.Services
                 _ => CashReconciliationResolution.Legacy
             };
             item.ClosedAtCheckpointNumber = DateTime.UtcNow.Ticks;
-                item.ResolvedAt = ClubClock.Current.LocalNow;
+            item.ResolvedAt = ClubClock.Current.LocalNow;
             item.ResolvedBy = string.IsNullOrWhiteSpace(resolvedBy)
                 ? "Владелец"
                 : resolvedBy.Trim();

@@ -940,6 +940,36 @@ namespace ClubTimerXbox
             string checkedBy = EmployeeService.CurrentEmployee?.Name ?? "Неизвестно";
             string responsible = GetResponsibleEmployeeName();
             string acceptanceKey = ShiftAcceptanceService.Current.AcceptanceKey;
+            string recheckRootAcceptanceKey =
+                ShiftAcceptanceService.GetManualSelfAcceptanceRecheckRootKey();
+            var recheckTarget = CashAcceptanceService
+                .FindProvisionalByRootAcceptanceKey(recheckRootAcceptanceKey);
+
+            if (recheckTarget != null)
+            {
+                responsible = recheckTarget.ResponsibleEmployeeName;
+                CashAcceptanceService.UpsertProvisional(
+                    recheckTarget.RootAcceptanceKey,
+                    acceptanceKey,
+                    checkedBy,
+                    responsible,
+                    _expectedCashAmount,
+                    actualCash,
+                    "Повторная проверка налички");
+                ShiftAcceptanceService.AcceptCash();
+
+                int recheckDifference = actualCash - _expectedCashAmount;
+                MessageBox.Show(
+                    "Наличка повторно проверена.\n\n" +
+                    $"Передача остаётся: {responsible} → {checkedBy}\n" +
+                    $"{EmployeeCashPrivacyService.GetAcceptanceResult(recheckDifference)}.\n\n" +
+                    "Второй штраф и вторая карточка не созданы.",
+                    "Повторная проверка налички"
+                );
+
+                FinishOrRefreshAfterPartAccepted();
+                return;
+            }
 
             if (CashAcceptanceService.HasAcceptanceKey(acceptanceKey))
             {
@@ -1155,7 +1185,7 @@ namespace ClubTimerXbox
             _itemsPanel.Children.Clear();
             _rows.Clear();
 
-            foreach (var stockItem in ProductStockService.StockItems)
+            foreach (var stockItem in ProductPopularityService.OrderStock(ProductStockService.StockItems))
             {
                 var saleItem = SaleItemService.FindByName(stockItem.ProductName);
 
@@ -1476,8 +1506,12 @@ namespace ClubTimerXbox
             if (!ShiftAcceptanceService.IsAcceptanceActive())
             {
                 MessageBox.Show(
-                    ShiftAcceptanceService.Current.IsManualSelfAcceptance
-                        ? "Самоприёмка полностью завершена."
+                    ShiftAcceptanceService.Current.IsManualSelfAcceptance &&
+                    !string.IsNullOrWhiteSpace(
+                        ShiftAcceptanceService.GetManualSelfAcceptanceRecheckRootKey())
+                        ? "Повторная проверка налички полностью завершена."
+                        : ShiftAcceptanceService.Current.IsManualSelfAcceptance
+                            ? "Самоприёмка полностью завершена."
                         : "Приёмка смены полностью завершена.\n\nКнопка “Приёмка” на главном экране перестанет мигать.",
                     "Приёмка смены"
                 );

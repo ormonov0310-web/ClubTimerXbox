@@ -613,6 +613,37 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        public static bool CancelEventFromOriginBySource(string sourceId, string note)
+        {
+            EnsureActivated();
+            lock (Gate)
+            {
+                var item = State.Events.FirstOrDefault(value =>
+                    value.SourceId.Equals(sourceId.Trim(), StringComparison.OrdinalIgnoreCase));
+                if (item == null)
+                    return false;
+
+                EmployeeRatingReassignmentService.CancelOriginal(item, note);
+                Save();
+                return true;
+            }
+        }
+
+        public static bool CancelEventFromOrigin(Guid eventId, string note)
+        {
+            EnsureActivated();
+            lock (Gate)
+            {
+                var item = State.Events.FirstOrDefault(value => value.Id == eventId);
+                if (item == null)
+                    return false;
+
+                EmployeeRatingReassignmentService.CancelOriginal(item, note);
+                Save();
+                return true;
+            }
+        }
+
         public static int RenameEmployeeReferences(string oldName, string newName)
         {
             lock (Gate)

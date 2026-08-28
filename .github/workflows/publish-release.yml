@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Adds the alternative club floor plan, safer shift acceptance and corrections, daily employee earnings, and updated rating rewards." `
+            -Notes "Improves shift acceptance safeguards, sorts available popular products first, and makes late-opening responsibility and respectful cancellation reliable." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,17 +66,17 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Adds an optional alternative main screen with a draggable top-down club plan,
-          a selected-place details panel, persistent local layouts, and clear session
-          status and additional-position indicators.
+          Shift acceptance is safer: large cash differences require a deliberate
+          recount, and repeat acceptance retains the correct responsibility window.
 
-          Shift acceptance and repeated corrections are safer, game payments and debts
-          keep their actual employee attribution, product lists prioritize available
-          popular items, and flexible time entry supports the same convenient controls.
+          Product acceptance now lists available popular items first. Late-opening
+          cards show the exact transfer direction before they are sent, so monetary
+          responsibility and the linked rating move together to the selected employee.
 
-          Employee statistics now preserve daily earned amounts and rating effects.
-          Late-night work with a real client at 01:00 grants the existing 50 som bonus
-          plus a +5 time-rating reward, while earlier rating events remain unchanged.
+          A respectful cancellation now removes the full late-opening incident:
+          both the monetary penalty and its linked rating. A previously formalized,
+          unpaid late-opening penalty can be cancelled the same way while its audit
+          history is retained.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {

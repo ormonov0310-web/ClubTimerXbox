@@ -54,6 +54,7 @@ namespace ClubTimerXbox.Services
         public static void FinalizeDue()
         {
             DateTime now = ClubClock.Current.LocalNow;
+            bool finalizedAny = false;
             foreach (var item in CashAcceptanceService.GetDueProvisional(now))
             {
                 try
@@ -74,12 +75,16 @@ namespace ClubTimerXbox.Services
                         operationKey,
                         occurredAt);
                     CashAcceptanceService.MarkFinalized(item.Id, now);
+                    finalizedAny = true;
                 }
                 catch
                 {
                     // Тот же operationId безопасно завершит запись при следующей попытке.
                 }
             }
+
+            if (finalizedAny)
+                _ = FirebaseSyncService.PushCurrentStateAsync();
         }
 
         private static void PostLedger(

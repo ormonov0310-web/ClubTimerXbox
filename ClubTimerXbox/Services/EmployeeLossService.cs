@@ -458,6 +458,26 @@ namespace ClubTimerXbox.Services
             return true;
         }
 
+        public static bool TryCancelFixedViolation(Guid id, string note)
+        {
+            var item = Items.FirstOrDefault(loss => loss.Id == id);
+            if (item == null || item.IsPaid || !item.IsFixed || !IsViolationLoss(item))
+                return false;
+
+            item.IsPaid = true;
+            item.PaidAt = ClubClock.Current.LocalNow;
+            item.ResolutionStatus = "Cancelled";
+            item.ResolvedAt = ClubClock.Current.LocalNow;
+            if (!string.IsNullOrWhiteSpace(note))
+            {
+                item.Note = string.IsNullOrWhiteSpace(item.Note)
+                    ? note.Trim()
+                    : $"{item.Note.Trim()}\n{note.Trim()}";
+            }
+            Save();
+            return true;
+        }
+
         public static bool TryCorrectKnownFixedLoss(
             Guid id,
             int incorrectAmount,

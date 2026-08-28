@@ -77,6 +77,49 @@ namespace ClubTimerXbox.Services
                 .FirstOrDefault();
         }
 
+        public static CashAcceptanceItem? GetLatestObservedAcceptance(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            return Items
+                .Where(item =>
+                    item.CreatedAt >= fromInclusive &&
+                    item.CreatedAt < toExclusive)
+                .OrderByDescending(item => item.UpdatedAt == default
+                    ? item.CreatedAt
+                    : item.UpdatedAt)
+                .FirstOrDefault();
+        }
+
+        public static CashAcceptanceItem? FindByAnyAcceptanceKey(string acceptanceKey)
+        {
+            acceptanceKey = acceptanceKey.Trim();
+
+            if (string.IsNullOrWhiteSpace(acceptanceKey))
+                return null;
+
+            return Items.FirstOrDefault(item =>
+                item.AcceptanceKey.Equals(acceptanceKey, StringComparison.OrdinalIgnoreCase) ||
+                item.RootAcceptanceKey.Equals(acceptanceKey, StringComparison.OrdinalIgnoreCase) ||
+                item.AttemptKeys.Any(key =>
+                    key.Equals(acceptanceKey, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        public static CashAcceptanceItem? FindProvisionalByRootAcceptanceKey(
+            string rootAcceptanceKey)
+        {
+            rootAcceptanceKey = rootAcceptanceKey.Trim();
+
+            if (string.IsNullOrWhiteSpace(rootAcceptanceKey))
+                return null;
+
+            return Items.FirstOrDefault(item =>
+                item.IsProvisional &&
+                item.RootAcceptanceKey.Equals(
+                    rootAcceptanceKey,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
         public static DateTime? GetLastAcceptanceTime()
         {
             return GetLastAcceptance()?.CreatedAt;

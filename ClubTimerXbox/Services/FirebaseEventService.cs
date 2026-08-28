@@ -192,25 +192,23 @@ namespace ClubTimerXbox.Services
             return QueueAndFlushAsync(record);
         }
 
-        public static Task PublishAcceptanceCompletedAsync(ShiftAcceptanceStatus status)
+        public static async Task PublishAcceptanceCompletedAsync(ShiftAcceptanceStatus status)
         {
             var identity = PcIdentityService.Current;
             if (!CanPublish(identity) || string.IsNullOrWhiteSpace(status.AcceptanceKey))
-                return Task.CompletedTask;
+                return;
 
             string acceptanceKey = status.AcceptanceKey.Trim();
-            string originalKey = string.IsNullOrWhiteSpace(status.CashCorrectionAcceptanceKey)
-                ? acceptanceKey
-                : status.CashCorrectionAcceptanceKey.Trim();
+            string originalKey = !string.IsNullOrWhiteSpace(
+                    status.CashCorrectionAcceptanceKey)
+                ? status.CashCorrectionAcceptanceKey.Trim()
+                : !string.IsNullOrWhiteSpace(
+                    status.ManualSelfAcceptanceRecheckRootKey)
+                    ? status.ManualSelfAcceptanceRecheckRootKey.Trim()
+                    : acceptanceKey;
 
-            var cash = CashAcceptanceService.GetAll()
-                .FirstOrDefault(item => item.AcceptanceKey.Equals(
-                    acceptanceKey,
-                    StringComparison.OrdinalIgnoreCase))
-                ?? CashAcceptanceService.GetAll()
-                    .FirstOrDefault(item => item.AcceptanceKey.Equals(
-                        originalKey,
-                        StringComparison.OrdinalIgnoreCase));
+            var cash = CashAcceptanceService.FindByAnyAcceptanceKey(acceptanceKey)
+                ?? CashAcceptanceService.FindByAnyAcceptanceKey(originalKey);
 
             var stockItems = StockAuditService.Items
                 .Where(item => item.AcceptanceKey.Equals(
@@ -238,17 +236,28 @@ namespace ClubTimerXbox.Services
                 .Sum(item => item.DifferenceAmount);
 
             string responsible = CleanEmployeeName(
-                string.IsNullOrWhiteSpace(status.DisplayResponsibleEmployeeName)
-                    ? status.ResponsibleEmployeeName
-                    : status.DisplayResponsibleEmployeeName
+                !string.IsNullOrWhiteSpace(cash?.ResponsibleEmployeeName)
+                    ? cash.ResponsibleEmployeeName
+                    : string.IsNullOrWhiteSpace(status.DisplayResponsibleEmployeeName)
+                        ? status.ResponsibleEmployeeName
+                        : status.DisplayResponsibleEmployeeName
             );
             string current = CleanEmployeeName(
-                string.IsNullOrWhiteSpace(status.DisplayNewEmployeeName)
-                    ? status.NewEmployeeName
-                    : status.DisplayNewEmployeeName
+                !string.IsNullOrWhiteSpace(cash?.CheckedByEmployeeName)
+                    ? cash.CheckedByEmployeeName
+                    : string.IsNullOrWhiteSpace(status.DisplayNewEmployeeName)
+                        ? status.NewEmployeeName
+                        : status.DisplayNewEmployeeName
             );
 
             string cashText = DescribeDifference("наличка", cashDifference);
+            if (cash != null)
+            {
+                cashText +=
+                    $"; по программе {cash.ExpectedCashAmount} сом, " +
+                    $"факт {cash.ActualCashAmount} сом";
+            }
+
             string productText = DescribeProducts(productShortageAmount, productExtraAmount);
             string severity = cashDifference < 0 || productShortageAmount > 0
                 ? "urgent"
@@ -257,13 +266,13 @@ namespace ClubTimerXbox.Services
                     : "info";
 
             var record = CreateBaseRecord(
-                id: BuildStableId("acceptance", acceptanceKey),
+                id: BuildStableId("acceptance", originalKey),
                 type: "acceptance_completed",
                 title: $"{identity.ClubName}: приёмка смены",
-                body: $"{responsible} → {current}. {cashText}. {productText}.",
+                body: $"{(status.IsManualSelfAcceptance && cash != null ? "Повторная проверка. " : "")}{responsible} → {current}. {cashText}. {productText}.",
                 severity: severity
             );
-            record.AcceptanceKey = acceptanceKey;
+            record.AcceptanceKey = originalKey;
             record.PreviousEmployeeName = responsible;
             record.CurrentEmployeeName = current;
             record.EmployeeName = current;
@@ -271,7 +280,8 @@ namespace ClubTimerXbox.Services
             record.ProductShortageAmount = productShortageAmount;
             record.ProductExtraAmount = productExtraAmount;
 
-            return QueueAndFlushAsync(record);
+            await FirebaseSyncService.PushCurrentStateAsync().ConfigureAwait(false);
+            await QueueAndFlushAsync(record).ConfigureAwait(false);
         }
 
         public static async Task FlushPendingAsync()

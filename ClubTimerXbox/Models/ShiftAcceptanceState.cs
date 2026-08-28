@@ -44,6 +44,9 @@ namespace ClubTimerXbox.Models
 
         public string ManualSelfAcceptanceKey { get; set; } = "";
 
+        // Короткая повторная проверка не должна создавать вторую кассовую передачу.
+        public string ManualSelfAcceptanceRecheckRootKey { get; set; } = "";
+
         public bool CashCorrectionAvailable { get; set; }
 
         public string CashCorrectionAcceptanceKey { get; set; } = "";

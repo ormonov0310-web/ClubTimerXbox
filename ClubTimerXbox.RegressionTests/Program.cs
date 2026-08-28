@@ -1223,6 +1223,7 @@ internal sealed class CashConstitutionTestSuite
         Test("Цепочка TeleCom оставляет ровно 4 сома", TelecomSnapshotChainEndsAtFour);
         Test("Парная ошибка оплаты хранит двойную проводку с общим нулём", PairedTenderHasBalancedSettlement);
         Test("Повтор приёмки с тем же ID не создаёт воду", RepeatedAcceptanceOperationIsIdempotent);
+        Test("Быстрая самоприёмка остаётся повторной проверкой передачи", ImmediateSelfAcceptanceKeepsOriginalHandover);
         Test("Owner baseline records a zero checkpoint", OwnerBaselineRecordsZeroCheckpoint);
         Test("Known accumulated snapshot incident is repaired once", KnownAccumulatedSnapshotIncidentIsRepairedOnce);
         Test("Связанная сверка полностью закрывает ошибку типа оплаты", PairedFullSettlement);
@@ -1295,6 +1296,41 @@ internal sealed class CashConstitutionTestSuite
         Equal(0, result.Breakdown, "Разбор");
         Equal(0, result.Assignments.Count, "Штрафы");
         Equal(0, Open(items).Count, "Открытые карты");
+    }
+
+    private void ImmediateSelfAcceptanceKeepsOriginalHandover()
+    {
+        var items = new List<CashAcceptanceItem>
+        {
+            new()
+            {
+                AcceptanceKey = "argen-to-test",
+                RootAcceptanceKey = "argen-to-test",
+                IsProvisional = true,
+                CheckedByEmployeeName = "Тест",
+                ResponsibleEmployeeName = "Арген",
+                CreatedAt = Now,
+                UpdatedAt = Now
+            }
+        };
+
+        var target = CashAcceptanceRecheckPolicy.FindImmediateHandoverForRecheck(
+            items,
+            "Тест",
+            Now.AddMinutes(9),
+            ShiftAcceptanceCorrectionPolicy.OriginalEmployeeResponsibilityMinutes);
+
+        Assert(target != null, "Повторная проверка не нашла исходную передачу.");
+        Equal("argen-to-test", target!.RootAcceptanceKey, "Корень передачи");
+        Equal("Арген", target.ResponsibleEmployeeName, "Ответственный сохраняется");
+
+        var expired = CashAcceptanceRecheckPolicy.FindImmediateHandoverForRecheck(
+            items,
+            "Тест",
+            Now.AddMinutes(10),
+            ShiftAcceptanceCorrectionPolicy.OriginalEmployeeResponsibilityMinutes);
+
+        Assert(expired == null, "После окна это уже новая самоприёмка.");
     }
 
     private void PairedPartialSettlement()

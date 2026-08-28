@@ -211,6 +211,13 @@ namespace ClubTimerXbox.Services
             Current.ManualSelfAcceptanceAvailable = true;
             Current.ManualSelfAcceptanceEmployeeName = employeeName;
             Current.ManualSelfAcceptanceKey = acceptanceKey;
+            Current.ManualSelfAcceptanceRecheckRootKey =
+                CashAcceptanceRecheckPolicy.FindImmediateHandoverForRecheck(
+                    CashAcceptanceService.Items,
+                    employeeName,
+                    ClubClock.Current.LocalNow,
+                    ShiftAcceptanceCorrectionPolicy.OriginalEmployeeResponsibilityMinutes)
+                ?.RootAcceptanceKey.Trim() ?? "";
             Current.IsRequired = false;
             Current.ProductsAccepted = true;
             Current.CashAccepted = true;
@@ -269,6 +276,9 @@ namespace ClubTimerXbox.Services
             if (!CanStartManualSelfAcceptance(employeeName))
                 return false;
 
+            string recheckRootAcceptanceKey =
+                Current.ManualSelfAcceptanceRecheckRootKey.Trim();
+
             Current = new ShiftAcceptanceStatus
             {
                 IsRequired = true,
@@ -290,6 +300,7 @@ namespace ClubTimerXbox.Services
                 ManualSelfAcceptanceAvailable = false,
                 ManualSelfAcceptanceEmployeeName = "",
                 ManualSelfAcceptanceKey = "",
+                ManualSelfAcceptanceRecheckRootKey = recheckRootAcceptanceKey,
                 CashCorrectionAvailable = false,
                 CashCorrectionAcceptanceKey = "",
                 CashCorrectionNewEmployeeName = "",
@@ -403,6 +414,13 @@ namespace ClubTimerXbox.Services
             return Current.AcceptanceKey.Trim();
         }
 
+        public static string GetManualSelfAcceptanceRecheckRootKey()
+        {
+            return Current.IsManualSelfAcceptance
+                ? Current.ManualSelfAcceptanceRecheckRootKey.Trim()
+                : "";
+        }
+
         public static bool ShouldStageCashAcceptance(DateTime now)
         {
             return ShiftAcceptanceCorrectionPolicy.ShouldStageInitialCashAcceptance(
@@ -482,6 +500,7 @@ namespace ClubTimerXbox.Services
                 ManualSelfAcceptanceAvailable = Current.ManualSelfAcceptanceAvailable,
                 ManualSelfAcceptanceEmployeeName = Current.ManualSelfAcceptanceEmployeeName,
                 ManualSelfAcceptanceKey = Current.ManualSelfAcceptanceKey,
+                ManualSelfAcceptanceRecheckRootKey = "",
                 CashCorrectionAvailable = Current.CashCorrectionAvailable,
                 CashCorrectionAcceptanceKey = Current.CashCorrectionAcceptanceKey,
                 CashCorrectionNewEmployeeName = Current.CashCorrectionNewEmployeeName,
@@ -740,6 +759,7 @@ namespace ClubTimerXbox.Services
             Current.ManualSelfAcceptanceAvailable = false;
             Current.ManualSelfAcceptanceEmployeeName = "";
             Current.ManualSelfAcceptanceKey = "";
+            Current.ManualSelfAcceptanceRecheckRootKey = "";
         }
 
         private static string BuildCashCorrectionAcceptanceKey(string acceptanceKey)

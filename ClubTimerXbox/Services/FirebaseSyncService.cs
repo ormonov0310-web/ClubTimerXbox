@@ -36,6 +36,7 @@ namespace ClubTimerXbox.Services
 
         private static IReadOnlyList<ClubPlace> _lastKnownPlaces = Array.Empty<ClubPlace>();
         private static long _lastLiveStateRevision;
+        private static int _pendingCurrentStatePublish;
 
         public static async Task<bool> PushOverviewStateAsync(List<ClubPlace> places)
         {
@@ -301,6 +302,7 @@ namespace ClubTimerXbox.Services
 
             try
             {
+                _lastKnownPlaces = places.ToList();
                 var pcIdentity = PcIdentityService.Current;
                 var businessDay = BusinessCalendarService.GetBusinessDay(
                     ClubClock.Current.LocalNow);
@@ -385,6 +387,10 @@ namespace ClubTimerXbox.Services
                 int? programCashlessBalanceMonth = cashBalanceSummary.ProgramCashlessBalance;
                 int? actualCashBalanceMonth = cashBalanceSummary.ActualCashBalance;
                 int? programCashBalanceMonth = cashBalanceSummary.ProgramCashBalance;
+                var latestObservedCashAcceptance =
+                    CashAcceptanceService.GetLatestObservedAcceptance(
+                        monthStart,
+                        nextMonthStart);
                 bool cashlessVerifiedMonth = CashlessService.Records.Any(record =>
                     record.Date >= monthStart.Date &&
                     record.Date < nextMonthStart.Date);
@@ -842,6 +848,25 @@ namespace ClubTimerXbox.Services
                         incomeCashMonth = incomePaymentMonth.CashAmount,
                         incomeMBankMonth = incomePaymentMonth.MBankAmount,
                         cashlessMonth,
+                        latestCashAcceptance = latestObservedCashAcceptance == null
+                            ? null
+                            : new
+                            {
+                                acceptanceKey = latestObservedCashAcceptance.AcceptanceKey,
+                                rootAcceptanceKey = latestObservedCashAcceptance.RootAcceptanceKey,
+                                checkedByEmployeeName = latestObservedCashAcceptance.CheckedByEmployeeName,
+                                responsibleEmployeeName = latestObservedCashAcceptance.ResponsibleEmployeeName,
+                                expectedAmount = latestObservedCashAcceptance.ExpectedCashAmount,
+                                actualAmount = latestObservedCashAcceptance.ActualCashAmount,
+                                difference = latestObservedCashAcceptance.Difference,
+                                isProvisional = latestObservedCashAcceptance.IsProvisional,
+                                updatedAt = (latestObservedCashAcceptance.UpdatedAt == default
+                                    ? latestObservedCashAcceptance.CreatedAt
+                                    : latestObservedCashAcceptance.UpdatedAt)
+                                    .ToString("yyyy-MM-dd HH:mm:ss"),
+                                finalizeAt = latestObservedCashAcceptance.FinalizeAt?
+                                    .ToString("yyyy-MM-dd HH:mm:ss") ?? ""
+                            },
                         actualCashBalanceMonth,
                         programCashBalanceMonth = effectiveProgramCashBalanceMonth,
                         actualCashlessBalanceMonth,
@@ -1209,13 +1234,38 @@ namespace ClubTimerXbox.Services
             try
             {
                 var currentPlaces = places ?? Array.Empty<ClubPlace>();
-                _lastKnownPlaces = currentPlaces;
+                _lastKnownPlaces = currentPlaces.ToList();
+                await FlushPendingCurrentStateAsync(currentPlaces);
                 await CheckCommandsAsync(ClubCommandsPath, currentPlaces);
             }
             catch
             {
                 // Пока молча игнорируем ошибки связи.
             }
+        }
+
+        public static Task<bool> PushCurrentStateAsync()
+        {
+            if (_lastKnownPlaces.Count == 0)
+            {
+                Interlocked.Exchange(ref _pendingCurrentStatePublish, 1);
+                return Task.FromResult(false);
+            }
+
+            return PushCurrentStateAsync(_lastKnownPlaces.ToList());
+        }
+
+        private static async Task FlushPendingCurrentStateAsync(
+            IReadOnlyList<ClubPlace> places)
+        {
+            if (places.Count == 0 ||
+                Interlocked.Exchange(ref _pendingCurrentStatePublish, 0) == 0)
+            {
+                return;
+            }
+
+            if (!await PushCurrentStateAsync(places.ToList()).ConfigureAwait(false))
+                Interlocked.Exchange(ref _pendingCurrentStatePublish, 1);
         }
 
         private static async Task CheckCommandsAsync(
@@ -3229,12 +3279,12 @@ namespace ClubTimerXbox.Services
 
                 if (command.Type == "DeleteEmployeeViolationLoss")
                 {
-                    ApplyDeleteEmployeeViolationLoss(command);
+                    string result = ApplyDeleteEmployeeViolationLoss(command);
 
                     await MarkCommandApplied(
                         commandId,
                         command,
-                        "Штраф за нарушение удалён."
+                        result
                     );
 
                     return;
@@ -4200,10 +4250,27 @@ namespace ClubTimerXbox.Services
             }
         }
 
-        private static void ApplyDeleteEmployeeViolationLoss(FirebaseCommand command)
+        private static string ApplyDeleteEmployeeViolationLoss(FirebaseCommand command)
         {
             if (!Guid.TryParse(command.RecordId, out Guid lossId))
                 throw new Exception("Не указан корректный id штрафа.");
+
+            var item = EmployeeLossService.Items.FirstOrDefault(loss => loss.Id == lossId);
+            if (LateOpeningPenaltyService.IsLateOpeningViolation(item))
+            {
+                if (!LateOpeningPenaltyService.CancelFormalized(
+                        lossId,
+                        string.IsNullOrWhiteSpace(command.Reason)
+                            ? "Отменено владельцем по уважительной причине."
+                            : command.Reason))
+                {
+                    throw new Exception(
+                        "Можно отменить только не оплаченный оформленный штраф за опоздание."
+                    );
+                }
+
+                return "Инцидент опоздания отменён вместе с рейтингом.";
+            }
 
             string sourceId = "loss:" + lossId.ToString("N");
             bool deleted = EmployeeLossService.DeleteFixedViolation(lossId);
@@ -4224,6 +4291,7 @@ namespace ClubTimerXbox.Services
             ExpiredSessionViolationService.MarkPenaltyCancelled(
                 lossId,
                 ClubClock.Current.LocalNow);
+            return "Штраф за нарушение удалён.";
         }
 
         private static void ApplyFormalizeLateOpeningPenalty(FirebaseCommand command)
