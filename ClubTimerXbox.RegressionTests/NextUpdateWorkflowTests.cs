@@ -31,9 +31,16 @@ internal sealed class NextUpdateWorkflowTestSuite
         Test("repeat within ten minutes keeps the previous employee responsible", EarlyRepeatKeepsPreviousEmployee);
         Test("repeat after ten minutes belongs to the current employee", LateRepeatUsesCurrentEmployee);
         Test("repeat does not restart the responsibility window", RepeatDoesNotExtendResponsibilityWindow);
+        Test("cash window starts from the first cash fact", CashWindowStartsFromFirstCashFact);
         Test("initial cash stays provisional until the ten minute window ends", InitialCashUsesFixedProvisionalWindow);
         Test("repeat replaces provisional cash instead of creating a second event", RepeatReplacesProvisionalCash);
         Test("provisional cash survives restart scheduling and becomes due once", ProvisionalCashUsesPersistedDeadline);
+        Test("repeat cannot extend the provisional deadline", RepeatCannotExtendProvisionalDeadline);
+        Test("recheck lookup uses the fixed first deadline", RecheckUsesFixedFirstDeadline);
+        Test("cashless fact stays pending inside provisional acceptance", CashlessFactStaysPending);
+        Test("expired provisional remains a correction barrier until posted", ExpiredProvisionalStillBlocksCorrection);
+        Test("linked cashless settles its own handover before older cards", LinkedCashlessHasFirstPriority);
+        Test("checkpoint inside the window cannot hide the finalized fact", FinalizedFactWinsWindowCheckpoint);
         Test("daily employee earnings reconcile exactly to monthly components", DailyEmployeeEarningsMatchMonthlyTotals);
 
         Console.WriteLine();
@@ -272,6 +279,23 @@ internal sealed class NextUpdateWorkflowTestSuite
             "fixed window start");
     }
 
+    private static void CashWindowStartsFromFirstCashFact()
+    {
+        var firstCashAt = new DateTime(2026, 8, 26, 10, 0, 0);
+        var state = new ShiftAcceptanceStatus();
+
+        ShiftAcceptanceCorrectionPolicy.CaptureInitialCashAcceptance(
+            state,
+            firstCashAt,
+            isCorrectionAttempt: false);
+        ShiftAcceptanceCorrectionPolicy.CaptureInitialCashAcceptance(
+            state,
+            firstCashAt.AddMinutes(8),
+            isCorrectionAttempt: true);
+
+        Equal(firstCashAt, state.InitialCashAcceptedAt!.Value, "first cash time");
+    }
+
     private static void InitialCashUsesFixedProvisionalWindow()
     {
         var acceptedAt = new DateTime(2026, 8, 26, 10, 0, 0);
@@ -325,7 +349,8 @@ internal sealed class NextUpdateWorkflowTestSuite
         Equal(100, items[0].ActualCashAmount, "latest actual cash");
         Equal(0, items[0].Difference, "latest difference");
         Equal(2, items[0].AttemptKeys.Count, "technical attempt history");
-        Equal(firstAt.AddMinutes(5), items[0].CreatedAt, "financial event time");
+        Equal(firstAt, items[0].CreatedAt, "first financial event time");
+        Equal(firstAt.AddMinutes(5), items[0].UpdatedAt, "latest observed time");
     }
 
     private static void ProvisionalCashUsesPersistedDeadline()
@@ -361,6 +386,186 @@ internal sealed class NextUpdateWorkflowTestSuite
                 items,
                 acceptedAt.AddMinutes(10)).Count,
             "event is not due at the boundary");
+    }
+
+    private static void RepeatCannotExtendProvisionalDeadline()
+    {
+        var items = new List<CashAcceptanceItem>();
+        var firstAt = new DateTime(2026, 8, 26, 10, 0, 0);
+        CashAcceptanceProvisionalPolicy.Upsert(
+            items, "shift-1", "shift-1", "Новый", "Старый",
+            100, 90, "Первый факт", firstAt);
+        CashAcceptanceProvisionalPolicy.Schedule(
+            items, "shift-1", firstAt.AddMinutes(10));
+        CashAcceptanceProvisionalPolicy.Upsert(
+            items, "shift-1", "shift-1:retry", "Новый", "Старый",
+            100, 100, "Повтор", firstAt.AddMinutes(9));
+        CashAcceptanceProvisionalPolicy.Schedule(
+            items, "shift-1", firstAt.AddMinutes(19));
+
+        Equal(firstAt.AddMinutes(10), items[0].FinalizeAt!.Value, "fixed deadline");
+    }
+
+    private static void RecheckUsesFixedFirstDeadline()
+    {
+        var firstAt = new DateTime(2026, 8, 26, 10, 0, 0);
+        var item = new CashAcceptanceItem
+        {
+            IsProvisional = true,
+            CheckedByEmployeeName = "Новый",
+            ResponsibleEmployeeName = "Старый",
+            CreatedAt = firstAt,
+            UpdatedAt = firstAt.AddMinutes(9),
+            FinalizeAt = firstAt.AddMinutes(10)
+        };
+
+        Assert(
+            CashAcceptanceRecheckPolicy.FindImmediateHandoverForRecheck(
+                new[] { item }, "Новый", firstAt.AddMinutes(9).AddSeconds(59), 10) != null,
+            "recheck disappeared before deadline");
+        Assert(
+            CashAcceptanceRecheckPolicy.FindImmediateHandoverForRecheck(
+                new[] { item }, "Новый", firstAt.AddMinutes(10), 10) == null,
+            "latest update extended the deadline");
+    }
+
+    private static void CashlessFactStaysPending()
+    {
+        var item = new CashAcceptanceItem
+        {
+            Id = Guid.NewGuid(),
+            IsProvisional = true
+        };
+        var items = new List<CashAcceptanceItem> { item };
+        var observedAt = new DateTime(2026, 8, 26, 10, 3, 0);
+        var pending = new PendingCashlessVerification
+        {
+            CommandId = "verify-1",
+            ExpectedAmount = 100,
+            ActualAmount = 130,
+            ProgramExpectedAmount = 100,
+            ObservedAt = observedAt
+        };
+
+        Assert(
+            CashAcceptanceProvisionalPolicy.SetPendingCashlessVerification(
+                items,
+                item.Id,
+                pending),
+            "pending cashless was not stored");
+        Equal(130, item.PendingCashlessVerification!.ActualAmount, "pending fact");
+        pending.CommandId = "verify-2";
+        pending.ActualAmount = 125;
+        Assert(
+            CashAcceptanceProvisionalPolicy.SetPendingCashlessVerification(
+                items,
+                item.Id,
+                pending),
+            "repeat pending cashless was not stored");
+        Equal("verify-2", item.PendingCashlessVerification!.CommandId, "latest command");
+        Equal(125, item.PendingCashlessVerification.ActualAmount, "latest pending fact");
+        Assert(item.IsProvisional, "staging finalized the cash acceptance");
+    }
+
+    private static void ExpiredProvisionalStillBlocksCorrection()
+    {
+        var item = new CashAcceptanceItem
+        {
+            IsProvisional = true,
+            CreatedAt = new DateTime(2026, 8, 26, 10, 0, 0),
+            FinalizeAt = new DateTime(2026, 8, 26, 10, 10, 0)
+        };
+
+        Assert(
+            CashAcceptanceProvisionalPolicy.FindLatestUnfinalized(new[] { item }) != null,
+            "expired but unposted acceptance stopped blocking correction");
+    }
+
+    private static void LinkedCashlessHasFirstPriority()
+    {
+        var items = new List<CashReconciliationItem>();
+        var monthStart = new DateTime(2026, 8, 1, 6, 0, 0);
+        var nextMonthStart = new DateTime(2026, 9, 1, 6, 0, 0);
+        var handoverAt = new DateTime(2026, 8, 26, 10, 0, 0);
+        CashConstitutionEngine.RecordCashAcceptance(
+            items,
+            monthStart,
+            nextMonthStart,
+            handoverAt.AddHours(-2),
+            "Сотрудник 1",
+            "Старый сотрудник",
+            1000,
+            900,
+            "Старая недостача",
+            operationId: "old-cash");
+
+        Guid investigationId = Guid.NewGuid();
+        CashConstitutionEngine.RecordCashAcceptance(
+            items,
+            monthStart,
+            nextMonthStart,
+            handoverAt,
+            "Новый сотрудник",
+            "Предыдущий сотрудник",
+            1000,
+            900,
+            "Новая приёмка",
+            operationId: "new-cash",
+            occurredAt: handoverAt,
+            deferSettlement: true,
+            investigationIdOverride: investigationId);
+        CashConstitutionEngine.RecordCashlessVerification(
+            items,
+            monthStart,
+            nextMonthStart,
+            handoverAt.AddMinutes(1),
+            1000,
+            1100,
+            "",
+            "Связанная сверка",
+            operationId: "new-cashless",
+            programExpectedAmount: 1000,
+            investigationIdOverride: investigationId);
+
+        var oldShortage = items.First(item =>
+            !item.IsTechnicalEvent &&
+            item.Kind == CashReconciliationKind.CashShortage &&
+            item.InvestigationId != investigationId);
+        var linkedShortage = items.First(item =>
+            !item.IsTechnicalEvent &&
+            item.Kind == CashReconciliationKind.CashShortage &&
+            item.InvestigationId == investigationId);
+        Equal(100, oldShortage.Amount, "old shortage must stay untouched");
+        Equal(0, linkedShortage.Amount, "linked shortage must settle first");
+    }
+
+    private static void FinalizedFactWinsWindowCheckpoint()
+    {
+        var firstAt = new DateTime(2026, 8, 26, 10, 0, 0);
+        var acceptance = new CashAcceptanceItem
+        {
+            CreatedAt = firstAt,
+            UpdatedAt = firstAt.AddMinutes(5),
+            FinalizedAt = firstAt.AddMinutes(10),
+            IsProvisional = false
+        };
+        var checkpoint = new CashBalanceCheckpointItem
+        {
+            CreatedAt = firstAt.AddMinutes(7),
+            CashAmount = 999
+        };
+
+        Assert(
+            !CashAcceptanceTimelinePolicy.CheckpointWins(acceptance, checkpoint),
+            "checkpoint created during the window hid the finalized fact");
+        Equal(
+            firstAt.AddMinutes(5),
+            CashAcceptanceTimelinePolicy.GetObservationTime(acceptance),
+            "movement baseline");
+        Equal(
+            firstAt.AddMinutes(10),
+            CashAcceptanceTimelinePolicy.GetCommitTime(acceptance),
+            "source precedence time");
     }
 
     private static void DailyEmployeeEarningsMatchMonthlyTotals()

@@ -1,4 +1,6 @@
 using System;
+using System.Security.Cryptography;
+using System.Text;
 using System.Windows.Threading;
 using ClubTimerXbox.Models;
 
@@ -6,6 +8,7 @@ namespace ClubTimerXbox.Services
 {
     public static class CashAcceptancePostingService
     {
+        private static readonly object Gate = new();
         private static DispatcherTimer? _timer;
 
         public static void Start()
@@ -18,7 +21,7 @@ namespace ClubTimerXbox.Services
 
             _timer = new DispatcherTimer
             {
-                Interval = TimeSpan.FromSeconds(10)
+                Interval = TimeSpan.FromSeconds(1)
             };
             _timer.Tick += (_, _) => FinalizeDue();
             _timer.Start();
@@ -53,33 +56,46 @@ namespace ClubTimerXbox.Services
 
         public static void FinalizeDue()
         {
-            DateTime now = ClubClock.Current.LocalNow;
             bool finalizedAny = false;
-            foreach (var item in CashAcceptanceService.GetDueProvisional(now))
+            lock (Gate)
             {
-                try
+                DateTime now = ClubClock.Current.LocalNow;
+                foreach (var item in CashAcceptanceService.GetDueProvisional(now))
                 {
-                    DateTime occurredAt = item.UpdatedAt == default
-                        ? item.CreatedAt
-                        : item.UpdatedAt;
-                    string operationKey = string.IsNullOrWhiteSpace(item.RootAcceptanceKey)
-                        ? item.AcceptanceKey.Trim()
-                        : item.RootAcceptanceKey.Trim();
+                    try
+                    {
+                        DateTime occurredAt = CashAcceptanceTimelinePolicy
+                            .GetObservationTime(item);
+                        string operationKey = string.IsNullOrWhiteSpace(item.RootAcceptanceKey)
+                            ? item.AcceptanceKey.Trim()
+                            : item.RootAcceptanceKey.Trim();
+                        if (string.IsNullOrWhiteSpace(operationKey))
+                            operationKey = item.Id.ToString("N");
+                        Guid investigationId = BuildInvestigationId(operationKey);
+                        bool hasPendingCashless = item.PendingCashlessVerification != null;
 
-                    PostLedger(
-                        item.CheckedByEmployeeName,
-                        item.ResponsibleEmployeeName,
-                        item.ExpectedCashAmount,
-                        item.ActualCashAmount,
-                        item.Note,
-                        operationKey,
-                        occurredAt);
-                    CashAcceptanceService.MarkFinalized(item.Id, now);
-                    finalizedAny = true;
-                }
-                catch
-                {
-                    // Тот же operationId безопасно завершит запись при следующей попытке.
+                        PostLedger(
+                            item.CheckedByEmployeeName,
+                            item.ResponsibleEmployeeName,
+                            item.ExpectedCashAmount,
+                            item.ActualCashAmount,
+                            item.Note,
+                            operationKey,
+                            occurredAt,
+                            deferSettlement: hasPendingCashless,
+                            investigationId: investigationId);
+                        PostPendingCashlessVerification(
+                            item,
+                            operationKey,
+                            item.PendingCashlessVerification,
+                            investigationId);
+                        CashAcceptanceService.MarkFinalized(item.Id, now);
+                        finalizedAny = true;
+                    }
+                    catch
+                    {
+                        // Тот же operationId безопасно завершит запись при следующей попытке.
+                    }
                 }
             }
 
@@ -94,7 +110,9 @@ namespace ClubTimerXbox.Services
             int actualCashAmount,
             string note,
             string acceptanceKey,
-            DateTime occurredAt)
+            DateTime occurredAt,
+            bool deferSettlement = false,
+            Guid? investigationId = null)
         {
             var month = BusinessCalendarService.GetBusinessMonth(occurredAt);
             CashReconciliationService.ProcessCashAcceptance(
@@ -106,7 +124,43 @@ namespace ClubTimerXbox.Services
                 actualCashAmount,
                 note,
                 operationId: $"{acceptanceKey.Trim()}:ledger",
-                occurredAt: occurredAt);
+                occurredAt: occurredAt,
+                deferSettlement: deferSettlement,
+                investigationIdOverride: investigationId);
+        }
+
+        private static void PostPendingCashlessVerification(
+            CashAcceptanceItem item,
+            string operationKey,
+            PendingCashlessVerification? verification,
+            Guid investigationId)
+        {
+            if (verification == null)
+                return;
+
+            DateTime observedAt = verification.ObservedAt == default
+                ? CashAcceptanceTimelinePolicy.GetObservationTime(item)
+                : verification.ObservedAt;
+            var month = BusinessCalendarService.GetBusinessMonth(observedAt);
+            CashReconciliationService.ProcessCashlessVerification(
+                month.StartInclusive,
+                month.EndExclusive,
+                verification.ExpectedAmount,
+                verification.ActualAmount,
+                verification.SuspectedEmployeeName,
+                verification.Note,
+                operationId: $"{operationKey.Trim()}:cashless-ledger",
+                programExpectedAmount: verification.ProgramExpectedAmount,
+                occurredAt: observedAt,
+                investigationIdOverride: investigationId);
+        }
+
+        private static Guid BuildInvestigationId(string operationKey)
+        {
+            byte[] hash = SHA256.HashData(
+                Encoding.UTF8.GetBytes(
+                    $"cash-acceptance:{operationKey.Trim().ToLowerInvariant()}"));
+            return new Guid(hash.AsSpan(0, 16));
         }
     }
 }

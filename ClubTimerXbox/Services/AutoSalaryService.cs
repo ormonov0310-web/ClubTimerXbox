@@ -242,7 +242,8 @@ namespace ClubTimerXbox.Services
 
         public static List<AutoSalaryDayEarning> BuildDailyEarnings(
             string employeeName,
-            DateTime monthStart)
+            DateTime monthStart,
+            AutoSalaryReport? preparedReport = null)
         {
             employeeName = employeeName.Trim();
             var period = BusinessCalendarService.GetBusinessMonthByAnchor(monthStart);
@@ -260,7 +261,7 @@ namespace ClubTimerXbox.Services
                     .ToList();
             }
 
-            var monthly = BuildReport(monthStart).Employees.FirstOrDefault(item =>
+            var monthly = (preparedReport ?? BuildReport(monthStart)).Employees.FirstOrDefault(item =>
                 item.EmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase));
             if (monthly == null)
                 return new List<AutoSalaryDayEarning>();

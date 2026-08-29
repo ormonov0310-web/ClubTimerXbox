@@ -349,9 +349,15 @@ namespace ClubTimerXbox.Services
 
             bool isCashCorrection = IsCashCorrectionAcceptanceKey(Current.AcceptanceKey);
             string originalAcceptanceKey = Current.CashCorrectionAcceptanceKey.Trim();
+            DateTime acceptedAt = ClubClock.Current.LocalNow;
+
+            ShiftAcceptanceCorrectionPolicy.CaptureInitialCashAcceptance(
+                Current,
+                acceptedAt,
+                isCashCorrection);
 
             Current.CashAccepted = true;
-            Current.CashAcceptedAt = ClubClock.Current.LocalNow;
+            Current.CashAcceptedAt = acceptedAt;
             CashAcceptanceRecountPolicy.Clear(Current);
 
             TryComplete();
@@ -431,7 +437,9 @@ namespace ClubTimerXbox.Services
 
         public static void ScheduleProvisionalCashFinalization()
         {
-            if (Current.InitialProductsAndCashAcceptedAt == null)
+            DateTime? firstCashAcceptedAt = Current.InitialCashAcceptedAt ??
+                                            Current.InitialProductsAndCashAcceptedAt;
+            if (firstCashAcceptedAt == null)
                 return;
 
             string rootAcceptanceKey = GetRootAcceptanceKey();
@@ -440,7 +448,7 @@ namespace ClubTimerXbox.Services
 
             CashAcceptanceService.ScheduleProvisional(
                 rootAcceptanceKey,
-                Current.InitialProductsAndCashAcceptedAt.Value
+                firstCashAcceptedAt.Value
                     .AddMinutes(InitialCorrectionWindowMinutes));
         }
 
@@ -460,6 +468,7 @@ namespace ClubTimerXbox.Services
         {
             Current.ProductsAccepted = true;
             Current.CashAccepted = true;
+            Current.InitialCashAcceptedAt ??= ClubClock.Current.LocalNow;
             Current.InitialProductsAndCashAcceptedAt ??= ClubClock.Current.LocalNow;
             Current.DebtAcceptanceRequired = false;
             Current.DebtsAccepted = true;
@@ -679,8 +688,11 @@ namespace ClubTimerXbox.Services
             Current.CashCorrectionAcceptanceKey = Current.AcceptanceKey.Trim();
             Current.CashCorrectionNewEmployeeName = Current.NewEmployeeName.Trim();
             Current.CashCorrectionResponsibleEmployeeName = Current.ResponsibleEmployeeName.Trim();
-            Current.CashCorrectionUntil =
-                ClubClock.Current.LocalNow.AddMinutes(InitialCorrectionWindowMinutes);
+            DateTime correctionWindowStart = Current.InitialCashAcceptedAt ??
+                                             Current.InitialProductsAndCashAcceptedAt ??
+                                             ClubClock.Current.LocalNow;
+            Current.CashCorrectionUntil = correctionWindowStart
+                .AddMinutes(InitialCorrectionWindowMinutes);
         }
 
         private static void ExpireCashCorrectionIfNeeded()

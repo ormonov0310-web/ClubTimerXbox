@@ -7,6 +7,17 @@ namespace ClubTimerXbox.Services
     {
         public const int OriginalEmployeeResponsibilityMinutes = 10;
 
+        public static void CaptureInitialCashAcceptance(
+            ShiftAcceptanceStatus status,
+            DateTime now,
+            bool isCorrectionAttempt)
+        {
+            if (isCorrectionAttempt || status.InitialCashAcceptedAt.HasValue)
+                return;
+
+            status.InitialCashAcceptedAt = now;
+        }
+
         public static void CaptureInitialProductsAndCashCompletion(
             ShiftAcceptanceStatus status,
             DateTime now,
@@ -32,7 +43,8 @@ namespace ClubTimerXbox.Services
             originalResponsibleEmployeeName = originalResponsibleEmployeeName.Trim();
             currentEmployeeName = currentEmployeeName.Trim();
 
-            DateTime? windowStart = status.InitialProductsAndCashAcceptedAt;
+            DateTime? windowStart = status.InitialCashAcceptedAt ??
+                                    status.InitialProductsAndCashAcceptedAt;
             if (!windowStart.HasValue && status.ProductsAccepted && status.CashAccepted)
                 windowStart = status.CompletedAt;
 
@@ -64,9 +76,11 @@ namespace ClubTimerXbox.Services
                 return false;
             }
 
-            return status.InitialProductsAndCashAcceptedAt == null ||
-                   now < status.InitialProductsAndCashAcceptedAt.Value
-                       .AddMinutes(OriginalEmployeeResponsibilityMinutes);
+            DateTime? windowStart = status.InitialCashAcceptedAt ??
+                                    status.InitialProductsAndCashAcceptedAt;
+            return windowStart == null ||
+                   now < windowStart.Value
+                        .AddMinutes(OriginalEmployeeResponsibilityMinutes);
         }
     }
 }

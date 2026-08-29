@@ -171,7 +171,9 @@ namespace ClubTimerXbox.Services
             int actualAmount,
             string note,
             string operationId = "",
-            DateTime? occurredAt = null)
+            DateTime? occurredAt = null,
+            bool deferSettlement = false,
+            Guid? investigationIdOverride = null)
         {
             lock (Gate)
             {
@@ -187,7 +189,9 @@ namespace ClubTimerXbox.Services
                         actualAmount,
                         note,
                         operationId,
-                        occurredAt
+                        occurredAt,
+                        deferSettlement,
+                        investigationIdOverride
                     ));
             }
         }
@@ -200,7 +204,9 @@ namespace ClubTimerXbox.Services
             string suspectedEmployeeName,
             string note,
             string operationId = "",
-            int? programExpectedAmount = null)
+            int? programExpectedAmount = null,
+            DateTime? occurredAt = null,
+            Guid? investigationIdOverride = null)
         {
             lock (Gate)
             {
@@ -209,13 +215,14 @@ namespace ClubTimerXbox.Services
                         _items,
                         fromInclusive,
                         toExclusive,
-                        ClubClock.Current.LocalNow,
+                        occurredAt ?? ClubClock.Current.LocalNow,
                         expectedAmount,
                         actualAmount,
                         suspectedEmployeeName,
                         note,
                         operationId,
-                        programExpectedAmount
+                        programExpectedAmount,
+                        investigationIdOverride
                     ));
             }
         }

@@ -25,15 +25,11 @@ namespace ClubTimerXbox.Services
                     !NamesMatch(item.ResponsibleEmployeeName, employeeName))
                 .Where(item =>
                 {
-                    DateTime observedAt = item.UpdatedAt == default
-                        ? item.CreatedAt
-                        : item.UpdatedAt;
-                    return observedAt <= now &&
-                           now - observedAt < TimeSpan.FromMinutes(windowMinutes);
+                    DateTime deadline = item.FinalizeAt ??
+                        item.CreatedAt.AddMinutes(windowMinutes);
+                    return item.CreatedAt <= now && now < deadline;
                 })
-                .OrderByDescending(item => item.UpdatedAt == default
-                    ? item.CreatedAt
-                    : item.UpdatedAt)
+                .OrderByDescending(item => item.CreatedAt)
                 .FirstOrDefault();
         }
 

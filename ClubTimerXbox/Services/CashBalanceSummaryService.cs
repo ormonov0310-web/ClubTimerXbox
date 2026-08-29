@@ -70,8 +70,10 @@ namespace ClubTimerXbox.Services
         {
             var latestAcceptance = CashAcceptanceService
                 .Items
-                .Where(item => !item.IsProvisional && item.CreatedAt < toExclusive)
-                .OrderByDescending(item => item.CreatedAt)
+                .Where(item =>
+                    !item.IsProvisional &&
+                    CashAcceptanceTimelinePolicy.GetCommitTime(item) < toExclusive)
+                .OrderByDescending(CashAcceptanceTimelinePolicy.GetCommitTime)
                 .FirstOrDefault();
             var latestCheckpoint = CashBalanceCheckpointService.Items
                 .Where(item => item.CreatedAt < toExclusive)
@@ -81,12 +83,12 @@ namespace ClubTimerXbox.Services
             if (latestAcceptance == null && latestCheckpoint == null)
                 return null;
 
-            bool useCheckpoint = latestCheckpoint != null &&
-                (latestAcceptance == null ||
-                 latestCheckpoint.CreatedAt >= latestAcceptance.CreatedAt);
+            bool useCheckpoint = CashAcceptanceTimelinePolicy.CheckpointWins(
+                latestAcceptance,
+                latestCheckpoint);
             DateTime checkpoint = useCheckpoint
                 ? latestCheckpoint!.CreatedAt
-                : latestAcceptance!.CreatedAt;
+                : CashAcceptanceTimelinePolicy.GetObservationTime(latestAcceptance!);
             int checkpointAmount = useCheckpoint
                 ? latestCheckpoint!.CashAmount
                 : latestAcceptance!.ActualCashAmount;
@@ -225,14 +227,15 @@ namespace ClubTimerXbox.Services
                 .OrderByDescending(item => item.CreatedAt)
                 .FirstOrDefault();
             var acceptance = CashAcceptanceService.Items
-                .Where(item => !item.IsProvisional && item.CreatedAt < toExclusive)
-                .OrderByDescending(item => item.CreatedAt)
+                .Where(item =>
+                    !item.IsProvisional &&
+                    CashAcceptanceTimelinePolicy.GetCommitTime(item) < toExclusive)
+                .OrderByDescending(CashAcceptanceTimelinePolicy.GetCommitTime)
                 .FirstOrDefault();
-            if (checkpoint != null &&
-                (acceptance == null || checkpoint.CreatedAt >= acceptance.CreatedAt))
+            if (CashAcceptanceTimelinePolicy.CheckpointWins(acceptance, checkpoint))
             {
                 return CalculateCashBalanceAfterCheckpoint(
-                    checkpoint.CashAmount,
+                    checkpoint!.CashAmount,
                     checkpoint.CreatedAt,
                     toExclusive);
             }
@@ -241,7 +244,7 @@ namespace ClubTimerXbox.Services
             {
                 return CalculateCashBalanceAfterCheckpoint(
                     acceptance.ExpectedCashAmount,
-                    acceptance.CreatedAt,
+                    CashAcceptanceTimelinePolicy.GetObservationTime(acceptance),
                     toExclusive);
             }
 

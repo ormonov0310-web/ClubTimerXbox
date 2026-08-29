@@ -120,6 +120,11 @@ namespace ClubTimerXbox.Services
                     StringComparison.OrdinalIgnoreCase));
         }
 
+        public static CashAcceptanceItem? GetLatestUnfinalized()
+        {
+            return CashAcceptanceProvisionalPolicy.FindLatestUnfinalized(Items);
+        }
+
         public static DateTime? GetLastAcceptanceTime()
         {
             return GetLastAcceptance()?.CreatedAt;
@@ -241,6 +246,22 @@ namespace ClubTimerXbox.Services
             return CashAcceptanceProvisionalPolicy.GetDue(Items, now);
         }
 
+        public static bool SetPendingCashlessVerification(
+            Guid acceptanceId,
+            PendingCashlessVerification verification)
+        {
+            if (!CashAcceptanceProvisionalPolicy.SetPendingCashlessVerification(
+                    Items,
+                    acceptanceId,
+                    verification))
+            {
+                return false;
+            }
+
+            Save();
+            return true;
+        }
+
         public static void MarkFinalized(Guid id, DateTime finalizedAt)
         {
             var item = Items.FirstOrDefault(candidate => candidate.Id == id);
@@ -250,6 +271,7 @@ namespace ClubTimerXbox.Services
             item.IsProvisional = false;
             item.FinalizedAt = finalizedAt;
             item.FinalizeAt = null;
+            item.PendingCashlessVerification = null;
             Save();
         }
 

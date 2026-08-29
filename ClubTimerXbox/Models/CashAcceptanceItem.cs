@@ -27,6 +27,8 @@ namespace ClubTimerXbox.Models
 
         public DateTime? FinalizedAt { get; set; }
 
+        public PendingCashlessVerification? PendingCashlessVerification { get; set; }
+
         public int ExpectedCashAmount { get; set; }
 
         public int ActualCashAmount { get; set; }

@@ -33,12 +33,12 @@ namespace ClubTimerXbox.Services
                     Id = Guid.NewGuid(),
                     AcceptanceKey = rootAcceptanceKey,
                     RootAcceptanceKey = rootAcceptanceKey,
-                    IsProvisional = true
+                    IsProvisional = true,
+                    CreatedAt = now
                 };
                 items.Add(item);
             }
 
-            item.CreatedAt = now;
             item.UpdatedAt = now;
             item.CheckedByEmployeeName = checkedByEmployeeName.Trim();
             item.ResponsibleEmployeeName = responsibleEmployeeName.Trim();
@@ -72,7 +72,31 @@ namespace ClubTimerXbox.Services
             if (item == null)
                 return false;
 
-            item.FinalizeAt = finalizeAt;
+            if (item.FinalizeAt == null || finalizeAt < item.FinalizeAt.Value)
+                item.FinalizeAt = finalizeAt;
+            return true;
+        }
+
+        public static CashAcceptanceItem? FindLatestUnfinalized(
+            IEnumerable<CashAcceptanceItem> items)
+        {
+            return items
+                .Where(item => item.IsProvisional)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstOrDefault();
+        }
+
+        public static bool SetPendingCashlessVerification(
+            IEnumerable<CashAcceptanceItem> items,
+            Guid acceptanceId,
+            PendingCashlessVerification verification)
+        {
+            var item = items.FirstOrDefault(candidate =>
+                candidate.Id == acceptanceId && candidate.IsProvisional);
+            if (item == null)
+                return false;
+
+            item.PendingCashlessVerification = verification;
             return true;
         }
 
