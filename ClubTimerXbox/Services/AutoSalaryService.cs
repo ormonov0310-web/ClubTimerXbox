@@ -8,6 +8,8 @@ namespace ClubTimerXbox.Services
     public static class AutoSalaryService
     {
         private const string GamesCategory = "\u0418\u0433\u0440\u044b";
+        private static readonly DateTime FullDayOverNormBonusEffectiveFrom =
+            new DateTime(2026, 9, 1, BusinessCalendarService.BusinessDayStartHour, 0, 0);
         private static readonly AutoSalarySettings LegacySettings =
             NormalizeSettings(AutoSalarySettingsStorageService.Load());
 
@@ -379,6 +381,20 @@ namespace ClubTimerXbox.Services
                 .ToList();
         }
 
+        public static IReadOnlyDictionary<string, List<AutoSalaryDayEarning>>
+            BuildDailyEarningsByEmployee(
+                DateTime monthStart,
+                AutoSalaryReport preparedReport)
+        {
+            return preparedReport.Employees.ToDictionary(
+                employee => employee.EmployeeName,
+                employee => BuildDailyEarnings(
+                    employee.EmployeeName,
+                    monthStart,
+                    preparedReport),
+                StringComparer.OrdinalIgnoreCase);
+        }
+
         private static AutoSalaryDayEarning CloneDailyEarning(
             AutoSalaryDayEarning source)
         {
@@ -664,9 +680,23 @@ namespace ClubTimerXbox.Services
             if (settings.DailyGameRevenueNorm <= 0 || settings.OverNormBonusPercent <= 0)
                 return;
 
+            BusinessPeriodRange businessDay = BusinessCalendarService.GetBusinessDay(scheduleStart);
+            if (businessDay.StartInclusive < FullDayOverNormBonusEffectiveFrom)
+            {
+                ApplyLegacyOverNormBonusForDay(
+                    result,
+                    scheduleStart,
+                    scheduleEnd,
+                    settings);
+                return;
+            }
+
+            if (ClubClock.Current.LocalNow < businessDay.EndExclusive)
+                return;
+
             int dayGameRevenue = CashService.GetTotalByPeriodAndCategory(
-                scheduleStart,
-                scheduleEnd,
+                businessDay.StartInclusive,
+                businessDay.EndExclusive,
                 GamesCategory
             );
             int overNormRevenue = dayGameRevenue - settings.DailyGameRevenueNorm;
@@ -679,31 +709,72 @@ namespace ClubTimerXbox.Services
                 return;
 
             var participants = result.Values
-                .Select(input => new
-                {
-                    Input = input,
-                    Hours = input.GetDailyHours(scheduleStart.Date)
-                })
-                .Where(item => item.Hours > 0)
+                .Select(input => new OverNormBonusParticipant(
+                    input.EmployeeName,
+                    GetWorkedHoursInPeriod(
+                        input.EmployeeName,
+                        businessDay.StartInclusive,
+                        businessDay.EndExclusive)))
                 .ToList();
+            IReadOnlyDictionary<string, int> allocations =
+                OverNormBonusAllocator.Allocate(bonusFund, participants);
 
+            foreach (var participant in participants)
+            {
+                if (!allocations.TryGetValue(participant.EmployeeName, out int amount) ||
+                    amount <= 0 ||
+                    !result.TryGetValue(participant.EmployeeName, out EmployeeBonusInput? input))
+                {
+                    continue;
+                }
+
+                input.Bonuses.Add(new AutoSalaryBonusItem
+                {
+                    CreatedAt = businessDay.EndExclusive,
+                    Type = "OverNormGameRevenue",
+                    Title = "Бонус за план",
+                    Description =
+                        $"Игры за рабочий день: {dayGameRevenue} сом, выше нормы на {overNormRevenue} сом. " +
+                        $"Участие: {participant.Hours:0.##} ч.",
+                    Amount = amount
+                });
+            }
+        }
+
+        private static void ApplyLegacyOverNormBonusForDay(
+            Dictionary<string, EmployeeBonusInput> result,
+            DateTime scheduleStart,
+            DateTime scheduleEnd,
+            AutoSalarySettings settings)
+        {
+            int dayGameRevenue = CashService.GetTotalByPeriodAndCategory(
+                scheduleStart,
+                scheduleEnd,
+                GamesCategory);
+            int overNormRevenue = dayGameRevenue - settings.DailyGameRevenueNorm;
+            int bonusFund = overNormRevenue > 0
+                ? Percent(overNormRevenue, settings.OverNormBonusPercent)
+                : 0;
+            if (bonusFund <= 0)
+                return;
+
+            var participants = result.Values
+                .Where(input => input.GetDailyHours(scheduleStart.Date) > 0)
+                .ToList();
             int distributed = 0;
-
             for (int index = 0; index < participants.Count; index++)
             {
-                var participant = participants[index];
+                EmployeeBonusInput participant = participants[index];
                 int amount = Allocate(
                     bonusFund,
                     1,
                     participants.Count,
                     ref distributed,
-                    index == participants.Count - 1
-                );
-
+                    index == participants.Count - 1);
                 if (amount <= 0)
                     continue;
 
-                participant.Input.Bonuses.Add(new AutoSalaryBonusItem
+                participant.Bonuses.Add(new AutoSalaryBonusItem
                 {
                     CreatedAt = scheduleEnd,
                     Type = "OverNormGameRevenue",
@@ -712,6 +783,43 @@ namespace ClubTimerXbox.Services
                     Amount = amount
                 });
             }
+        }
+
+        private static double GetWorkedHoursInPeriod(
+            string employeeName,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            var intervals = EmployeeStatsService
+                .GetShifts(employeeName, fromInclusive.Date, toExclusive.AddDays(1))
+                .Select(shift => new PaidInterval(
+                    Max(shift.StartedAt, fromInclusive),
+                    Min(shift.ClosedAt ?? ClubClock.Current.LocalNow, toExclusive)))
+                .Where(interval => interval.End > interval.Start)
+                .OrderBy(interval => interval.Start)
+                .ToList();
+            if (intervals.Count == 0)
+                return 0;
+
+            DateTime start = intervals[0].Start;
+            DateTime end = intervals[0].End;
+            TimeSpan total = TimeSpan.Zero;
+            for (int index = 1; index < intervals.Count; index++)
+            {
+                PaidInterval interval = intervals[index];
+                if (interval.Start <= end)
+                {
+                    end = Max(end, interval.End);
+                    continue;
+                }
+
+                total += end - start;
+                start = interval.Start;
+                end = interval.End;
+            }
+
+            total += end - start;
+            return total.TotalHours;
         }
 
         private static TimeSpan GetLateActiveTime(

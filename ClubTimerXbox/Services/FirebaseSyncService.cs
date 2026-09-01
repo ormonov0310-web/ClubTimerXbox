@@ -192,6 +192,12 @@ namespace ClubTimerXbox.Services
                 CashReportPeriodMode.Day,
                 todayStart
             );
+            FinancialPaceMonthSnapshot financialMonth =
+                FinancialPaceService.BuildCurrentMonth();
+            FinancialPaceDaySnapshot? financialToday = financialMonth.Days
+                .FirstOrDefault(day => day.BusinessDateKey ==
+                    BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow)
+                        .ToString("yyyy-MM-dd"));
 
             return new OverviewSnapshot
             {
@@ -199,6 +205,7 @@ namespace ClubTimerXbox.Services
                 AcceptanceRequired = ShiftAcceptanceService.Current.IsRequired,
                 AcceptanceCompleted = ShiftAcceptanceService.Current.IsCompleted,
                 GamesToday = gamesToday,
+                FinancialPace = financialToday,
                 BusyPlaces = placeList.Count(place => place.IsBusy),
                 FreePlaces = placeList.Count(place => !place.IsBusy),
                 Places = placeList
@@ -237,6 +244,9 @@ namespace ClubTimerXbox.Services
                 {
                     gamesToday = snapshot.GamesToday
                 },
+                ["financialPace"] = snapshot.FinancialPace == null
+                    ? null
+                    : BuildFinancialPaceDayPayload(snapshot.FinancialPace),
                 ["busyPlaces"] = snapshot.BusyPlaces,
                 ["freePlaces"] = snapshot.FreePlaces,
                 ["places"] = snapshot.Places.Select(place => new
@@ -274,6 +284,8 @@ namespace ClubTimerXbox.Services
                 ["busyPlaces"] = snapshot.BusyPlaces,
                 ["freePlaces"] = snapshot.FreePlaces,
                 ["gamesToday"] = snapshot.GamesToday,
+                ["financialPacePercent"] = snapshot.FinancialPace?.Percent ?? 0,
+                ["financialPaceAvailable"] = snapshot.FinancialPace?.HasExpenseBaseline == true,
                 ["acceptanceRequired"] = snapshot.AcceptanceRequired,
                 ["acceptanceCompleted"] = snapshot.AcceptanceCompleted
             };
@@ -689,6 +701,14 @@ namespace ClubTimerXbox.Services
 
                 var reportsByMonth = BuildReportsByMonth();
                 var autoSalaryReport = AutoSalaryService.BuildReport(monthStart);
+                var dailyEarningsByEmployee =
+                    AutoSalaryService.BuildDailyEarningsByEmployee(
+                        monthStart,
+                        autoSalaryReport);
+                var financialPace = FinancialPaceService.BuildMonth(
+                    monthStart,
+                    autoSalaryReport,
+                    dailyEarningsByEmployee);
                 int salaryGrossMonth = autoSalaryReport.Employees.Sum(employee => employee.GrossAmount);
                 int salaryLossesMonth = autoSalaryReport.Employees.Sum(employee => employee.LossesAmount);
                 int salaryAccruedMonth = autoSalaryReport.Employees.Sum(employee =>
@@ -934,6 +954,8 @@ namespace ClubTimerXbox.Services
                         retainedOwnerIncome = BusinessAccountingService.RetainedOwnerIncome
                     },
 
+                    financialPace = BuildFinancialPaceMonthPayload(financialPace),
+
                     cashRecords = new
                     {
                         today = new
@@ -1130,10 +1152,12 @@ namespace ClubTimerXbox.Services
                             employee.Name);
                         var dailyEarnings = autoSalary == null
                             ? Array.Empty<object>()
-                            : BuildDailyEarningsPayload(AutoSalaryService.BuildDailyEarnings(
-                                employee.Name,
-                                monthStart,
-                                autoSalaryReport));
+                            : BuildDailyEarningsPayload(
+                                dailyEarningsByEmployee.TryGetValue(
+                                    employee.Name,
+                                    out List<AutoSalaryDayEarning>? employeeDailyEarnings)
+                                    ? employeeDailyEarnings
+                                    : new List<AutoSalaryDayEarning>());
 
                         return new
                         {
@@ -1799,6 +1823,65 @@ namespace ClubTimerXbox.Services
             };
         }
 
+        private static object BuildFinancialPaceMonthPayload(
+            FinancialPaceMonthSnapshot month)
+        {
+            return new
+            {
+                monthKey = month.MonthKey,
+                gameRevenue = month.GameRevenue,
+                totalExpense = month.TotalExpense,
+                difference = month.Difference,
+                percent = month.Percent,
+                profitableDays = month.ProfitableDays,
+                lossDays = month.LossDays,
+                neutralDays = month.NeutralDays,
+                hasExpenseBaseline = month.HasExpenseBaseline,
+                expenseSourceType = month.ExpenseSourceType,
+                expenseSourceMonthKey = month.ExpenseSourceMonthKey,
+                monthlyFixedExpense = month.MonthlyFixedExpense,
+                dailyFixedExpense = month.DailyFixedExpense,
+                manualMonthlyExpense = month.ManualMonthlyExpense,
+                manualExpenseEffectiveFrom = month.ManualExpenseEffectiveFrom?.ToString("O") ?? "",
+                days = month.Days.Select(BuildFinancialPaceDayPayload).ToArray()
+            };
+        }
+
+        private static object BuildFinancialPaceDayPayload(
+            FinancialPaceDaySnapshot day)
+        {
+            return new
+            {
+                businessDateKey = day.BusinessDateKey,
+                businessMonthKey = day.BusinessMonthKey,
+                startInclusive = day.StartInclusive.ToString("O"),
+                endExclusive = day.EndExclusive.ToString("O"),
+                calculatedAt = day.CalculatedAt.ToString("O"),
+                isClosed = day.IsClosed,
+                hasExpenseBaseline = day.HasExpenseBaseline,
+                expenseSourceType = day.ExpenseSourceType,
+                expenseSourceMonthKey = day.ExpenseSourceMonthKey,
+                monthlyFixedExpense = day.MonthlyFixedExpense,
+                dailyFixedExpense = day.DailyFixedExpense,
+                fixedExpenseAccrued = day.FixedExpenseAccrued,
+                salaryAccrued = day.SalaryAccrued,
+                totalExpense = day.TotalExpense,
+                gameRevenue = day.GameRevenue,
+                difference = day.Difference,
+                percent = day.Percent,
+                timeline = day.Timeline.Select(point => new
+                {
+                    createdAt = point.CreatedAt.ToString("O"),
+                    gameRevenue = point.GameRevenue,
+                    fixedExpenseAccrued = point.FixedExpenseAccrued,
+                    salaryAccrued = point.SalaryAccrued,
+                    totalExpense = point.TotalExpense,
+                    difference = point.Difference,
+                    percent = point.Percent
+                }).ToArray()
+            };
+        }
+
         private static object BuildRatingEventsPayload(AutoSalaryEmployeeResult employee)
         {
             return employee.RatingEvents.Select(item => new
@@ -2410,6 +2493,14 @@ namespace ClubTimerXbox.Services
                 .Where(record => record.PaymentMethod == "Безнал")
                 .Sum(record => record.Amount);
             var salaryReport = AutoSalaryService.BuildReport(monthStart);
+            var dailyEarningsByEmployee =
+                AutoSalaryService.BuildDailyEarningsByEmployee(
+                    monthStart,
+                    salaryReport);
+            var financialPace = FinancialPaceService.BuildMonth(
+                monthStart,
+                salaryReport,
+                dailyEarningsByEmployee);
             var productServiceSummary = BuildProductServiceMonthSummary(
                 monthStart,
                 nextMonthStart,
@@ -2528,6 +2619,7 @@ namespace ClubTimerXbox.Services
             return new
             {
                 monthKey = monthStart.ToString("yyyy-MM"),
+                financialPace = BuildFinancialPaceMonthPayload(financialPace),
                 cash = new
                 {
                     gamesMonth = games,
@@ -2628,7 +2720,11 @@ namespace ClubTimerXbox.Services
                         })
                         .ToArray()
                 },
-                employees = BuildEmployeeMonthItems(monthStart, nextMonthStart, salaryReport),
+                employees = BuildEmployeeMonthItems(
+                    monthStart,
+                    nextMonthStart,
+                    salaryReport,
+                    dailyEarningsByEmployee),
                 expensesByCategory
             };
         }
@@ -2646,7 +2742,8 @@ namespace ClubTimerXbox.Services
         private static object[] BuildEmployeeMonthItems(
             DateTime monthStart,
             DateTime nextMonthStart,
-            AutoSalaryReport salaryReport)
+            AutoSalaryReport salaryReport,
+            IReadOnlyDictionary<string, List<AutoSalaryDayEarning>> dailyEarningsByEmployee)
         {
             return EmployeeService
                 .GetAllEmployees()
@@ -2734,10 +2831,12 @@ namespace ClubTimerXbox.Services
                         employee.Name);
                     var dailyEarnings = autoSalary == null
                         ? Array.Empty<object>()
-                        : BuildDailyEarningsPayload(AutoSalaryService.BuildDailyEarnings(
-                            employee.Name,
-                            monthStart,
-                            salaryReport));
+                        : BuildDailyEarningsPayload(
+                            dailyEarningsByEmployee.TryGetValue(
+                                employee.Name,
+                                out List<AutoSalaryDayEarning>? employeeDailyEarnings)
+                                ? employeeDailyEarnings
+                                : new List<AutoSalaryDayEarning>());
 
                     return new
                     {
@@ -2891,7 +2990,9 @@ namespace ClubTimerXbox.Services
                 .Select(record => new
                 {
                     id = record.Id.ToString(),
-                    createdAt = record.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                    createdAt = CashService.GetOwnerWithdrawalDisplayTime(record)
+                        .ToString("yyyy-MM-dd HH:mm:ss"),
+                    physicalCreatedAt = record.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                     title = record.Title,
                     description = record.Description,
                     amount = record.Amount,
@@ -2919,7 +3020,9 @@ namespace ClubTimerXbox.Services
                 .Select(record => new
                 {
                     id = record.Id.ToString(),
-                    createdAt = record.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                    createdAt = CashService.GetOwnerWithdrawalDisplayTime(record)
+                        .ToString("yyyy-MM-dd HH:mm:ss"),
+                    physicalCreatedAt = record.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                     title = record.Title,
                     description = record.Description,
                     amount = record.Amount,
@@ -3402,6 +3505,18 @@ namespace ClubTimerXbox.Services
                         $"Настройки авто ЗП сохранены: резерв {settings.ExpenseReservePercent}%, фонд выручки {settings.SalaryFundPercent}%, ставка времени {GetAutoSalaryHourlyRate(settings)} сом/ч, график {settings.WorkDayStartHour:00}:00-{settings.WorkDayEndHour:00}:00."
                     );
 
+                    return;
+                }
+
+                if (command.Type == "UpdateFinancialPaceManualExpense")
+                {
+                    FinancialPaceManualExpenseVersion version =
+                        FinancialPaceService.ScheduleManualMonthlyExpense(command.Amount);
+                    await MarkCommandApplied(
+                        commandId,
+                        command,
+                        $"Прогноз расходов сохранён: {version.MonthlyExpenseAmount} сом в месяц. " +
+                        $"Начало действия: {version.EffectiveFrom:dd.MM.yyyy HH:mm}.");
                     return;
                 }
 
@@ -5286,6 +5401,7 @@ namespace ClubTimerXbox.Services
             public bool AcceptanceRequired { get; init; }
             public bool AcceptanceCompleted { get; init; }
             public int GamesToday { get; init; }
+            public FinancialPaceDaySnapshot? FinancialPace { get; init; }
             public int BusyPlaces { get; init; }
             public int FreePlaces { get; init; }
             public List<ClubPlace> Places { get; init; } = new List<ClubPlace>();

@@ -33,6 +33,8 @@ internal sealed class EmployeeSalaryRuleTestSuite
         Test("rating financial effect keeps rewards and losses separate", RatingFinancialEffectIsExact);
         Test("club policy changes only future earnings", PolicyChangeIsProspective);
         Test("product bonus ignores employee rating", ProductBonusIgnoresRating);
+        Test("over-plan bonus requires two hours", OverNormBonusRequiresTwoHours);
+        Test("over-plan bonus follows worked hours", OverNormBonusFollowsWorkedHours);
         Test("rating is capped at 120 percent", RatingCap);
         Test("closed month archive detects later changes", ArchiveDetectsTampering);
         Test("raw history deletion waits six months", ArchiveRetentionGate);
@@ -200,6 +202,35 @@ internal sealed class EmployeeSalaryRuleTestSuite
     {
         var settings = Settings(47, 25, 30, 2);
         Equal(20d, EmployeeSalaryRuleEngine.CalculateProductBonus(1000, settings), "product bonus");
+    }
+
+    private void OverNormBonusRequiresTwoHours()
+    {
+        IReadOnlyDictionary<string, int> result = OverNormBonusAllocator.Allocate(
+            500,
+            new[]
+            {
+                new OverNormBonusParticipant("Короткий вход", 1.99),
+                new OverNormBonusParticipant("Сотрудник", 2.0)
+            });
+
+        True(!result.ContainsKey("Короткий вход"), "короткий вход исключён");
+        Equal(500, result["Сотрудник"], "ровно два часа участвуют");
+    }
+
+    private void OverNormBonusFollowsWorkedHours()
+    {
+        IReadOnlyDictionary<string, int> result = OverNormBonusAllocator.Allocate(
+            500,
+            new[]
+            {
+                new OverNormBonusParticipant("Арген", 8),
+                new OverNormBonusParticipant("Мирбек", 2)
+            });
+
+        Equal(400, result["Арген"], "восемь часов");
+        Equal(100, result["Мирбек"], "два часа");
+        Equal(500, result.Values.Sum(), "фонд сохранён полностью");
     }
 
     private void RatingCap()
@@ -784,6 +815,8 @@ internal sealed class BusinessCalendarTestSuite
     {
         Test("Рабочий день меняется ровно в 06:00", BusinessDayBoundary);
         Test("Рабочий месяц меняется 1 числа в 06:00", BusinessMonthBoundary);
+        Test("Постоянный расход плавно растёт с 11 до 1", FinancialPaceExpenseRamp);
+        Test("Финансовый процент сравнивает игры и расходы", FinancialPacePercent);
         Test("Смена делится по рабочим месяцам", ShiftIsSplitAtBoundary);
         Test("Ручные часы не меняют системные часы после теста", ManualClockIsScoped);
         Test("Закрытие месяца не обнуляет наличные и безнал", ContinuousBalancesSurviveClose);
@@ -800,6 +833,7 @@ internal sealed class BusinessCalendarTestSuite
         Test("Отрицательный остаток сотрудника переносится", NegativeEmployeeBalanceSurvivesClose);
         Test("Снятие владельца сначала использует текущий месяц", OwnerWithdrawalUsesCurrentMonthFirst);
         Test("Снятие владельца затем использует переходящий остаток", OwnerWithdrawalThenUsesCarriedBalance);
+        Test("Остаток владельца показывается последней секундой прошлого месяца", OwnerWithdrawalCarryUsesSourceMonthDisplayTime);
         Test("Прошлый месяц снимает только перенесённый остаток", OwnerWithdrawalCarryOnlyUsesPreviousMonth);
         Test("Снятие сверх физически доступной суммы запрещено", OwnerWithdrawalOverBalanceIsBlocked);
 #if DEBUG
@@ -826,6 +860,26 @@ internal sealed class BusinessCalendarTestSuite
             new DateTime(2026, 8, 1, 5, 59, 59)).Key, "до границы");
         Equal("2026-08", BusinessCalendarService.GetBusinessMonth(
             new DateTime(2026, 8, 1, 6, 0, 0)).Key, "на границе");
+    }
+
+    private void FinancialPaceExpenseRamp()
+    {
+        DateTime dayStart = new(2026, 9, 1, 6, 0, 0);
+        Equal(0, FinancialPaceCalculator.CalculateFixedExpenseAccrued(
+            3000, dayStart, new DateTime(2026, 9, 1, 11, 0, 0)), "начало");
+        Equal(1500, FinancialPaceCalculator.CalculateFixedExpenseAccrued(
+            3000, dayStart, new DateTime(2026, 9, 1, 18, 0, 0)), "середина");
+        Equal(3000, FinancialPaceCalculator.CalculateFixedExpenseAccrued(
+            3000, dayStart, new DateTime(2026, 9, 2, 1, 0, 0)), "конец");
+        Equal(3000, FinancialPaceCalculator.CalculateFixedExpenseAccrued(
+            3000, dayStart, new DateTime(2026, 9, 2, 5, 59, 0)), "после графика");
+    }
+
+    private void FinancialPacePercent()
+    {
+        Equal(30, FinancialPaceCalculator.CalculatePercent(2600, 2000), "плюс");
+        Equal(-30, FinancialPaceCalculator.CalculatePercent(1400, 2000), "минус");
+        Equal(0, FinancialPaceCalculator.CalculatePercent(500, 0), "нет знаменателя");
     }
 
     private void ShiftIsSplitAtBoundary()
@@ -1058,6 +1112,45 @@ internal sealed class BusinessCalendarTestSuite
         Equal("2026-08", allocations[1].SourceMonthKey, "месяц остатка");
         Equal(1500, allocations[1].Amount, "часть остатка");
         True(allocations[1].IsCarriedBalance, "переходящий источник");
+    }
+
+    private void OwnerWithdrawalCarryUsesSourceMonthDisplayTime()
+    {
+        var carried = new CashRecord
+        {
+            CreatedAt = new DateTime(2026, 9, 1, 11, 26, 10),
+            Category = "Расходы",
+            ExpenseCategory = "Владелец",
+            AccountingMonthKey = "2026-08"
+        };
+        var current = new CashRecord
+        {
+            CreatedAt = new DateTime(2026, 9, 1, 11, 26, 10),
+            Category = "Расходы",
+            ExpenseCategory = "Владелец",
+            AccountingMonthKey = "2026-09"
+        };
+
+        Equal(
+            new DateTime(2026, 8, 31, 23, 59, 59),
+            CashService.GetOwnerWithdrawalDisplayTime(carried),
+            "дата остатка августа");
+        Equal(
+            current.CreatedAt,
+            CashService.GetOwnerWithdrawalDisplayTime(current),
+            "дата дохода сентября");
+        True(
+            CashService.IsOwnerWithdrawalInPeriod(
+                carried,
+                new DateTime(2026, 8, 1),
+                new DateTime(2026, 9, 1)),
+            "остаток входит в августовскую историю");
+        True(
+            !CashService.IsOwnerWithdrawalInPeriod(
+                carried,
+                new DateTime(2026, 9, 1),
+                new DateTime(2026, 10, 1)),
+            "остаток не дублируется в сентябрьской истории");
     }
 
     private void OwnerWithdrawalOverBalanceIsBlocked()

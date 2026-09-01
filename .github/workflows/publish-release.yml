@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Adds a 10-minute cash-acceptance verification window, keeps cashless reconciliation linked to the correct handover, and publishes exact daily employee earnings for the owner app." `
+            -Notes "Adds financial pace reporting, finalizes over-plan bonuses across the full business day, and preserves prior-month owner withdrawals in their accounting month." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,18 +66,18 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Cash acceptance now has a fixed 10-minute verification window. Repeated
-          cash counts inside that window replace the provisional fact without
-          changing the original handover or extending its deadline.
+          Financial pace now compares game revenue with the day's accrued fixed
+          expenses and employee earnings. The PC publishes current and monthly
+          pace data for the owner app, with an optional manual expense baseline.
 
-          Cashless reconciliation remains linked to the same handover while the
-          window is open. Correction cannot finalize provisional facts early, and
-          the final posting preserves the correct employee responsibility and cash
-          investigation order.
+          Over-plan game-revenue bonuses use the full 06:00-05:59 business day,
+          finalize only after that day closes, and are distributed in proportion
+          to each employee's actual worked hours. Historical days keep their
+          previously approved calculation.
 
-          The PC now publishes the exact daily employee earnings already used in
-          employee statistics, including time and game rating effects and bonuses,
-          so the owner phone app can show the same daily history without recalculating it.
+          Owner withdrawals from a carried prior-month balance remain recorded and
+          displayed in the source accounting month. This prevents duplicate cards
+          and keeps current-month income and reports accurate.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {

@@ -414,6 +414,15 @@ namespace ClubTimerXbox.Services
                 .Sum(record => record.Amount);
         }
 
+        public static bool HasClubExpenseRecordsByPeriod(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            return _records.Any(record =>
+                IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
+                IsClubExpense(record));
+        }
+
         public static int GetSalaryTotalByPeriod(DateTime fromInclusive, DateTime toExclusive)
         {
             return GetSalaryRecordsByPeriod(fromInclusive, toExclusive)
@@ -524,9 +533,40 @@ namespace ClubTimerXbox.Services
                 .Where(record =>
                     record.Category == "Расходы" &&
                     record.ExpenseCategory == "Владелец" &&
-                    IsAccountingRecordInPeriod(record, fromInclusive, toExclusive))
-                .OrderByDescending(record => record.CreatedAt)
+                    IsOwnerWithdrawalInPeriod(record, fromInclusive, toExclusive))
+                .OrderByDescending(GetOwnerWithdrawalDisplayTime)
                 .ToList();
+        }
+
+        public static DateTime GetOwnerWithdrawalDisplayTime(CashRecord record)
+        {
+            if (record.Category != "Расходы" ||
+                record.ExpenseCategory != "Владелец" ||
+                string.IsNullOrWhiteSpace(record.AccountingMonthKey) ||
+                !TryParseMonthKey(record.AccountingMonthKey, out DateTime accountingMonth))
+            {
+                return record.CreatedAt;
+            }
+
+            string physicalMonthKey = BusinessCalendarService
+                .GetBusinessMonth(record.CreatedAt)
+                .Key;
+            if (record.AccountingMonthKey.Equals(
+                    physicalMonthKey,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return record.CreatedAt;
+            }
+
+            return accountingMonth.AddMonths(1).AddSeconds(-1);
+        }
+
+        public static bool IsOwnerWithdrawalInPeriod(
+            CashRecord record,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            return IsAccountingRecordInPeriod(record, fromInclusive, toExclusive);
         }
 
         public static bool IsPriorMonthExpense(CashRecord record, DateTime monthStart)
@@ -585,9 +625,12 @@ namespace ClubTimerXbox.Services
         {
             return _records
                 .Where(record =>
-                    IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
+                    IsRecordInReportPeriod(record, fromInclusive, toExclusive) &&
                     record.Category == category)
-                .OrderByDescending(record => record.CreatedAt)
+                .OrderByDescending(record =>
+                    record.ExpenseCategory == "Владелец"
+                        ? GetOwnerWithdrawalDisplayTime(record)
+                        : record.CreatedAt)
                 .ToList();
         }
 
@@ -653,6 +696,16 @@ namespace ClubTimerXbox.Services
             return occurredAt >= fromInclusive && occurredAt < toExclusive;
         }
 
+        private static bool IsRecordInReportPeriod(
+            CashRecord record,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            return record.Category == "Расходы" && record.ExpenseCategory == "Владелец"
+                ? IsOwnerWithdrawalInPeriod(record, fromInclusive, toExclusive)
+                : IsInBusinessPeriod(record, fromInclusive, toExclusive);
+        }
+
         private static bool IsSalaryRecord(CashRecord record)
         {
             return record.Category == "Расходы" &&
@@ -681,13 +734,11 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            if (IsWholeMonthPeriod(fromInclusive, toExclusive) &&
-                !string.IsNullOrWhiteSpace(record.AccountingMonthKey) &&
+            if (!string.IsNullOrWhiteSpace(record.AccountingMonthKey) &&
                 TryParseMonthKey(record.AccountingMonthKey, out _))
             {
-                return record.AccountingMonthKey.Equals(
-                    fromInclusive.ToString("yyyy-MM"),
-                    StringComparison.OrdinalIgnoreCase);
+                DateTime accountingTime = GetOwnerWithdrawalDisplayTime(record);
+                return accountingTime >= fromInclusive && accountingTime < toExclusive;
             }
 
             return IsInBusinessPeriod(record, fromInclusive, toExclusive);
