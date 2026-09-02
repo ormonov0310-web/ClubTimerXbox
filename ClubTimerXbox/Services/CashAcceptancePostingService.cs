@@ -100,7 +100,10 @@ namespace ClubTimerXbox.Services
             }
 
             if (finalizedAny)
+            {
+                _ = FirebaseSyncService.PushOverviewStateAsync();
                 _ = FirebaseSyncService.PushCurrentStateAsync();
+            }
         }
 
         private static void PostLedger(

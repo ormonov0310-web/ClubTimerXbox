@@ -959,7 +959,7 @@ namespace ClubTimerXbox
                     actualCash,
                     "Повторная проверка налички");
                 ShiftAcceptanceService.AcceptCash();
-                PushCashFactWhileAcceptanceRemainsOpen();
+                PushCashFactToOwner();
 
                 int recheckDifference = actualCash - _expectedCashAmount;
                 MessageBox.Show(
@@ -977,7 +977,7 @@ namespace ClubTimerXbox
             if (CashAcceptanceService.HasAcceptanceKey(acceptanceKey))
             {
                 ShiftAcceptanceService.AcceptCash();
-                PushCashFactWhileAcceptanceRemainsOpen();
+                PushCashFactToOwner();
                 MessageBox.Show(
                     "Наличка по этой передаче смены уже была принята ранее.\n\n" +
                     "Повторная запись и повторный штраф не созданы.",
@@ -1018,7 +1018,7 @@ namespace ClubTimerXbox
             }
 
             ShiftAcceptanceService.AcceptCash();
-            PushCashFactWhileAcceptanceRemainsOpen();
+            PushCashFactToOwner();
 
             string message =
                 "Наличка принята.\n\n" +
@@ -1031,10 +1031,9 @@ namespace ClubTimerXbox
             FinishOrRefreshAfterPartAccepted();
         }
 
-        private static void PushCashFactWhileAcceptanceRemainsOpen()
+        private static void PushCashFactToOwner()
         {
-            if (ShiftAcceptanceService.IsAcceptanceActive())
-                _ = FirebaseSyncService.PushCurrentStateAsync();
+            _ = FirebaseSyncService.PushOverviewStateAsync();
         }
 
         private void ResolveSmallCashlessShortagesAfterCashAcceptance(int actualCash)

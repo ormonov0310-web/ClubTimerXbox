@@ -5,6 +5,7 @@ const {logger, setGlobalOptions} = require("firebase-functions");
 const {onValueCreated, onValueWritten} =
   require("firebase-functions/v2/database");
 const {onSchedule} = require("firebase-functions/v2/scheduler");
+const {buildClubLiveStateData} = require("./live-state-message");
 
 initializeApp();
 setGlobalOptions({region: "europe-west1", maxInstances: 2});
@@ -285,27 +286,10 @@ exports.sendClubLiveState = onValueWritten(
         return;
       }
 
-      const value = (name, fallback = "") =>
-        String(liveState[name] === undefined ? fallback : liveState[name]);
+      const messageData = buildClubLiveStateData(clubId, liveState);
       const response = await getMessaging().sendEachForMulticast({
         fids: targets.map((target) => target.fid),
-        data: {
-          messageType: "club_state",
-          signalType: value("signalType", "heartbeat"),
-          clubId,
-          clubName: value("clubName", "Club Timer"),
-          revision: value("revision", Date.now()),
-          updatedAtUnixMs: value("updatedAtUnixMs", Date.now()),
-          lastHeartbeatAtUnixMs: value("lastHeartbeatAtUnixMs", Date.now()),
-          isOpen: value("isOpen", true),
-          connectionState: value("connectionState", "online"),
-          employeeName: value("employeeName"),
-          busyPlaces: value("busyPlaces", 0),
-          freePlaces: value("freePlaces", 0),
-          gamesToday: value("gamesToday", 0),
-          acceptanceRequired: value("acceptanceRequired", false),
-          acceptanceCompleted: value("acceptanceCompleted", false),
-        },
+        data: messageData,
         android: {
           priority: "normal",
           ttl: 180000,
@@ -317,7 +301,7 @@ exports.sendClubLiveState = onValueWritten(
 
       logger.info("Club live state sent", {
         clubId,
-        signalType: value("signalType", "heartbeat"),
+        signalType: messageData.signalType,
         successCount: response.successCount,
         failureCount: response.failureCount,
       });

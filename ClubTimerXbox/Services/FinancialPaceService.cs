@@ -25,7 +25,7 @@ namespace ClubTimerXbox.Services
                 var version = new FinancialPaceManualExpenseVersion
                 {
                     CreatedAt = now,
-                    EffectiveFrom = BusinessCalendarService.GetBusinessDay(now).EndExclusive,
+                    EffectiveFrom = ResolveManualExpenseEffectiveFrom(now),
                     MonthlyExpenseAmount = monthlyExpenseAmount
                 };
                 _state.ManualExpenseVersions.Add(version);
@@ -128,6 +128,7 @@ namespace ClubTimerXbox.Services
                 FinancialPaceManualExpenseVersion? manual = _state.ManualExpenseVersions
                     .Where(version => version.EffectiveFrom <= month.EndExclusive)
                     .OrderByDescending(version => version.EffectiveFrom)
+                    .ThenByDescending(version => version.CreatedAt)
                     .FirstOrDefault();
                 if (manual != null)
                 {
@@ -168,6 +169,7 @@ namespace ClubTimerXbox.Services
                 FinancialPaceManualExpenseVersion? manual = _state.ManualExpenseVersions
                     .Where(version => version.EffectiveFrom <= dayStart)
                     .OrderByDescending(version => version.EffectiveFrom)
+                    .ThenByDescending(version => version.CreatedAt)
                     .FirstOrDefault();
                 if (manual != null)
                 {
@@ -219,7 +221,7 @@ namespace ClubTimerXbox.Services
             };
         }
 
-        private static Dictionary<string, int> BuildSalaryByDay(
+        internal static Dictionary<string, int> BuildSalaryByDay(
             IReadOnlyDictionary<string, List<AutoSalaryDayEarning>> dailyEarningsByEmployee)
         {
             var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -235,6 +237,11 @@ namespace ClubTimerXbox.Services
             }
 
             return result;
+        }
+
+        internal static DateTime ResolveManualExpenseEffectiveFrom(DateTime now)
+        {
+            return BusinessCalendarService.GetBusinessDay(now).StartInclusive;
         }
 
         private static void AddTimelinePoint(FinancialPaceDaySnapshot day)

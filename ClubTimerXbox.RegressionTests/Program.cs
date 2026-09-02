@@ -816,7 +816,10 @@ internal sealed class BusinessCalendarTestSuite
         Test("Рабочий день меняется ровно в 06:00", BusinessDayBoundary);
         Test("Рабочий месяц меняется 1 числа в 06:00", BusinessMonthBoundary);
         Test("Постоянный расход плавно растёт с 11 до 1", FinancialPaceExpenseRamp);
+        Test("Новая база темпа сразу догоняет текущий час дня", FinancialPaceBaselineStartsToday);
         Test("Финансовый процент сравнивает игры и расходы", FinancialPacePercent);
+        Test("Темп учитывает начисление сотруднику без рабочих часов", FinancialPaceIncludesBonusWithoutHours);
+        Test("Предварительная приёмка сохраняет весь снимок для телефона", CashAcceptanceOwnerSnapshot);
         Test("Смена делится по рабочим месяцам", ShiftIsSplitAtBoundary);
         Test("Ручные часы не меняют системные часы после теста", ManualClockIsScoped);
         Test("Закрытие месяца не обнуляет наличные и безнал", ContinuousBalancesSurviveClose);
@@ -875,11 +878,93 @@ internal sealed class BusinessCalendarTestSuite
             3000, dayStart, new DateTime(2026, 9, 2, 5, 59, 0)), "после графика");
     }
 
+    private void FinancialPaceBaselineStartsToday()
+    {
+        DateTime enteredAt = new(2026, 9, 1, 18, 0, 0);
+        DateTime dayStart = new(2026, 9, 1, 6, 0, 0);
+
+        Equal(
+            dayStart,
+            FinancialPaceService.ResolveManualExpenseEffectiveFrom(enteredAt),
+            "начало действия базы");
+        Equal(
+            600,
+            FinancialPaceCalculator.CalculateFixedExpenseAccrued(
+                1200,
+                dayStart,
+                enteredAt),
+            "накопление к 18:00");
+    }
+
     private void FinancialPacePercent()
     {
         Equal(30, FinancialPaceCalculator.CalculatePercent(2600, 2000), "плюс");
         Equal(-30, FinancialPaceCalculator.CalculatePercent(1400, 2000), "минус");
         Equal(0, FinancialPaceCalculator.CalculatePercent(500, 0), "нет знаменателя");
+    }
+
+    private void FinancialPaceIncludesBonusWithoutHours()
+    {
+        DateTime businessDate = new(2026, 9, 1);
+        var dailyEarnings = new Dictionary<string, List<AutoSalaryDayEarning>>
+        {
+            ["Мирбек"] = new()
+            {
+                new AutoSalaryDayEarning { Date = businessDate, TimeAmount = 498 }
+            },
+            ["Сталбек"] = new()
+            {
+                new AutoSalaryDayEarning { Date = businessDate, TimeAmount = 669 }
+            },
+            ["Тест"] = new()
+            {
+                new AutoSalaryDayEarning { Date = businessDate, OtherBonusAmount = 324 }
+            }
+        };
+
+        Dictionary<string, int> salaryByDay =
+            FinancialPaceService.BuildSalaryByDay(dailyEarnings);
+        Equal(1491, salaryByDay["2026-09-01"], "TeleCom 01.09");
+    }
+
+    private void CashAcceptanceOwnerSnapshot()
+    {
+        DateTime createdAt = new(2026, 9, 2, 11, 30, 0);
+        var item = new CashAcceptanceItem
+        {
+            AcceptanceKey = "acceptance-attempt-1",
+            RootAcceptanceKey = "acceptance-root",
+            CheckedByEmployeeName = "Мирбек",
+            ResponsibleEmployeeName = "Сталбек",
+            ExpectedCashAmount = 3079,
+            ActualCashAmount = 2901,
+            Difference = -178,
+            IsProvisional = true,
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt.AddSeconds(1),
+            FinalizeAt = createdAt.AddMinutes(10),
+            PendingCashlessVerification = new PendingCashlessVerification()
+        };
+
+        Dictionary<string, object?> payload =
+            FirebaseSyncService.BuildCashAcceptancePayload(item)
+            ?? throw new Exception("Снимок приёмки не создан.");
+        Equal("acceptance-root", payload["rootAcceptanceKey"] as string, "корень передачи");
+        Equal(2901, (int)payload["actualAmount"]!, "факт налички");
+        Equal(-178, (int)payload["difference"]!, "разница налички");
+        Equal(true, (bool)payload["isProvisional"]!, "льготный период");
+        Equal(true, (bool)payload["hasPendingCashlessVerification"]!, "отложенная сверка");
+        Equal(
+            new DateTimeOffset(item.FinalizeAt.Value).ToUnixTimeMilliseconds(),
+            (long)payload["finalizeAtUnixMs"]!,
+            "срок обратного отсчёта");
+
+        string firstSignature = FirebaseSyncService.BuildCashAcceptanceSignature(item);
+        item.ActualCashAmount = 2921;
+        item.Difference = -158;
+        item.UpdatedAt = item.UpdatedAt.AddMinutes(1);
+        string secondSignature = FirebaseSyncService.BuildCashAcceptanceSignature(item);
+        True(firstSignature != secondSignature, "повторный пересчёт меняет снимок");
     }
 
     private void ShiftIsSplitAtBoundary()

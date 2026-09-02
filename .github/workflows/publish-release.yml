@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Adds financial pace reporting, finalizes over-plan bonuses across the full business day, and preserves prior-month owner withdrawals in their accounting month." `
+            -Notes "Delivers provisional cash acceptance immediately and keeps daily financial pace synchronized across owner phone cards and widgets." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,18 +66,18 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Financial pace now compares game revenue with the day's accrued fixed
-          expenses and employee earnings. The PC publishes current and monthly
-          pace data for the owner app, with an optional manual expense baseline.
+          The first cash-acceptance fact now reaches the owner phone immediately,
+          including the provisional ten-minute review period. Rechecks update the
+          same acceptance instead of waiting for the full club archive.
 
-          Over-plan game-revenue bonuses use the full 06:00-05:59 business day,
-          finalize only after that day closes, and are distributed in proportion
-          to each employee's actual worked hours. Historical days keep their
-          previously approved calculation.
+          Daily financial pace is included in the compact club state used by game
+          revenue. Phone cards and widgets retain the latest valid daily value,
+          while incomplete push messages can no longer replace it with zero.
 
-          Owner withdrawals from a carried prior-month balance remain recorded and
-          displayed in the source accounting month. This prevents duplicate cards
-          and keeps current-month income and reports accurate.
+          A manually entered expense baseline applies to the current business day
+          immediately and catches up to the actual time already elapsed. Monthly
+          pace remains available in details but is never shown temporarily on the
+          main daily card.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {

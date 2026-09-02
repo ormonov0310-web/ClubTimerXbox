@@ -81,6 +81,14 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        public static Task<bool> PushOverviewStateAsync()
+        {
+            if (_lastKnownPlaces.Count == 0)
+                return Task.FromResult(false);
+
+            return PushOverviewStateAsync(_lastKnownPlaces.ToList());
+        }
+
         public static async Task<bool> PushHeartbeatAsync(List<ClubPlace> places)
         {
             if (!FirebaseConnectionService.CanSync)
@@ -164,6 +172,8 @@ namespace ClubTimerXbox.Services
         public static string BuildOverviewSignature(IReadOnlyList<ClubPlace> places)
         {
             var latestPayment = PaymentService.Records.LastOrDefault();
+            CashAcceptanceItem? latestCashAcceptance =
+                GetLatestCashAcceptanceForCurrentBusinessMonth();
             return string.Join(
                 "|",
                 EmployeeService.CurrentEmployee?.Name ?? "",
@@ -172,6 +182,7 @@ namespace ClubTimerXbox.Services
                 PaymentService.Records.Count,
                 latestPayment?.Id.ToString() ?? "",
                 latestPayment?.TotalAmount ?? 0,
+                BuildCashAcceptanceSignature(latestCashAcceptance),
                 string.Join(
                     ";",
                     places
@@ -179,6 +190,79 @@ namespace ClubTimerXbox.Services
                         .Select(place => $"{place.Name}:{place.IsBusy}")
                 )
             );
+        }
+
+        internal static string BuildCashAcceptanceSignature(CashAcceptanceItem? item)
+        {
+            if (item == null)
+                return "";
+
+            DateTime observedAt = CashAcceptanceTimelinePolicy.GetObservationTime(item);
+            return string.Join(
+                ":",
+                item.Id,
+                item.RootAcceptanceKey,
+                item.AcceptanceKey,
+                item.IsProvisional,
+                item.ExpectedCashAmount,
+                item.ActualCashAmount,
+                item.Difference,
+                observedAt.Ticks,
+                item.FinalizeAt?.Ticks ?? 0,
+                item.PendingCashlessVerification != null
+            );
+        }
+
+        internal static Dictionary<string, object?>? BuildCashAcceptancePayload(
+            CashAcceptanceItem? item)
+        {
+            if (item == null)
+                return null;
+
+            DateTime observedAt = CashAcceptanceTimelinePolicy.GetObservationTime(item);
+            return new Dictionary<string, object?>
+            {
+                ["id"] = item.Id.ToString(),
+                ["acceptanceKey"] = item.AcceptanceKey,
+                ["rootAcceptanceKey"] = item.RootAcceptanceKey,
+                ["checkedByEmployeeName"] = item.CheckedByEmployeeName,
+                ["responsibleEmployeeName"] = item.ResponsibleEmployeeName,
+                ["expectedAmount"] = item.ExpectedCashAmount,
+                ["actualAmount"] = item.ActualCashAmount,
+                ["difference"] = item.Difference,
+                ["isProvisional"] = item.IsProvisional,
+                ["createdAt"] = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                ["createdAtUnixMs"] = new DateTimeOffset(item.CreatedAt)
+                    .ToUnixTimeMilliseconds(),
+                ["updatedAt"] = observedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                ["updatedAtUnixMs"] = new DateTimeOffset(observedAt)
+                    .ToUnixTimeMilliseconds(),
+                ["finalizeAt"] = item.FinalizeAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
+                ["finalizeAtUnixMs"] = item.FinalizeAt.HasValue
+                    ? new DateTimeOffset(item.FinalizeAt.Value).ToUnixTimeMilliseconds()
+                    : 0,
+                ["hasPendingCashlessVerification"] =
+                    item.IsProvisional && item.PendingCashlessVerification != null
+            };
+        }
+
+        private static CashAcceptanceItem? GetLatestCashAcceptanceForCurrentBusinessMonth()
+        {
+            var month = BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow);
+            CashAcceptanceItem? withinMonth = CashAcceptanceService.GetLatestObservedAcceptance(
+                month.StartInclusive,
+                month.EndExclusive);
+            CashAcceptanceItem? unfinalized = CashAcceptanceService.GetLatestUnfinalized();
+
+            if (withinMonth == null)
+                return unfinalized;
+            if (unfinalized == null)
+                return withinMonth;
+
+            return CashAcceptanceTimelinePolicy.GetObservationTime(unfinalized) >=
+                   CashAcceptanceTimelinePolicy.GetObservationTime(withinMonth)
+                ? unfinalized
+                : withinMonth;
         }
 
         private static OverviewSnapshot BuildOverviewSnapshot(
@@ -206,6 +290,7 @@ namespace ClubTimerXbox.Services
                 AcceptanceCompleted = ShiftAcceptanceService.Current.IsCompleted,
                 GamesToday = gamesToday,
                 FinancialPace = financialToday,
+                LatestCashAcceptance = GetLatestCashAcceptanceForCurrentBusinessMonth(),
                 BusyPlaces = placeList.Count(place => place.IsBusy),
                 FreePlaces = placeList.Count(place => !place.IsBusy),
                 Places = placeList
@@ -242,7 +327,10 @@ namespace ClubTimerXbox.Services
                 },
                 ["cash"] = new
                 {
-                    gamesToday = snapshot.GamesToday
+                    gamesToday = snapshot.GamesToday,
+                    latestCashAcceptancePresent = snapshot.LatestCashAcceptance != null,
+                    latestCashAcceptance = BuildCashAcceptancePayload(
+                        snapshot.LatestCashAcceptance)
                 },
                 ["financialPace"] = snapshot.FinancialPace == null
                     ? null
@@ -286,6 +374,9 @@ namespace ClubTimerXbox.Services
                 ["gamesToday"] = snapshot.GamesToday,
                 ["financialPacePercent"] = snapshot.FinancialPace?.Percent ?? 0,
                 ["financialPaceAvailable"] = snapshot.FinancialPace?.HasExpenseBaseline == true,
+                ["cashAcceptancePresent"] = snapshot.LatestCashAcceptance != null,
+                ["latestCashAcceptance"] = BuildCashAcceptancePayload(
+                    snapshot.LatestCashAcceptance),
                 ["acceptanceRequired"] = snapshot.AcceptanceRequired,
                 ["acceptanceCompleted"] = snapshot.AcceptanceCompleted
             };
@@ -400,9 +491,7 @@ namespace ClubTimerXbox.Services
                 int? actualCashBalanceMonth = cashBalanceSummary.ActualCashBalance;
                 int? programCashBalanceMonth = cashBalanceSummary.ProgramCashBalance;
                 var latestObservedCashAcceptance =
-                    CashAcceptanceService.GetLatestObservedAcceptance(
-                        monthStart,
-                        nextMonthStart);
+                    GetLatestCashAcceptanceForCurrentBusinessMonth();
                 bool cashlessVerifiedMonth = CashlessService.Records.Any(record =>
                     record.Date >= monthStart.Date &&
                     record.Date < nextMonthStart.Date);
@@ -868,41 +957,8 @@ namespace ClubTimerXbox.Services
                         incomeCashMonth = incomePaymentMonth.CashAmount,
                         incomeMBankMonth = incomePaymentMonth.MBankAmount,
                         cashlessMonth,
-                        latestCashAcceptance = latestObservedCashAcceptance == null
-                            ? null
-                            : new
-                            {
-                                acceptanceKey = latestObservedCashAcceptance.AcceptanceKey,
-                                rootAcceptanceKey = latestObservedCashAcceptance.RootAcceptanceKey,
-                                checkedByEmployeeName = latestObservedCashAcceptance.CheckedByEmployeeName,
-                                responsibleEmployeeName = latestObservedCashAcceptance.ResponsibleEmployeeName,
-                                expectedAmount = latestObservedCashAcceptance.ExpectedCashAmount,
-                                actualAmount = latestObservedCashAcceptance.ActualCashAmount,
-                                difference = latestObservedCashAcceptance.Difference,
-                                isProvisional = latestObservedCashAcceptance.IsProvisional,
-                                createdAt = latestObservedCashAcceptance.CreatedAt
-                                    .ToString("yyyy-MM-dd HH:mm:ss"),
-                                createdAtUnixMs = new DateTimeOffset(
-                                        latestObservedCashAcceptance.CreatedAt)
-                                    .ToUnixTimeMilliseconds(),
-                                updatedAt = (latestObservedCashAcceptance.UpdatedAt == default
-                                    ? latestObservedCashAcceptance.CreatedAt
-                                    : latestObservedCashAcceptance.UpdatedAt)
-                                    .ToString("yyyy-MM-dd HH:mm:ss"),
-                                updatedAtUnixMs = new DateTimeOffset(
-                                        CashAcceptanceTimelinePolicy.GetObservationTime(
-                                            latestObservedCashAcceptance))
-                                    .ToUnixTimeMilliseconds(),
-                                finalizeAt = latestObservedCashAcceptance.FinalizeAt?
-                                    .ToString("yyyy-MM-dd HH:mm:ss") ?? "",
-                                finalizeAtUnixMs = latestObservedCashAcceptance.FinalizeAt.HasValue
-                                    ? new DateTimeOffset(latestObservedCashAcceptance.FinalizeAt.Value)
-                                        .ToUnixTimeMilliseconds()
-                                    : 0,
-                                hasPendingCashlessVerification =
-                                    latestObservedCashAcceptance.IsProvisional &&
-                                    latestObservedCashAcceptance.PendingCashlessVerification != null
-                            },
+                        latestCashAcceptance = BuildCashAcceptancePayload(
+                            latestObservedCashAcceptance),
                         actualCashBalanceMonth,
                         programCashBalanceMonth = effectiveProgramCashBalanceMonth,
                         actualCashlessBalanceMonth,
@@ -3516,7 +3572,7 @@ namespace ClubTimerXbox.Services
                         commandId,
                         command,
                         $"Прогноз расходов сохранён: {version.MonthlyExpenseAmount} сом в месяц. " +
-                        $"Начало действия: {version.EffectiveFrom:dd.MM.yyyy HH:mm}.");
+                        "Текущий рабочий день пересчитан сразу по фактическому времени.");
                     return;
                 }
 
@@ -5402,6 +5458,7 @@ namespace ClubTimerXbox.Services
             public bool AcceptanceCompleted { get; init; }
             public int GamesToday { get; init; }
             public FinancialPaceDaySnapshot? FinancialPace { get; init; }
+            public CashAcceptanceItem? LatestCashAcceptance { get; init; }
             public int BusyPlaces { get; init; }
             public int FreePlaces { get; init; }
             public List<ClubPlace> Places { get; init; } = new List<ClubPlace>();
