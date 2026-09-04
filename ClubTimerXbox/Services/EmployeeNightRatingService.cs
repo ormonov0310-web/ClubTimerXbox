@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using ClubTimerXbox.Models;
 
 namespace ClubTimerXbox.Services
 {
@@ -14,40 +15,30 @@ namespace ClubTimerXbox.Services
                 return;
 
             DateTime oneAm = now.Date.AddHours(1);
-            ApplyLateClientReward(now, oneAm);
+            ApplyLateClientReward(now);
             ApplyUnattendedPcPenalty(now, oneAm);
         }
 
-        private static void ApplyLateClientReward(DateTime now, DateTime oneAm)
+        private static void ApplyLateClientReward(DateTime now)
         {
-            var qualifyingSession = ActionLogService.GetAllGameSessions()
-                .Where(session =>
-                    IsQualifiedLateSession(
-                        session.StartedAt,
-                        session.ClosedAt ?? now,
-                        oneAm))
-                .OrderBy(session => session.StartedAt)
-                .FirstOrDefault();
-            if (qualifyingSession == null)
+            BusinessPeriodRange businessDay = BusinessCalendarService.GetBusinessDay(now);
+            LateActiveSessionReward? reward = LateActiveSessionRewardPolicy.FindFirstReward(
+                ActionLogService.GetAllGameSessions(),
+                ActionLogService.GetAllShifts(),
+                businessDay.StartInclusive,
+                businessDay.EndExclusive,
+                now);
+            if (reward == null)
                 return;
 
-            var shift = ActionLogService.GetAllShifts()
-                .Where(item =>
-                    item.StartedAt <= oneAm &&
-                    (item.ClosedAt ?? now) > oneAm)
-                .OrderByDescending(item => item.StartedAt)
-                .FirstOrDefault();
-            if (shift == null || string.IsNullOrWhiteSpace(shift.EmployeeName))
-                return;
-
-            string nightKey = oneAm.ToString("yyyy-MM-dd");
+            string nightKey = reward.OneAm.ToString("yyyy-MM-dd");
             EmployeeRatingService.AddRuleEvent(
-                shift.EmployeeName,
+                reward.EmployeeName,
                 "TIME_LATE_CLIENT_REWARD",
                 $"late-client-rating:{nightKey}",
                 "LateActiveSession",
-                $"В 01:00 клиент играл не менее 20 минут. Место: {qualifyingSession.PlaceName}.",
-                oneAm);
+                LateActiveSessionRewardPolicy.BuildDescription(reward),
+                reward.QualifiedAt);
         }
 
         private static void ApplyUnattendedPcPenalty(DateTime now, DateTime oneAm)

@@ -1033,7 +1033,7 @@ namespace ClubTimerXbox
 
         private static void PushCashFactToOwner()
         {
-            _ = FirebaseSyncService.PushOverviewStateAsync();
+            _ = FirebaseSyncService.PushCashAcceptanceStateAsync();
         }
 
         private void ResolveSmallCashlessShortagesAfterCashAcceptance(int actualCash)

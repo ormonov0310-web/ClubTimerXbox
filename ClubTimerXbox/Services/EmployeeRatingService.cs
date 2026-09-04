@@ -38,6 +38,12 @@ namespace ClubTimerXbox.Services
                     changed = true;
                 }
 
+                if (State.CashExtraAcceptanceRewardsActivatedAt == default)
+                {
+                    State.CashExtraAcceptanceRewardsActivatedAt = ClubClock.Current.LocalNow;
+                    changed = true;
+                }
+
                 foreach (var employee in EmployeeService.GetAllEmployees())
                 {
                     if (EnsureProfile(employee))
@@ -105,26 +111,18 @@ namespace ClubTimerXbox.Services
             lock (Gate)
             {
                 bool changed = false;
-                foreach (var contribution in CashReconciliationService.Items
-                             .Where(item => item.Kind == CashReconciliationKind.CashExtra)
-                             .SelectMany(item => item.ExtraContributions ??
-                                 new List<CashExtraContribution>())
-                             .Where(item =>
-                                 item.Origin == CashReconciliationOrigin.CashAcceptance &&
-                                 item.Stage == CashReconciliationStage.Ready &&
-                                 item.Amount > 0 &&
-                                 !string.IsNullOrWhiteSpace(item.EmployeeName)))
+                foreach (var reward in CashAcceptanceExtraRewardPolicy.FindCashRewards(
+                             CashReconciliationService.Items,
+                             State.CashExtraAcceptanceRewardsActivatedAt))
                 {
-                    string sourceId = "cash-extra:" + contribution.Id.ToString("N");
-                    if (State.Events.Any(item => item.SourceId.Equals(
-                            sourceId,
-                            StringComparison.OrdinalIgnoreCase)))
-                    {
-                        continue;
-                    }
-
-                    var employee = EmployeeService.FindByName(contribution.EmployeeName);
+                    var employee = EmployeeService.FindByName(reward.EmployeeName);
                     if (employee == null)
+                        continue;
+
+                    string sourceId = CashAcceptanceExtraRewardPolicy.BuildSourceId(
+                        "REVENUE_CONFIRMED_EXTRA", reward.InvestigationId, employee);
+                    if (CashAcceptanceExtraRewardPolicy.HasReward(
+                            State.Events, sourceId, employee, reward.LegacySourceIds))
                         continue;
 
                     AddRuleEventUnsafe(
@@ -133,7 +131,7 @@ namespace ClubTimerXbox.Services
                         sourceId,
                         "ConfirmedCashExtra",
                         "Подтверждённый излишек",
-                        $"После сверки безнала подтверждён излишек: {contribution.Amount} сом.",
+                        $"После сверки безнала подтверждён излишек: {reward.Amount} сом.",
                         ClubClock.Current.LocalNow);
                     changed = true;
                 }
@@ -141,17 +139,15 @@ namespace ClubTimerXbox.Services
                 foreach (var reward in FindConfirmedShiftExtraRewards(
                              CashReconciliationService.Items))
                 {
-                    string sourceId =
-                        "confirmed-shift-extra:" + reward.InvestigationId.ToString("N");
-                    if (State.Events.Any(item => item.SourceId.Equals(
-                            sourceId,
-                            StringComparison.OrdinalIgnoreCase)))
-                    {
-                        continue;
-                    }
-
                     var employee = EmployeeService.FindByName(reward.EmployeeName);
                     if (employee == null)
+                        continue;
+
+                    string sourceId = CashAcceptanceExtraRewardPolicy.BuildSourceId(
+                        "TIME_CONFIRMED_SHIFT_EXTRA", reward.InvestigationId, employee);
+                    if (CashAcceptanceExtraRewardPolicy.HasReward(
+                            State.Events, sourceId, employee,
+                            new[] { "confirmed-shift-extra:" + reward.InvestigationId.ToString("N") }))
                         continue;
 
                     AddRuleEventUnsafe(

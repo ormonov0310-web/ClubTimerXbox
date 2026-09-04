@@ -324,8 +324,8 @@ namespace ClubTimerXbox.Services
             Current.ProductsAccepted = true;
             Current.ProductsAcceptedAt = ClubClock.Current.LocalNow;
 
-            TryComplete();
             ScheduleProvisionalCashFinalization();
+            TryComplete();
 
             if (isProductsCorrection)
             {
@@ -360,8 +360,8 @@ namespace ClubTimerXbox.Services
             Current.CashAcceptedAt = acceptedAt;
             CashAcceptanceRecountPolicy.Clear(Current);
 
-            TryComplete();
             ScheduleProvisionalCashFinalization();
+            TryComplete();
 
             if (isCashCorrection)
             {

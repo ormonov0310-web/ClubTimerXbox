@@ -43,8 +43,22 @@ internal sealed class EmployeeSalaryRuleTestSuite
         Test("overlapping reward and penalty use their net value", RewardAndPenaltyNet);
         Test("positive automatic ratings last 50 percent longer", PositiveRuleDurationsAreExtended);
         Test("confirmed shift extra rewards all allowed cash combinations", ConfirmedShiftExtraQualification);
+        Test("three separate same-day acceptances earn three extra rewards", ThreeSameDayExtraRewards);
+        Test("replayed cash acceptance and verification keep one extra reward", ReplayedExtraReward);
+        Test("covered shortage plus fifty rewards the outgoing employee", CoveredShortageExtraReward);
+        Test("cash extra waits for its linked cashless verification", ExtraRewardWaitsForVerification);
+        Test("cash extra parts share one acceptance reward", CashExtraPartsShareOneReward);
+        Test("extra reward identity includes employee acceptance and rule", ExtraRewardIdentityScope);
+        Test("cashless-first pool still grants its cash acceptance reward", CashlessFirstPoolReward);
+        Test("spent legacy reward prevents a new award for the same acceptance", SpentLegacyExtraReward);
+        Test("cancelled and expired extra awards cannot be replayed", EndedExtraAwardsDoNotReplay);
+        Test("legacy time reward blocks the new source key", LegacyTimeRewardBlocksReplay);
+        Test("employee rename preserves the acceptance reward key", ExtraRewardSurvivesRename);
+        Test("extra reward state survives restart without changing past awards", ExtraRewardStateSurvivesRestart);
+        Test("mixed pool fix does not backfill old missing awards", MixedPoolRewardDoesNotBackfill);
         Test("opening penalty uses current 50 som steps", OpeningPenaltySteps);
-        Test("one-minute late session does not earn bonus", LateSessionRequiresTwentyMinutes);
+        Test("late-session reward follows 20/30 minute boundaries", LateSessionRewardBoundaries);
+        Test("late-session reward is issued once to the first employee", LateSessionRewardHasOneWinner);
         Test("unattended timer follows 01:00 and last client", UnattendedTimerFollowsLastClient);
         Test("expired TV keeps five complete grace minutes", ExpiredTvGraceBoundary);
         Test("expired TV charges one som per completed late minute", ExpiredTvMinuteCharge);
@@ -289,7 +303,7 @@ internal sealed class EmployeeSalaryRuleTestSuite
             ["TIME_FIRST_OPEN_LATE"] = (2, TimeSpan.FromHours(24)),
             ["TIME_PC_LEFT_UNATTENDED"] = (2, TimeSpan.FromDays(4)),
             ["TIME_EXPIRED_TV_UNATTENDED"] = (2, TimeSpan.FromDays(2)),
-            ["TIME_LATE_CLIENT_REWARD"] = (4, TimeSpan.FromDays(3)),
+            ["TIME_LATE_CLIENT_REWARD"] = (5, TimeSpan.FromDays(3)),
             ["TIME_CONFIRMED_SHIFT_EXTRA"] = (3, TimeSpan.FromHours(36)),
             ["REVENUE_CONFIRMED_LOSS_SMALL"] = (2, TimeSpan.FromDays(4)),
             ["REVENUE_CONFIRMED_LOSS_LARGE"] = (2, TimeSpan.FromDays(4)),
@@ -405,6 +419,342 @@ internal sealed class EmployeeSalaryRuleTestSuite
         return EmployeeRatingService.FindConfirmedShiftExtraRewards(items);
     }
 
+    private void ThreeSameDayExtraRewards()
+    {
+        var items = new List<CashReconciliationItem>();
+        var rule = EmployeeRatingRuleCatalog.Get("TIME_CONFIRMED_SHIFT_EXTRA");
+        for (int count = 1; count <= 3; count++)
+        {
+            DateTime acceptedAt = Start.AddHours(count * 2);
+            RecordExtraRewardAcceptance(items, acceptedAt, 50, $"same-day-cash-{count}");
+            RecordExtraRewardVerification(items, acceptedAt.AddMinutes(10), 0,
+                $"same-day-cashless-{count}");
+            var rewards = EmployeeRatingService.FindConfirmedShiftExtraRewards(items);
+            Equal(count, rewards.Count, "one reward for each distinct acceptance");
+            Equal(count, rewards.Select(item => item.InvestigationId).Distinct().Count(),
+                "distinct sources");
+            True(rewards.All(item => item.EmployeeName == "Employee 1"), "same employee");
+            var events = rewards.Select(reward => Event(
+                rule.Branch, 100 + rule.ChangePercent, reward.ConfirmedAt,
+                reward.ConfirmedAt.Add(rule.Duration), rule.Direction));
+            Equal(100 + count * 3, EmployeeSalaryRuleEngine.ResolveRating(
+                Profile(100, 100), events, EmployeeRatingBranch.Time,
+                acceptedAt.AddMinutes(11)), "same-day rewards add up");
+        }
+    }
+
+    private void ReplayedExtraReward()
+    {
+        var items = new List<CashReconciliationItem>();
+        RecordExtraRewardAcceptance(items, Start, 50, "replayed-cash");
+        RecordExtraRewardVerification(items, Start.AddMinutes(10), 0, "replayed-cashless");
+        var original = EmployeeRatingService.FindConfirmedShiftExtraRewards(items).Single();
+        int originalCount = items.Count;
+
+        RecordExtraRewardAcceptance(items, Start.AddMinutes(20), 50, "replayed-cash");
+        RecordExtraRewardVerification(items, Start.AddMinutes(21), 0, "replayed-cashless");
+        Equal(originalCount, items.Count, "replayed commands do not create new sources");
+        var restored = JsonSerializer.Deserialize<List<CashReconciliationItem>>(
+            JsonSerializer.Serialize(items))!;
+        var rewards = EmployeeRatingService.FindConfirmedShiftExtraRewards(restored);
+        Equal(1, rewards.Count, "one reward after replay and JSON reload");
+        Equal(original.InvestigationId, rewards[0].InvestigationId, "stable deduplication key");
+        Equal(original.ConfirmedAt, rewards[0].ConfirmedAt, "original confirmation time");
+    }
+
+    private void CoveredShortageExtraReward()
+    {
+        foreach (var example in new[]
+        {
+            (Cash: -100, Cashless: 150, Rewards: 1),
+            (Cash: -100, Cashless: 149, Rewards: 0),
+            (Cash: -101, Cashless: 151, Rewards: 0),
+            (Cash: -178, Cashless: 228, Rewards: 0)
+        })
+        {
+            var items = new List<CashReconciliationItem>();
+            RecordExtraRewardAcceptance(items, Start, example.Cash, "covered-cash");
+            var result = RecordExtraRewardVerification(items, Start.AddMinutes(10),
+                example.Cashless, "covered-cashless");
+            Equal(-example.Cash, result.PairedAmount, "full payment-type correction");
+            Equal(example.Cash + example.Cashless, result.Breakdown, "remaining real extra");
+            Equal(0, result.Assignments.Count, "covered shortage creates no penalty");
+            var rewards = EmployeeRatingService.FindConfirmedShiftExtraRewards(items);
+            Equal(example.Rewards, rewards.Count, "cash-shortage limit and extra threshold");
+            if (rewards.Count > 0)
+            {
+                Equal("Employee 1", rewards[0].EmployeeName, "outgoing employee receives reward");
+                Equal(50, rewards[0].NetExtraAmount, "extra after covering the shortage");
+            }
+        }
+    }
+
+    private void ExtraRewardWaitsForVerification()
+    {
+        var items = new List<CashReconciliationItem>();
+        RecordExtraRewardAcceptance(items, Start, 100, "pending-cash");
+        Equal(0, EmployeeRatingService.FindConfirmedShiftExtraRewards(items).Count,
+            "cash alone does not qualify");
+        RecordExtraRewardVerification(items, Start.AddMinutes(10), 0, "pending-cashless");
+        Equal(1, EmployeeRatingService.FindConfirmedShiftExtraRewards(items).Count,
+            "linked verification confirms reward");
+    }
+
+    private static CashAccountingResult RecordExtraRewardAcceptance(
+        List<CashReconciliationItem> items, DateTime at, int difference, string operationId)
+    {
+        return CashConstitutionEngine.RecordCashAcceptance(
+            items, new DateTime(2026, 8, 1, 6, 0, 0), new DateTime(2026, 9, 1, 6, 0, 0),
+            at, "Employee 2", "Employee 1", 1000, 1000 + difference,
+            "Extra reward audit", operationId);
+    }
+
+    private static CashAccountingResult RecordExtraRewardVerification(
+        List<CashReconciliationItem> items, DateTime at, int difference, string operationId)
+    {
+        return CashConstitutionEngine.RecordCashlessVerification(
+            items, new DateTime(2026, 8, 1, 6, 0, 0), new DateTime(2026, 9, 1, 6, 0, 0),
+            at, 2000, 2000 + difference, "Employee 1", "Extra reward audit", operationId);
+    }
+
+    private void CashExtraPartsShareOneReward()
+    {
+        var employee = new Employee { EmployeeId = "emp_1", Name = "Employee 1" };
+        var items = new List<CashReconciliationItem>();
+        RecordExtraRewardAcceptance(items, Start, 50, "one-acceptance");
+        RecordExtraRewardVerification(items, Start.AddMinutes(10), 0, "one-verification");
+        var pool = items.Single(item => item.ExtraContributions.Count > 0);
+        var original = pool.ExtraContributions.Single();
+        var history = new List<EmployeeRatingEvent>();
+        ApplyCashExtraTestRewards(items, history, employee, Start.AddMinutes(10));
+        Equal(1, history.Count, "first award");
+        string before = JsonSerializer.Serialize(history);
+
+        original.OriginalAmount = 25;
+        original.Amount = 25;
+        pool.ExtraContributions.Add(new CashExtraContribution
+        {
+            InvestigationId = original.InvestigationId,
+            EmployeeName = original.EmployeeName,
+            Kind = CashReconciliationKind.CashExtra,
+            Origin = CashReconciliationOrigin.CashAcceptance,
+            Stage = CashReconciliationStage.Ready,
+            CreatedAt = Start.AddMinutes(11),
+            OriginalAmount = 25,
+            Amount = 25
+        });
+        var rewards = CashAcceptanceExtraRewardPolicy.FindCashRewards(items, Start);
+        Equal(1, rewards.Count, "one candidate despite two contribution IDs");
+        Equal(50, rewards.Single().Amount, "the parts conserve the same extra");
+        ApplyCashExtraTestRewards(items, history, employee, Start.AddMinutes(12));
+        Equal(before, JsonSerializer.Serialize(history), "repeat neither rewards nor extends duration");
+
+        RecordExtraRewardAcceptance(items, Start.AddHours(2), 50, "another-acceptance");
+        RecordExtraRewardVerification(items, Start.AddHours(2).AddMinutes(10), 0,
+            "another-verification");
+        ApplyCashExtraTestRewards(items, history, employee, Start.AddHours(2).AddMinutes(10));
+        Equal(2, history.Count, "another same-day acceptance can earn a new award");
+    }
+
+    private void ExtraRewardIdentityScope()
+    {
+        var employee = new Employee { EmployeeId = "emp_1", Name = "Employee 1" };
+        var second = new Employee { EmployeeId = "emp_2", Name = "Employee 2" };
+        Guid acceptance = Guid.NewGuid();
+        string source = CashAcceptanceExtraRewardPolicy.BuildSourceId(
+            "REVENUE_CONFIRMED_EXTRA", acceptance, employee);
+        var sources = new[]
+        {
+            source,
+            CashAcceptanceExtraRewardPolicy.BuildSourceId("REVENUE_CONFIRMED_EXTRA", acceptance, second),
+            CashAcceptanceExtraRewardPolicy.BuildSourceId("TIME_CONFIRMED_SHIFT_EXTRA", acceptance, employee),
+            CashAcceptanceExtraRewardPolicy.BuildSourceId("REVENUE_CONFIRMED_EXTRA", Guid.NewGuid(), employee)
+        };
+        Equal(4, sources.Distinct().Count(), "rule employee and acceptance are independent");
+        var history = new[] { new EmployeeRatingEvent { SourceId = source, EmployeeId = employee.EmployeeId } };
+        True(CashAcceptanceExtraRewardPolicy.HasReward(history, source, employee, Array.Empty<string>()),
+            "same acceptance same employee same rule is blocked");
+        True(!CashAcceptanceExtraRewardPolicy.HasReward(history, sources[1], second, Array.Empty<string>()),
+            "one employee does not consume another employee's award");
+        True(!CashAcceptanceExtraRewardPolicy.HasReward(history, sources[2], employee, Array.Empty<string>()),
+            "revenue reward does not consume the separate time rule");
+    }
+
+    private void CashlessFirstPoolReward()
+    {
+        var items = new List<CashReconciliationItem>();
+        RecordExtraRewardVerification(items, Start, 100, "cashless-pool-first");
+        RecordExtraRewardAcceptance(items, Start.AddHours(1), 50, "cash-added-later");
+        Equal(0, CashAcceptanceExtraRewardPolicy.FindCashRewards(items, Start).Count,
+            "the new cash contribution still waits for verification");
+        RecordExtraRewardVerification(items, Start.AddHours(1).AddMinutes(10), 0, "cash-confirmed-later");
+        Equal(CashReconciliationKind.CashlessExtra,
+            items.Single(item => item.ExtraContributions.Count > 0).Kind, "pool is still cashless-first");
+        var reward = CashAcceptanceExtraRewardPolicy.FindCashRewards(items, Start).Single();
+        Equal("Employee 1", reward.EmployeeName, "outgoing cash employee");
+        Equal(50, reward.Amount, "only the cash contribution qualifies for the cash reward");
+    }
+
+    private void SpentLegacyExtraReward()
+    {
+        var employee = new Employee { EmployeeId = "emp_1", Name = "Employee 1" };
+        var items = new List<CashReconciliationItem>();
+        RecordExtraRewardAcceptance(items, Start, 50, "legacy-parts");
+        RecordExtraRewardVerification(items, Start.AddMinutes(10), 0, "legacy-parts-verification");
+        var pool = items.Single(item => item.ExtraContributions.Count > 0);
+        var original = pool.ExtraContributions.Single();
+        var oldEvent = new EmployeeRatingEvent
+        {
+            SourceId = "cash-extra:" + original.Id.ToString("N"),
+            EmployeeId = employee.EmployeeId,
+            EffectiveFrom = Start,
+            ScheduledUntil = Start.AddDays(2),
+            RuleVersion = 2,
+            ChangePercent = 5,
+            Status = EmployeeRatingEventStatus.CancelledAsError
+        };
+        original.Amount = 0;
+        original.ResolvedAmount = original.OriginalAmount;
+        pool.ExtraContributions.Add(new CashExtraContribution
+        {
+            InvestigationId = original.InvestigationId,
+            EmployeeName = original.EmployeeName,
+            Kind = CashReconciliationKind.CashExtra,
+            Origin = CashReconciliationOrigin.CashAcceptance,
+            Stage = CashReconciliationStage.Ready,
+            CreatedAt = Start.AddMinutes(11),
+            OriginalAmount = 20,
+            Amount = 20
+        });
+        pool.OriginalAmount = 70;
+        pool.ResolvedAmount = 50;
+        pool.Amount = 20;
+        var history = new List<EmployeeRatingEvent> { oldEvent };
+        string before = JsonSerializer.Serialize(history);
+        ApplyCashExtraTestRewards(items, history, employee, Start.AddMinutes(12));
+        Equal(before, JsonSerializer.Serialize(history), "legacy spent part blocks replay without rewriting history");
+    }
+
+    private void EndedExtraAwardsDoNotReplay()
+    {
+        var employee = new Employee { EmployeeId = "emp_1", Name = "Employee 1" };
+        string source = CashAcceptanceExtraRewardPolicy.BuildSourceId(
+            "REVENUE_CONFIRMED_EXTRA", Guid.NewGuid(), employee);
+        foreach (var status in Enum.GetValues<EmployeeRatingEventStatus>())
+        {
+            var history = new[] { new EmployeeRatingEvent
+            {
+                SourceId = source,
+                EmployeeId = employee.EmployeeId,
+                Status = status,
+                EffectiveFrom = Start.AddDays(-10),
+                ScheduledUntil = Start.AddDays(-7)
+            }};
+            True(CashAcceptanceExtraRewardPolicy.HasReward(history, source, employee, Array.Empty<string>()),
+                $"{status} past award permanently occupies its source");
+        }
+    }
+
+    private void LegacyTimeRewardBlocksReplay()
+    {
+        var employee = new Employee { EmployeeId = "emp_1", Name = "Employee 1" };
+        Guid acceptance = Guid.NewGuid();
+        string source = CashAcceptanceExtraRewardPolicy.BuildSourceId(
+            "TIME_CONFIRMED_SHIFT_EXTRA", acceptance, employee);
+        string legacy = "confirmed-shift-extra:" + acceptance.ToString("N");
+        var history = new[] { new EmployeeRatingEvent
+        {
+            SourceId = legacy,
+            EmployeeId = employee.EmployeeId,
+            Status = EmployeeRatingEventStatus.Forgiven
+        }};
+        True(CashAcceptanceExtraRewardPolicy.HasReward(history, source, employee, new[] { legacy }),
+            "legacy time reward is not granted again with the new key");
+    }
+
+    private void ExtraRewardSurvivesRename()
+    {
+        var employee = new Employee { EmployeeId = "emp_1", Name = "Before" };
+        Guid acceptance = Guid.NewGuid();
+        string before = CashAcceptanceExtraRewardPolicy.BuildSourceId(
+            "REVENUE_CONFIRMED_EXTRA", acceptance, employee);
+        employee.Name = "After";
+        Equal(before, CashAcceptanceExtraRewardPolicy.BuildSourceId(
+            "REVENUE_CONFIRMED_EXTRA", acceptance, employee), "immutable employee identity");
+        var history = new[] { new EmployeeRatingEvent
+        {
+            SourceId = "cash-extra:legacy",
+            EmployeeId = employee.EmployeeId,
+            EmployeeName = "Before"
+        }};
+        True(CashAcceptanceExtraRewardPolicy.HasReward(history, before, employee, new[] { "cash-extra:legacy" }),
+            "legacy reward matches employee ID even when its name is old");
+    }
+
+    private void ExtraRewardStateSurvivesRestart()
+    {
+        var employee = new Employee { EmployeeId = "emp_1", Name = "Employee 1" };
+        var items = new List<CashReconciliationItem>();
+        RecordExtraRewardAcceptance(items, Start, 50, "restart-acceptance");
+        RecordExtraRewardVerification(items, Start.AddMinutes(10), 0, "restart-verification");
+        var state = new EmployeeRatingState { CashExtraAcceptanceRewardsActivatedAt = Start };
+        ApplyCashExtraTestRewards(items, state.Events, employee, Start.AddMinutes(10));
+        string before = JsonSerializer.Serialize(state);
+        var restored = JsonSerializer.Deserialize<EmployeeRatingState>(before)!;
+        var restoredItems = JsonSerializer.Deserialize<List<CashReconciliationItem>>(JsonSerializer.Serialize(items))!;
+        ApplyCashExtraTestRewards(restoredItems, restored.Events, employee, Start.AddDays(5));
+        Equal(before, JsonSerializer.Serialize(restored), "restart preserves award and activation timestamp");
+    }
+
+    private void MixedPoolRewardDoesNotBackfill()
+    {
+        var items = new List<CashReconciliationItem>();
+        RecordExtraRewardVerification(items, Start, 100, "old-cashless-pool");
+        RecordExtraRewardAcceptance(items, Start.AddHours(1), 50, "old-missed-cash");
+        RecordExtraRewardVerification(items, Start.AddHours(1).AddMinutes(10), 0, "old-missed-check");
+        DateTime policyStart = Start.AddHours(2);
+        Equal(0, CashAcceptanceExtraRewardPolicy.FindCashRewards(items, policyStart).Count,
+            "older missed mixed-pool acceptance is not backfilled");
+        RecordExtraRewardAcceptance(items, Start.AddHours(3), 50, "new-mixed-cash");
+        RecordExtraRewardVerification(items, Start.AddHours(3).AddMinutes(10), 0, "new-mixed-check");
+        Equal(1, CashAcceptanceExtraRewardPolicy.FindCashRewards(items, policyStart).Count,
+            "new acceptance in that same old pool is eligible");
+
+        var legacyCashPool = new List<CashReconciliationItem>();
+        RecordExtraRewardAcceptance(legacyCashPool, Start, 50, "old-valid-cash");
+        RecordExtraRewardVerification(legacyCashPool, Start.AddMinutes(10), 0, "old-valid-check");
+        Equal(1, CashAcceptanceExtraRewardPolicy.FindCashRewards(legacyCashPool, policyStart).Count,
+            "existing cash-first eligibility is preserved");
+    }
+
+    private static void ApplyCashExtraTestRewards(
+        List<CashReconciliationItem> items,
+        List<EmployeeRatingEvent> history,
+        Employee employee,
+        DateTime at)
+    {
+        var rule = EmployeeRatingRuleCatalog.Get("REVENUE_CONFIRMED_EXTRA");
+        foreach (var reward in CashAcceptanceExtraRewardPolicy.FindCashRewards(items, Start))
+        {
+            string source = CashAcceptanceExtraRewardPolicy.BuildSourceId(rule.Code, reward.InvestigationId, employee);
+            if (CashAcceptanceExtraRewardPolicy.HasReward(history, source, employee, reward.LegacySourceIds))
+                continue;
+            history.Add(new EmployeeRatingEvent
+            {
+                EmployeeId = employee.EmployeeId,
+                EmployeeName = employee.Name,
+                SourceId = source,
+                RuleCode = rule.Code,
+                RuleVersion = rule.Version,
+                Branch = rule.Branch,
+                ChangePercent = rule.ChangePercent,
+                Direction = rule.Direction,
+                EffectiveFrom = at,
+                ScheduledUntil = at.Add(rule.Duration)
+            });
+        }
+    }
+
     private void OpeningPenaltySteps()
     {
         var settings = new AutoSalarySettings
@@ -423,13 +773,67 @@ internal sealed class EmployeeSalaryRuleTestSuite
             opening.AddHours(5), opening, settings), "cap");
     }
 
-    private void LateSessionRequiresTwentyMinutes()
+    private void LateSessionRewardBoundaries()
     {
         DateTime oneAm = new(2026, 8, 6, 1, 0, 0);
-        True(!EmployeeNightRatingService.IsQualifiedLateSession(
-            oneAm.AddMinutes(-1), oneAm.AddMinutes(1), oneAm), "00:59 exploit");
-        True(EmployeeNightRatingService.IsQualifiedLateSession(
-            oneAm.AddMinutes(-20), oneAm.AddMinutes(1), oneAm), "twenty minutes");
+        DateTime businessEnd = oneAm.Date.AddHours(6);
+        Equal(null, LateActiveSessionRewardPolicy.GetQualificationTime(
+            oneAm.AddMinutes(-1), oneAm.AddMinutes(29), oneAm, businessEnd), "00:59 short");
+        Equal(oneAm, LateActiveSessionRewardPolicy.GetQualificationTime(
+            oneAm.AddMinutes(-20), oneAm.AddMinutes(1), oneAm, businessEnd), "twenty minutes by 01:00");
+        Equal(oneAm.AddMinutes(30), LateActiveSessionRewardPolicy.GetQualificationTime(
+            oneAm.AddMinutes(-10), oneAm.AddMinutes(30), oneAm, businessEnd), "thirty minutes after 01:00");
+        Equal(oneAm.AddMinutes(35), LateActiveSessionRewardPolicy.GetQualificationTime(
+            oneAm.AddMinutes(5), oneAm.AddMinutes(35), oneAm, businessEnd), "session started after 01:00");
+        Equal(null, LateActiveSessionRewardPolicy.GetQualificationTime(
+            businessEnd.AddMinutes(-20), businessEnd.AddMinutes(20), oneAm, businessEnd), "business-day boundary");
+    }
+
+    private void LateSessionRewardHasOneWinner()
+    {
+        DateTime businessStart = new(2026, 8, 5, 6, 0, 0);
+        DateTime oneAm = businessStart.Date.AddDays(1).AddHours(1);
+        DateTime businessEnd = businessStart.AddDays(1);
+        var sessions = new[]
+        {
+            new GameSessionLogItem
+            {
+                PlaceName = "TV-2",
+                StartedAt = oneAm.AddMinutes(5),
+                ClosedAt = oneAm.AddMinutes(50),
+                IsClosed = true
+            },
+            new GameSessionLogItem
+            {
+                PlaceName = "TV-1",
+                StartedAt = oneAm.AddMinutes(-20),
+                ClosedAt = oneAm.AddMinutes(10),
+                IsClosed = true
+            }
+        };
+        var shifts = new[]
+        {
+            new ShiftLogItem
+            {
+                EmployeeName = "Employee 1",
+                StartedAt = businessStart,
+                ClosedAt = oneAm.AddMinutes(15),
+                IsClosed = true
+            },
+            new ShiftLogItem
+            {
+                EmployeeName = "Employee 2",
+                StartedAt = oneAm.AddMinutes(15),
+                ClosedAt = businessEnd,
+                IsClosed = true
+            }
+        };
+
+        LateActiveSessionReward? reward = LateActiveSessionRewardPolicy.FindFirstReward(
+            sessions, shifts, businessStart, businessEnd, businessEnd);
+        Equal("Employee 1", reward?.EmployeeName, "first qualifying employee");
+        Equal("TV-1", reward?.PlaceName, "first qualifying session");
+        Equal(oneAm, reward?.QualifiedAt, "first qualification wins");
     }
 
     private void UnattendedTimerFollowsLastClient()
@@ -819,6 +1223,9 @@ internal sealed class BusinessCalendarTestSuite
         Test("Новая база темпа сразу догоняет текущий час дня", FinancialPaceBaselineStartsToday);
         Test("Финансовый процент сравнивает игры и расходы", FinancialPacePercent);
         Test("Темп учитывает начисление сотруднику без рабочих часов", FinancialPaceIncludesBonusWithoutHours);
+        Test("Первый неполный день прогнозируется на полный месяц", FinancialPaceForecastsFirstPartialDay);
+        Test("Закрытые дни уточняют месячный прогноз", FinancialPaceForecastUsesClosedDays);
+        Test("Закрытый месяц превращает прогноз в факт", FinancialPaceForecastBecomesFinal);
         Test("Предварительная приёмка сохраняет весь снимок для телефона", CashAcceptanceOwnerSnapshot);
         Test("Смена делится по рабочим месяцам", ShiftIsSplitAtBoundary);
         Test("Ручные часы не меняют системные часы после теста", ManualClockIsScoped);
@@ -925,6 +1332,83 @@ internal sealed class BusinessCalendarTestSuite
         Dictionary<string, int> salaryByDay =
             FinancialPaceService.BuildSalaryByDay(dailyEarnings);
         Equal(1491, salaryByDay["2026-09-01"], "TeleCom 01.09");
+    }
+
+    private void FinancialPaceForecastsFirstPartialDay()
+    {
+        DateTime monthStart = new(2026, 9, 1, 6, 0, 0);
+        DateTime asOf = new(2026, 9, 1, 18, 0, 0);
+        var days = new[]
+        {
+            PaceDay(monthStart, difference: 300, isClosed: false)
+        };
+
+        FinancialPaceForecastSnapshot forecast =
+            FinancialPaceCalculator.CalculateMonthForecast(
+                days, monthStart, monthStart.AddMonths(1), asOf);
+        True(forecast.IsAvailable, "forecast available");
+        Equal(600, forecast.CurrentDayProjectedDifference, "half-day projection");
+        Equal(18000, forecast.ProjectedDifference, "thirty-day projection");
+        Equal(0, forecast.CompletedDays, "no closed days");
+        Equal(2, forecast.CoveragePercent, "half of one day from thirty");
+    }
+
+    private void FinancialPaceForecastUsesClosedDays()
+    {
+        DateTime monthStart = new(2026, 9, 1, 6, 0, 0);
+        DateTime asOf = new(2026, 9, 2, 18, 0, 0);
+        var days = new[]
+        {
+            PaceDay(monthStart, difference: 600, isClosed: true),
+            PaceDay(monthStart.AddDays(1), difference: 400, isClosed: false)
+        };
+
+        FinancialPaceForecastSnapshot forecast =
+            FinancialPaceCalculator.CalculateMonthForecast(
+                days, monthStart, monthStart.AddMonths(1), asOf);
+        Equal(800, forecast.CurrentDayProjectedDifference, "second projected day");
+        Equal(700, forecast.AverageDayDifference, "average of 600 and 800");
+        Equal(21000, forecast.ProjectedDifference, "updated month projection");
+        Equal(1, forecast.CompletedDays, "one fact day");
+        Equal(28, forecast.RemainingDays, "future days");
+    }
+
+    private void FinancialPaceForecastBecomesFinal()
+    {
+        DateTime monthStart = new(2026, 2, 1, 6, 0, 0);
+        DateTime monthEnd = monthStart.AddMonths(1);
+        var days = Enumerable.Range(0, 28)
+            .Select(index => PaceDay(
+                monthStart.AddDays(index),
+                difference: index + 1,
+                isClosed: true))
+            .ToArray();
+
+        FinancialPaceForecastSnapshot forecast =
+            FinancialPaceCalculator.CalculateMonthForecast(
+                days, monthStart, monthEnd, monthEnd);
+        Equal(days.Sum(day => day.Difference), forecast.ProjectedDifference, "final fact");
+        Equal(28, forecast.TotalDays, "real February length");
+        Equal(0, forecast.RemainingDays, "no assumed days");
+        Equal(100, forecast.CoveragePercent, "complete month");
+        True(forecast.IsFinal, "forecast sealed as fact");
+    }
+
+    private static FinancialPaceDaySnapshot PaceDay(
+        DateTime start,
+        int difference,
+        bool isClosed)
+    {
+        return new FinancialPaceDaySnapshot
+        {
+            BusinessDateKey = start.ToString("yyyy-MM-dd"),
+            StartInclusive = start,
+            EndExclusive = start.AddDays(1),
+            CalculatedAt = isClosed ? start.AddDays(1) : start,
+            IsClosed = isClosed,
+            HasExpenseBaseline = true,
+            Difference = difference
+        };
     }
 
     private void CashAcceptanceOwnerSnapshot()

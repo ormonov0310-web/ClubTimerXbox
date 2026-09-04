@@ -89,6 +89,65 @@ namespace ClubTimerXbox.Services
             return PushOverviewStateAsync(_lastKnownPlaces.ToList());
         }
 
+        public static async Task<bool> PushCashAcceptanceStateAsync()
+        {
+            if (!FirebaseConnectionService.CanSync)
+                return false;
+
+            try
+            {
+                var identity = PcIdentityService.Current;
+                CashAcceptanceItem? latestCashAcceptance =
+                    GetLatestCashAcceptanceForCurrentBusinessMonth();
+                Dictionary<string, object?>? acceptancePayload =
+                    BuildCashAcceptancePayload(latestCashAcceptance);
+                long nowUnixMs = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+                long revision = NextLiveStateRevision(nowUnixMs);
+
+                await PatchAsync(
+                    $"{ClubOverviewPath}/cash",
+                    new Dictionary<string, object?>
+                    {
+                        ["latestCashAcceptancePresent"] = latestCashAcceptance != null,
+                        ["latestCashAcceptance"] = acceptancePayload
+                    }
+                );
+                await PatchAsync(
+                    ClubOverviewPath,
+                    new Dictionary<string, object?>
+                    {
+                        ["updatedAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        ["updatedAtUnixMs"] = nowUnixMs,
+                        ["revision"] = revision
+                    }
+                );
+                await PatchAsync(
+                    ClubLiveStatePath,
+                    new Dictionary<string, object?>
+                    {
+                        ["messageType"] = "club_state",
+                        ["signalType"] = "cash_acceptance_update",
+                        ["clubId"] = identity.ClubId,
+                        ["clubName"] = identity.ClubName,
+                        ["sourceInstallationId"] = identity.InstallationId,
+                        ["revision"] = revision,
+                        ["updatedAtUnixMs"] = nowUnixMs,
+                        ["lastHeartbeatAtUnixMs"] = nowUnixMs,
+                        ["isOpen"] = true,
+                        ["connectionState"] = "online",
+                        ["employeeName"] = EmployeeService.CurrentEmployee?.Name ?? "",
+                        ["cashAcceptancePresent"] = latestCashAcceptance != null,
+                        ["latestCashAcceptance"] = acceptancePayload
+                    }
+                );
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public static async Task<bool> PushHeartbeatAsync(List<ClubPlace> places)
         {
             if (!FirebaseConnectionService.CanSync)
@@ -1899,6 +1958,21 @@ namespace ClubTimerXbox.Services
                 dailyFixedExpense = month.DailyFixedExpense,
                 manualMonthlyExpense = month.ManualMonthlyExpense,
                 manualExpenseEffectiveFrom = month.ManualExpenseEffectiveFrom?.ToString("O") ?? "",
+                forecast = new
+                {
+                    isAvailable = month.Forecast.IsAvailable,
+                    isFinal = month.Forecast.IsFinal,
+                    includesCurrentDayProjection = month.Forecast.IncludesCurrentDayProjection,
+                    periodStartKey = month.Forecast.PeriodStartKey,
+                    projectedDifference = month.Forecast.ProjectedDifference,
+                    averageDayDifference = month.Forecast.AverageDayDifference,
+                    closedDaysDifference = month.Forecast.ClosedDaysDifference,
+                    currentDayProjectedDifference = month.Forecast.CurrentDayProjectedDifference,
+                    completedDays = month.Forecast.CompletedDays,
+                    remainingDays = month.Forecast.RemainingDays,
+                    totalDays = month.Forecast.TotalDays,
+                    coveragePercent = month.Forecast.CoveragePercent
+                },
                 days = month.Days.Select(BuildFinancialPaceDayPayload).ToArray()
             };
         }

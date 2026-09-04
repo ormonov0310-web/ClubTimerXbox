@@ -61,7 +61,24 @@ namespace ClubTimerXbox.Models
         public int DailyFixedExpense { get; set; }
         public int? ManualMonthlyExpense { get; set; }
         public DateTime? ManualExpenseEffectiveFrom { get; set; }
+        public FinancialPaceForecastSnapshot Forecast { get; set; } = new();
         public List<FinancialPaceDaySnapshot> Days { get; set; } = new();
+    }
+
+    public sealed class FinancialPaceForecastSnapshot
+    {
+        public bool IsAvailable { get; set; }
+        public bool IsFinal { get; set; }
+        public bool IncludesCurrentDayProjection { get; set; }
+        public string PeriodStartKey { get; set; } = "";
+        public int ProjectedDifference { get; set; }
+        public int AverageDayDifference { get; set; }
+        public int ClosedDaysDifference { get; set; }
+        public int CurrentDayProjectedDifference { get; set; }
+        public int CompletedDays { get; set; }
+        public int RemainingDays { get; set; }
+        public int TotalDays { get; set; }
+        public int CoveragePercent { get; set; }
     }
 
     public sealed class FinancialPaceState

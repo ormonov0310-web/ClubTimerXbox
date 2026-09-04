@@ -112,6 +112,11 @@ namespace ClubTimerXbox.Services
                 result.Percent = FinancialPaceCalculator.CalculatePercent(
                     result.GameRevenue,
                     result.TotalExpense);
+                result.Forecast = FinancialPaceCalculator.CalculateMonthForecast(
+                    days,
+                    month.StartInclusive,
+                    month.EndExclusive,
+                    now);
 
                 FinancialPaceDaySnapshot? latest = days
                     .OrderByDescending(day => day.StartInclusive)

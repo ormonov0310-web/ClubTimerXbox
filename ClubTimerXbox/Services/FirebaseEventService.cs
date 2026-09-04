@@ -280,7 +280,8 @@ namespace ClubTimerXbox.Services
             record.ProductShortageAmount = productShortageAmount;
             record.ProductExtraAmount = productExtraAmount;
 
-            // The compact owner state must be available before its notification.
+            // The cash fact and its deadline must exist before the owner sees the event.
+            await FirebaseSyncService.PushCashAcceptanceStateAsync().ConfigureAwait(false);
             await FirebaseSyncService.PushOverviewStateAsync().ConfigureAwait(false);
             await FirebaseSyncService.PushCurrentStateAsync().ConfigureAwait(false);
             await QueueAndFlushAsync(record).ConfigureAwait(false);

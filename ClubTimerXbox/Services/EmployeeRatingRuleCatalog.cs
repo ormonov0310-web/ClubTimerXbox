@@ -39,7 +39,7 @@ namespace ClubTimerXbox.Services
                     EmployeeRatingEffectDirection.Penalty, 5, TimeSpan.FromDays(2),
                     "ТВ оставлен после окончания тарифа"),
                 ["TIME_LATE_CLIENT_REWARD"] = new(
-                    "TIME_LATE_CLIENT_REWARD", 4, EmployeeRatingBranch.Time,
+                    "TIME_LATE_CLIENT_REWARD", 5, EmployeeRatingBranch.Time,
                     EmployeeRatingEffectDirection.Reward, 5, TimeSpan.FromDays(3),
                     "Работа с клиентом после 01:00"),
                 ["TIME_CONFIRMED_SHIFT_EXTRA"] = new(

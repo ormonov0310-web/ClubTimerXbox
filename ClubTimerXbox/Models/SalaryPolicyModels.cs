@@ -122,6 +122,8 @@ namespace ClubTimerXbox.Models
 
         public DateTime ActivatedAt { get; set; }
 
+        public DateTime CashExtraAcceptanceRewardsActivatedAt { get; set; }
+
         public List<EmployeeRatingProfile> Profiles { get; set; } = new();
 
         public List<EmployeeRatingEvent> Events { get; set; } = new();

@@ -441,7 +441,7 @@ namespace ClubTimerXbox.Services
 
                 ApplyPaidTimeForDay(result, scheduleStart, scheduleEnd);
                 ApplyPunctualityBonusForDay(result, scheduleStart, settings);
-                ApplyLateActiveBonusForDay(result, scheduleStart, scheduleEnd, settings);
+                ApplyLateActiveBonusForDay(result, scheduleStart, settings);
                 ApplyOverNormBonusForDay(result, scheduleStart, scheduleEnd, settings);
 
                 day = day.AddDays(1);
@@ -634,41 +634,32 @@ namespace ClubTimerXbox.Services
         private static void ApplyLateActiveBonusForDay(
             Dictionary<string, EmployeeBonusInput> result,
             DateTime scheduleStart,
-            DateTime scheduleEnd,
             AutoSalarySettings settings)
         {
             if (settings.LateActiveSessionBonusAmount <= 0)
                 return;
 
-            foreach (var input in result.Values)
+            BusinessPeriodRange businessDay = BusinessCalendarService.GetBusinessDay(scheduleStart);
+            LateActiveSessionReward? reward = LateActiveSessionRewardPolicy.FindFirstReward(
+                ActionLogService.GetAllGameSessions(),
+                ActionLogService.GetAllShifts(),
+                businessDay.StartInclusive,
+                businessDay.EndExclusive,
+                ClubClock.Current.LocalNow);
+            if (reward == null ||
+                !result.TryGetValue(reward.EmployeeName, out EmployeeBonusInput? input))
             {
-                var shifts = EmployeeStatsService.GetShifts(
-                    input.EmployeeName,
-                    scheduleEnd,
-                    scheduleEnd.AddHours(8)
-                );
-
-                var sessions = EmployeeStatsService
-                    .GetGameSessionsForMonth(input.EmployeeName, scheduleEnd);
-                bool hasLateActiveSession = shifts.Any(shift =>
-                    shift.StartedAt <= scheduleEnd &&
-                    (shift.ClosedAt ?? ClubClock.Current.LocalNow) > scheduleEnd &&
-                    sessions.Any(session =>
-                        session.StartedAt <= scheduleEnd.AddMinutes(-20) &&
-                        (session.ClosedAt ?? ClubClock.Current.LocalNow) > scheduleEnd));
-
-                if (!hasLateActiveSession)
-                    continue;
-
-                input.Bonuses.Add(new AutoSalaryBonusItem
-                {
-                    CreatedAt = scheduleEnd,
-                    Type = "LateActiveSession",
-                    Title = "Поздняя активная смена",
-                    Description = $"После {FormatHour(settings.WorkDayEndHour)} были активные игровые сеансы.",
-                    Amount = settings.LateActiveSessionBonusAmount
-                });
+                return;
             }
+
+            input.Bonuses.Add(new AutoSalaryBonusItem
+            {
+                CreatedAt = reward.QualifiedAt,
+                Type = "LateActiveSession",
+                Title = "Поздняя активная смена",
+                Description = LateActiveSessionRewardPolicy.BuildDescription(reward),
+                Amount = settings.LateActiveSessionBonusAmount
+            });
         }
 
         private static void ApplyOverNormBonusForDay(
