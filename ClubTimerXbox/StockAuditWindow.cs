@@ -13,7 +13,7 @@ namespace ClubTimerXbox
     public class StockAuditWindow : Window
     {
         private readonly StackPanel _contentPanel = new StackPanel();
-        private readonly StackPanel _itemsPanel = new StackPanel();
+        private readonly StockItemListPanel _itemsPanel = new StockItemListPanel();
         private readonly StackPanel _historyPanel = new StackPanel();
 
         private readonly List<AuditRow> _rows = new List<AuditRow>();
@@ -31,6 +31,7 @@ namespace ClubTimerXbox
         private DispatcherTimer? _cashRecountButtonTimer;
 
         private int _expectedCashAmount = 0;
+        private DateTime? _displayedCashResponsibilityClosedAt;
 
         private enum ActiveSection
         {
@@ -429,6 +430,7 @@ namespace ClubTimerXbox
             _contentPanel.Children.Clear();
 
             _expectedCashAmount = CalculateExpectedCashAmount();
+            _displayedCashResponsibilityClosedAt = ShiftAcceptanceService.Current.CashResponsibilityClosedAt;
 
             _actualCashBox.Text = "";
             _actualCashBox.Width = 180;
@@ -894,6 +896,13 @@ namespace ClubTimerXbox
 
         private void AcceptCash()
         {
+            CashAcceptancePostingService.FinalizeDue();
+            if (ShiftAcceptanceService.Current.CashResponsibilityClosedAt != _displayedCashResponsibilityClosedAt)
+            {
+                ShowCashSection();
+                MessageBox.Show("Владелец завершил предыдущую приёмку. Повторный пересчёт относится к вашей смене. Введите наличку заново.", "Приёмка налички");
+                return;
+            }
             if (!CanAcceptPart("наличку", ShiftAcceptanceService.Current.CashAccepted))
                 return;
 
@@ -1192,7 +1201,7 @@ namespace ClubTimerXbox
 
         private void LoadRows()
         {
-            _itemsPanel.Children.Clear();
+            _itemsPanel.ClearItems();
             _rows.Clear();
 
             foreach (var stockItem in ProductPopularityService.OrderStock(ProductStockService.StockItems))
@@ -1224,10 +1233,16 @@ namespace ClubTimerXbox
                     }
                 };
 
-                row.ActualQuantityBox.TextChanged += (_, _) => UpdateRowDifference(row);
+                row.ActualQuantityBox.TextChanged += (_, _) =>
+                {
+                    UpdateRowDifference(row);
+                    _itemsPanel.RefreshGroups();
+                };
 
                 _rows.Add(row);
-                _itemsPanel.Children.Add(CreateRowCard(row));
+                _itemsPanel.AddTrackedItem(CreateRowCard(row),
+                    () => ((int?)stockItem.Quantity, stockItem.ZeroStockSinceUtc),
+                    () => row.ActualQuantityBox.Text.Trim() != row.ExpectedQuantity.ToString());
             }
         }
 
@@ -1407,11 +1422,14 @@ namespace ClubTimerXbox
             int changedCount = 0;
 
             var shortageDescriptions = new List<string>();
+            var actualQuantities = new Dictionary<AuditRow, int>();
 
+            // Validate hidden inputs too, before creating any acceptance records.
             foreach (var row in _rows)
             {
                 if (!int.TryParse(row.ActualQuantityBox.Text.Trim(), out int actualQuantity))
                 {
+                    _itemsPanel.RevealInput(row.ActualQuantityBox);
                     MessageBox.Show(
                         $"Проверьте поле товара: {row.ProductName}\n\n" +
                         "Фактическое количество должно быть числом.",
@@ -1424,6 +1442,12 @@ namespace ClubTimerXbox
                 if (actualQuantity < 0)
                     actualQuantity = 0;
 
+                actualQuantities[row] = actualQuantity;
+            }
+
+            foreach (var row in _rows)
+            {
+                int actualQuantity = actualQuantities[row];
                 int difference = actualQuantity - row.ExpectedQuantity;
 
                 if (difference != 0)
@@ -1568,6 +1592,9 @@ namespace ClubTimerXbox
         private string GetResponsibleEmployeeName()
         {
             var state = ShiftAcceptanceService.Current;
+
+            if (state.CashResponsibilityClosedAt.HasValue && !state.CashAccepted)
+                return EmployeeService.CurrentEmployee?.Name ?? state.NewEmployeeName;
 
             if (!string.IsNullOrWhiteSpace(state.ResponsibleEmployeeName))
                 return state.ResponsibleEmployeeName;

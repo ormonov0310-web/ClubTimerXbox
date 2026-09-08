@@ -25,7 +25,8 @@ namespace ClubTimerXbox.Services
         public static CashBalanceCheckpointItem AddCurrentMonthCheckpoint(
             int cashAmount,
             string note,
-            string operationId = "")
+            string operationId = "",
+            DateTime? occurredAt = null)
         {
             if (cashAmount < 0)
                 cashAmount = 0;
@@ -44,9 +45,9 @@ namespace ClubTimerXbox.Services
             var item = new CashBalanceCheckpointItem
             {
                 Id = Guid.NewGuid(),
-                CreatedAt = ClubClock.Current.LocalNow,
+                CreatedAt = occurredAt ?? ClubClock.Current.LocalNow,
                 MonthStart = BusinessCalendarService
-                    .GetBusinessMonth(ClubClock.Current.LocalNow)
+                    .GetBusinessMonth(occurredAt ?? ClubClock.Current.LocalNow)
                     .StartInclusive,
                 CashAmount = cashAmount,
                 OperationId = operationId,
@@ -54,7 +55,8 @@ namespace ClubTimerXbox.Services
             };
 
             _items.Add(item);
-            Save();
+            try { Save(); }
+            catch { _items.Remove(item); throw; }
 
             return item;
         }

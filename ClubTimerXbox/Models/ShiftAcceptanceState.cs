@@ -32,6 +32,8 @@ namespace ClubTimerXbox.Models
 
         public DateTime? InitialCashAcceptedAt { get; set; }
 
+        public DateTime? CashResponsibilityClosedAt { get; set; }
+
         public DateTime? DebtsAcceptedAt { get; set; }
 
         public DateTime? CompletedAt { get; set; }

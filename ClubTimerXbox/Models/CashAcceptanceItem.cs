@@ -27,6 +27,12 @@ namespace ClubTimerXbox.Models
 
         public DateTime? FinalizedAt { get; set; }
 
+        public string OwnerCorrectionCommandId { get; set; } = "";
+
+        public DateTime? OwnerCorrectionCompletedAt { get; set; }
+
+        public string FinalizedReviewRevision { get; set; } = "";
+
         public PendingCashlessVerification? PendingCashlessVerification { get; set; }
 
         public int ExpectedCashAmount { get; set; }

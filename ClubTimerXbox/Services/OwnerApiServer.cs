@@ -213,6 +213,7 @@ namespace ClubTimerXbox.Services
                 purchasePrice = item.PurchasePrice,
                 salePrice = item.SalePrice,
                 minimumQuantity = item.MinimumQuantity,
+                stockFoldAfterUnixMs = StockVisibilityPolicy.FoldAfterUnixMs(item),
                 isLowStock = ProductStockService.IsLowStock(item.ProductName),
                 updatedAt = item.UpdatedAt
             }).ToList();

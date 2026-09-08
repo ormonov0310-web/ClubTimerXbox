@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows.Threading;
@@ -59,6 +60,27 @@ namespace ClubTimerXbox.Services
             bool finalizedAny = false;
             lock (Gate)
             {
+                foreach (var pending in CashAcceptanceService.Items.Where(item =>
+                    !string.IsNullOrWhiteSpace(item.OwnerCorrectionCommandId) &&
+                    item.OwnerCorrectionCompletedAt == null).ToList())
+                {
+                    if (CashReconciliationService.TryGetConstitutionCorrectionCommit(
+                        pending.OwnerCorrectionCommandId, out var at, out var cash, out var cashless))
+                    {
+                        try
+                        {
+                            FirebaseSyncService.CompleteCommittedCashCorrection(
+                                pending.OwnerCorrectionCommandId, at, cash, cashless,
+                                "Досрочная корректировка владельцем");
+                            finalizedAny = true;
+                        }
+                        catch { return; }
+                    }
+                    else
+                    {
+                        CashAcceptanceService.SetOwnerCorrection(pending, "");
+                    }
+                }
                 DateTime now = ClubClock.Current.LocalNow;
                 foreach (var item in CashAcceptanceService.GetDueProvisional(now))
                 {
@@ -103,6 +125,31 @@ namespace ClubTimerXbox.Services
             {
                 _ = FirebaseSyncService.PushOverviewStateAsync();
                 _ = FirebaseSyncService.PushCurrentStateAsync();
+            }
+        }
+
+        public static CashAccountingResult FinalizeByOwner(
+            CashAcceptanceItem item, string commandId, string acceptanceId, string revision,
+            DateTime from, DateTime to, DateTime now, int actualCash, int actualCashless)
+        {
+            lock (Gate)
+            {
+                CashAcceptanceOwnerCorrectionPolicy.Validate(item, acceptanceId, revision);
+                if (!item.IsProvisional || CashAcceptanceService.GetLatestUnfinalized()?.Id != item.Id)
+                    throw new InvalidOperationException("Приёмка уже изменилась. Обновите сверку.");
+                CashAcceptanceService.SetOwnerCorrection(item, commandId);
+                try
+                {
+                    return CashReconciliationService.ApplyAcceptanceOwnerCorrection(
+                        item, from, to, now, commandId, actualCash, actualCashless);
+                }
+                catch
+                {
+                    if (!CashReconciliationService.TryGetConstitutionCorrectionCommit(
+                        commandId, out _, out _, out _))
+                        CashAcceptanceService.SetOwnerCorrection(item, "");
+                    throw;
+                }
             }
         }
 

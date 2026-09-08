@@ -11,7 +11,7 @@ namespace ClubTimerXbox
 {
     public class StockWindow : Window
     {
-        private readonly StackPanel _itemsPanel = new StackPanel();
+        private readonly StockItemListPanel _itemsPanel = new StockItemListPanel();
         private readonly StackPanel _historyPanel = new StackPanel();
 
         private readonly TextBox _newProductNameBox = new TextBox();
@@ -351,7 +351,7 @@ namespace ClubTimerXbox
 
         private void LoadStockItems()
         {
-            _itemsPanel.Children.Clear();
+            _itemsPanel.ClearItems();
             _itemsTitleText.Text = _purchaseCatalogMode
                 ? "Каталог закупки"
                 : "Товары";
@@ -362,7 +362,9 @@ namespace ClubTimerXbox
 
             foreach (var item in orderedItems)
             {
-                _itemsPanel.Children.Add(CreateStockCard(item));
+                var card = CreateStockCard(item, out var hasDraft);
+                _itemsPanel.AddTrackedItem(card,
+                    () => (_purchaseCatalogMode ? (int?)null : item.Quantity, item.ZeroStockSinceUtc), hasDraft);
             }
         }
 
@@ -394,7 +396,7 @@ namespace ClubTimerXbox
             }
         }
 
-        private Border CreateStockCard(ProductStockItem item)
+        private Border CreateStockCard(ProductStockItem item, out Func<bool> hasDraft)
         {
             var mainPanel = new StackPanel();
 
@@ -430,7 +432,7 @@ namespace ClubTimerXbox
                 });
             }
 
-            mainPanel.Children.Add(CreateIncomingPanel(item));
+            mainPanel.Children.Add(CreateIncomingPanel(item, out hasDraft));
 
             return new Border
             {
@@ -442,7 +444,7 @@ namespace ClubTimerXbox
             };
         }
 
-        private UIElement CreateIncomingPanel(ProductStockItem item)
+        private UIElement CreateIncomingPanel(ProductStockItem item, out Func<bool> hasDraft)
         {
             var panel = new StackPanel
             {
@@ -461,6 +463,8 @@ namespace ClubTimerXbox
             var addQuantityBox = CreateNumberBox("0");
             var purchasePriceBox = CreateNumberBox(item.PurchasePrice.ToString());
             var paymentMethodBox = CreatePaymentMethodBox();
+            string initialPrice = purchasePriceBox.Text;
+            hasDraft = () => addQuantityBox.Text.Trim() != "0" || purchasePriceBox.Text != initialPrice;
 
             panel.Children.Add(CreateFieldLabel("Добавить товар, шт"));
             panel.Children.Add(addQuantityBox);

@@ -245,6 +245,17 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        public static CashAccountingResult ApplyAcceptanceOwnerCorrection(
+            CashAcceptanceItem acceptance, DateTime from, DateTime to, DateTime now,
+            string commandId, int actualCash, int actualCashless)
+        {
+            lock (Gate)
+            {
+                return MutateAndSave(() => CashAcceptanceOwnerCorrectionPolicy.Apply(
+                    _items, acceptance, from, to, now, commandId, actualCash, actualCashless));
+            }
+        }
+
         public static CashAccountingResult ApplyConstitutionCorrection(
             DateTime fromInclusive,
             DateTime toExclusive,

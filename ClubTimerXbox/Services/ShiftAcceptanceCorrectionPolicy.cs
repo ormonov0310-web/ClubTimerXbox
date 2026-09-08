@@ -48,8 +48,9 @@ namespace ClubTimerXbox.Services
             if (!windowStart.HasValue && status.ProductsAccepted && status.CashAccepted)
                 windowStart = status.CompletedAt;
 
-            bool originalWindowIsActive = !windowStart.HasValue ||
-                now < windowStart.Value.AddMinutes(OriginalEmployeeResponsibilityMinutes);
+            bool originalWindowIsActive = !status.CashResponsibilityClosedAt.HasValue &&
+                (!windowStart.HasValue ||
+                 now < windowStart.Value.AddMinutes(OriginalEmployeeResponsibilityMinutes));
 
             if (originalWindowIsActive &&
                 !string.IsNullOrWhiteSpace(originalResponsibleEmployeeName))
@@ -67,7 +68,7 @@ namespace ClubTimerXbox.Services
             string rootAcceptanceKey,
             DateTime now)
         {
-            if (status.IsManualSelfAcceptance ||
+            if (status.CashResponsibilityClosedAt.HasValue || status.IsManualSelfAcceptance ||
                 string.IsNullOrWhiteSpace(rootAcceptanceKey) ||
                 status.NewEmployeeName.Trim().Equals(
                     status.ResponsibleEmployeeName.Trim(),

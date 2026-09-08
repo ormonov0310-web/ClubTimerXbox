@@ -12,6 +12,8 @@ namespace ClubTimerXbox.Models
         // Текущий остаток товара
         public int Quantity { get; set; }
 
+        public DateTime? ZeroStockSinceUtc { get; set; }
+
         // Минимальный остаток для предупреждения владельца
         public int MinimumQuantity { get; set; }
 

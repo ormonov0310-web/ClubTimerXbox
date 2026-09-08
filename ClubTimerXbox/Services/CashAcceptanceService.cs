@@ -268,11 +268,30 @@ namespace ClubTimerXbox.Services
             if (item == null)
                 return;
 
+            item.FinalizedReviewRevision = CashAcceptanceOwnerCorrectionPolicy.ReviewRevision(item);
             item.IsProvisional = false;
             item.FinalizedAt = finalizedAt;
             item.FinalizeAt = null;
             item.PendingCashlessVerification = null;
             Save();
+        }
+
+        public static void SetOwnerCorrection(CashAcceptanceItem item, string commandId)
+        {
+            string previous = item.OwnerCorrectionCommandId;
+            item.OwnerCorrectionCommandId = commandId;
+            try { Save(); }
+            catch { item.OwnerCorrectionCommandId = previous; throw; }
+        }
+
+        public static void CompleteOwnerCorrection(CashAcceptanceItem item, DateTime committedAt)
+        {
+            if (item.IsProvisional) MarkFinalized(item.Id, committedAt);
+            ShiftAcceptanceService.CloseCashResponsibility(item, committedAt);
+            DateTime? previous = item.OwnerCorrectionCompletedAt;
+            item.OwnerCorrectionCompletedAt = committedAt;
+            try { Save(); }
+            catch { item.OwnerCorrectionCompletedAt = previous; throw; }
         }
 
         public static List<CashAcceptanceItem> GetByPeriod(DateTime fromInclusive, DateTime toExclusive)

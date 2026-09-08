@@ -15,8 +15,8 @@ namespace ClubTimerXbox.Services
             if (dailyExpense <= 0)
                 return 0;
 
-            DateTime accrualStart = businessDayStart.Date.AddHours(11);
-            DateTime accrualEnd = businessDayStart.Date.AddDays(1).AddHours(1);
+            DateTime accrualStart = businessDayStart.Date.AddHours(12);
+            DateTime accrualEnd = businessDayStart.Date.AddDays(1);
             if (asOf <= accrualStart)
                 return 0;
             if (asOf >= accrualEnd)
@@ -90,8 +90,11 @@ namespace ClubTimerXbox.Services
                 ? 0
                 : CalculateOperatingProgress(currentDay.StartInclusive, asOf);
             bool includesCurrent = currentDay != null && currentProgress > 0;
+            // Fixed costs have their own clock; project only games minus payroll.
             int projectedCurrent = includesCurrent
-                ? (int)Math.Round(currentDay!.Difference / currentProgress)
+                ? (int)Math.Round(
+                    (currentDay!.GameRevenue - (double)currentDay.SalaryAccrued) /
+                    currentProgress - currentDay.DailyFixedExpense)
                 : 0;
 
             int sampleDays = closedDays.Count + (includesCurrent ? 1 : 0);

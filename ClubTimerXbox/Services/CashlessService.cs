@@ -76,25 +76,27 @@ namespace ClubTimerXbox.Services
                 expectedAmount);
         }
 
-        public static void SetAmountForTodayIfNotNewerThan(
+        public static void ApplyCommittedCorrection(
             DateTime committedAt,
             int amount,
             string note,
             int? expectedAmount)
         {
             var current = _records.FirstOrDefault(item =>
-                item.Date.Date == BusinessCalendarService.GetBusinessDate(
-                    ClubClock.Current.LocalNow));
-            if (current != null &&
-                (current.UpdatedAt > committedAt ||
-                 (current.Amount == Math.Max(0, amount) &&
-                  current.ExpectedAmount == expectedAmount &&
-                  string.Equals(current.Note, note, StringComparison.Ordinal))))
-            {
+                item.Date.Date == BusinessCalendarService.GetBusinessDate(committedAt));
+            var replacement = CashlessCheckpointPolicy.Build(current, committedAt, amount, note, expectedAmount);
+            if (replacement == null)
                 return;
+            int index = current == null ? -1 : _records.IndexOf(current);
+            if (index < 0) _records.Add(replacement);
+            else _records[index] = replacement;
+            try { Save(); }
+            catch
+            {
+                if (index < 0) _records.Remove(replacement);
+                else _records[index] = current!;
+                throw;
             }
-
-            SetAmountForToday(amount, note, expectedAmount);
         }
 
         public static int GetExpectedCashForToday()

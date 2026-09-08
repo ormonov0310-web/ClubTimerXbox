@@ -529,7 +529,15 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            return _records
+            return GetOwnerWithdrawRecordsByPeriod(_records, fromInclusive, toExclusive);
+        }
+
+        internal static List<CashRecord> GetOwnerWithdrawRecordsByPeriod(
+            IEnumerable<CashRecord> records,
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            return records
                 .Where(record =>
                     record.Category == "Расходы" &&
                     record.ExpenseCategory == "Владелец" &&

@@ -101,6 +101,8 @@ namespace ClubTimerXbox.Services
                 var result = new FinancialPaceMonthSnapshot
                 {
                     MonthKey = month.Key,
+                    OwnerWithdrawnAmount = CashService.GetOwnerWithdrawRecordsByPeriod(
+                        month.StartInclusive, month.EndExclusive).Sum(record => record.Amount),
                     Days = days.OrderByDescending(day => day.StartInclusive).ToList(),
                     GameRevenue = days.Sum(day => day.GameRevenue),
                     TotalExpense = days.Sum(day => day.TotalExpense),

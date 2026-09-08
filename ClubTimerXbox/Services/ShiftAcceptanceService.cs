@@ -1,5 +1,6 @@
 ﻿using System;
 using ClubTimerXbox.Models;
+using System.Linq;
 
 namespace ClubTimerXbox.Services
 {
@@ -425,6 +426,18 @@ namespace ClubTimerXbox.Services
             return Current.IsManualSelfAcceptance
                 ? Current.ManualSelfAcceptanceRecheckRootKey.Trim()
                 : "";
+        }
+
+        public static void CloseCashResponsibility(CashAcceptanceItem acceptance, DateTime committedAt)
+        {
+            string root = GetRootAcceptanceKey();
+            if (!root.Equals(acceptance.RootAcceptanceKey, StringComparison.OrdinalIgnoreCase) &&
+                !root.Equals(acceptance.AcceptanceKey, StringComparison.OrdinalIgnoreCase) &&
+                !acceptance.AttemptKeys.Any(key => key.Equals(root, StringComparison.OrdinalIgnoreCase)))
+                return;
+            Current.CashResponsibilityClosedAt = committedAt;
+            Current.CashCorrectionUntil = null;
+            Save();
         }
 
         public static bool ShouldStageCashAcceptance(DateTime now)

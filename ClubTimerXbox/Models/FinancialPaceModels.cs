@@ -47,6 +47,7 @@ namespace ClubTimerXbox.Models
     public sealed class FinancialPaceMonthSnapshot
     {
         public string MonthKey { get; set; } = "";
+        public int OwnerWithdrawnAmount { get; set; }
         public int GameRevenue { get; set; }
         public int TotalExpense { get; set; }
         public int Difference { get; set; }

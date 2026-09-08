@@ -15,6 +15,10 @@ new BusinessCalendarTestSuite().Run();
 new EmployeeSalaryRuleTestSuite().Run();
 new NextUpdateWorkflowTestSuite().Run();
 new AppUpdateTestSuite().Run();
+new CashAcceptanceOwnerTestSuite().Run();
+new StockItemFoldingTestSuite().Run();
+new StockVisibilityTestSuite().Run();
+new FinancialPaceTestSuite().Run();
 
 internal sealed class EmployeeSalaryRuleTestSuite
 {
@@ -1219,7 +1223,7 @@ internal sealed class BusinessCalendarTestSuite
     {
         Test("Рабочий день меняется ровно в 06:00", BusinessDayBoundary);
         Test("Рабочий месяц меняется 1 числа в 06:00", BusinessMonthBoundary);
-        Test("Постоянный расход плавно растёт с 11 до 1", FinancialPaceExpenseRamp);
+        Test("Постоянный расход плавно растёт с 12 до 0", FinancialPaceExpenseRamp);
         Test("Новая база темпа сразу догоняет текущий час дня", FinancialPaceBaselineStartsToday);
         Test("Финансовый процент сравнивает игры и расходы", FinancialPacePercent);
         Test("Темп учитывает начисление сотруднику без рабочих часов", FinancialPaceIncludesBonusWithoutHours);
@@ -1276,11 +1280,11 @@ internal sealed class BusinessCalendarTestSuite
     {
         DateTime dayStart = new(2026, 9, 1, 6, 0, 0);
         Equal(0, FinancialPaceCalculator.CalculateFixedExpenseAccrued(
-            3000, dayStart, new DateTime(2026, 9, 1, 11, 0, 0)), "начало");
+            3000, dayStart, new DateTime(2026, 9, 1, 12, 0, 0)), "начало");
         Equal(1500, FinancialPaceCalculator.CalculateFixedExpenseAccrued(
             3000, dayStart, new DateTime(2026, 9, 1, 18, 0, 0)), "середина");
         Equal(3000, FinancialPaceCalculator.CalculateFixedExpenseAccrued(
-            3000, dayStart, new DateTime(2026, 9, 2, 1, 0, 0)), "конец");
+            3000, dayStart, new DateTime(2026, 9, 2, 0, 0, 0)), "конец");
         Equal(3000, FinancialPaceCalculator.CalculateFixedExpenseAccrued(
             3000, dayStart, new DateTime(2026, 9, 2, 5, 59, 0)), "после графика");
     }
@@ -1407,6 +1411,7 @@ internal sealed class BusinessCalendarTestSuite
             CalculatedAt = isClosed ? start.AddDays(1) : start,
             IsClosed = isClosed,
             HasExpenseBaseline = true,
+            GameRevenue = difference,
             Difference = difference
         };
     }

@@ -136,6 +136,9 @@ namespace ClubTimerXbox.Services
 
         private static void Save()
         {
+            DateTime utcNow = ClubClock.Current.UtcNow;
+            foreach (var item in _stockItems)
+                StockVisibilityPolicy.EnsureTracking(item, utcNow);
             ProductStockStorageService.Save(_stockItems);
         }
 
@@ -287,7 +290,7 @@ namespace ClubTimerXbox.Services
                 minimumQuantity = 0;
 
             item.ProductName = newProductName;
-            item.Quantity = quantity;
+            StockVisibilityPolicy.SetQuantity(item, quantity, ClubClock.Current.UtcNow);
             item.PurchasePrice = purchasePrice;
             item.SalePrice = salePrice;
             item.MinimumQuantity = minimumQuantity;
@@ -326,7 +329,7 @@ namespace ClubTimerXbox.Services
             if (quantity < 0)
                 quantity = 0;
 
-            item.Quantity = quantity;
+            StockVisibilityPolicy.SetQuantity(item, quantity, ClubClock.Current.UtcNow);
             item.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
@@ -342,7 +345,7 @@ namespace ClubTimerXbox.Services
             if (item == null)
                 return;
 
-            item.Quantity += quantity;
+            StockVisibilityPolicy.SetQuantity(item, item.Quantity + quantity, ClubClock.Current.UtcNow);
             item.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
@@ -361,7 +364,7 @@ namespace ClubTimerXbox.Services
             if (item.Quantity < quantity)
                 return false;
 
-            item.Quantity -= quantity;
+            StockVisibilityPolicy.SetQuantity(item, item.Quantity - quantity, ClubClock.Current.UtcNow);
             item.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
@@ -379,7 +382,7 @@ namespace ClubTimerXbox.Services
             if (item == null)
                 return;
 
-            item.Quantity -= quantity;
+            StockVisibilityPolicy.SetQuantity(item, item.Quantity - quantity, ClubClock.Current.UtcNow);
             item.UpdatedAt = ClubClock.Current.LocalNow;
 
             Save();
@@ -502,7 +505,7 @@ namespace ClubTimerXbox.Services
                 quantityToAdd,
                 purchasePrice);
 
-            item.Quantity = quantityAfter;
+            StockVisibilityPolicy.SetQuantity(item, quantityAfter, ClubClock.Current.UtcNow);
             item.PurchasePrice = weightedPurchasePrice;
             item.SalePrice = salePrice;
             item.MinimumQuantity = minimumQuantity;

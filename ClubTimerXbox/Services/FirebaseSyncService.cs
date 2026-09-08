@@ -100,7 +100,7 @@ namespace ClubTimerXbox.Services
                 CashAcceptanceItem? latestCashAcceptance =
                     GetLatestCashAcceptanceForCurrentBusinessMonth();
                 Dictionary<string, object?>? acceptancePayload =
-                    BuildCashAcceptancePayload(latestCashAcceptance);
+                    CreateCashAcceptancePayload(latestCashAcceptance);
                 long nowUnixMs = DateTimeOffset.Now.ToUnixTimeMilliseconds();
                 long revision = NextLiveStateRevision(nowUnixMs);
 
@@ -268,17 +268,69 @@ namespace ClubTimerXbox.Services
                 item.Difference,
                 observedAt.Ticks,
                 item.FinalizeAt?.Ticks ?? 0,
-                item.PendingCashlessVerification != null
+                CashAcceptanceOwnerCorrectionPolicy.ReviewRevision(item)
             );
         }
 
+        private static Dictionary<string, object?>? CreateCashAcceptancePayload(CashAcceptanceItem? item)
+        {
+            var payload = BuildCashAcceptancePayload(item, item != null
+                ? BuildCashAccountabilityPayload(item) : null);
+            if (item?.IsProvisional == true && payload != null)
+            {
+                var month = BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow);
+                DateTime observedAt = CashAcceptanceTimelinePolicy.GetObservationTime(item);
+                int cash = CalculateCashBalanceAfterCheckpoint(item.ActualCashAmount, observedAt, month.EndExclusive);
+                var balances = new Dictionary<string, object?>
+                {
+                    ["actualCashBalanceMonth"] = cash,
+                    ["programCashBalanceMonth"] = cash + item.ExpectedCashAmount - item.ActualCashAmount
+                };
+                if (item.PendingCashlessVerification is { } pending)
+                {
+                    int cashless = CalculateCashlessBalanceAfterCheckpoint(pending.ActualAmount,
+                        pending.ObservedAt == default ? observedAt : pending.ObservedAt,
+                        month.StartInclusive, month.EndExclusive);
+                    balances["actualCashlessBalanceMonth"] = cashless;
+                    balances["programCashlessBalanceMonth"] = cashless + pending.ProgramExpectedAmount - pending.ActualAmount;
+                }
+                payload["currentBalances"] = balances;
+            }
+            return payload;
+        }
+
+        private static Dictionary<string, object?> BuildCashAccountabilityPayload(CashAcceptanceItem? provisional)
+        {
+            var month = BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow);
+            var items = CashReconciliationService.Items;
+            int breakdown = CashReconciliationService.GetConstitutionBreakdown(month.StartInclusive, month.EndExclusive) +
+                CashAccountabilityPolicy.UnpostedDifference(items, provisional);
+            var rows = CashAccountabilityPolicy.Recommendations(items, month.StartInclusive, month.EndExclusive, provisional);
+            int formalized = EmployeeLossService.GetCappedUnpaidMoneyTotalsByEmployee(
+                month.StartInclusive, month.EndExclusive, null).Values.Sum();
+            return new Dictionary<string, object?>
+            {
+                ["cycleStartedAt"] = CashBalanceCheckpointService.GetCurrentCycleStart(month.StartInclusive, month.EndExclusive).ToString("yyyy-MM-dd HH:mm:ss"),
+                ["shortageAmount"] = Math.Max(0, -breakdown),
+                ["extraAmount"] = Math.Max(0, breakdown),
+                ["formalizedAmount"] = formalized,
+                ["pendingAmount"] = rows.Sum(row => row.Amount),
+                ["recommendedEmployeeName"] = rows.FirstOrDefault()?.EmployeeName ?? "",
+                ["recommendationType"] = rows.FirstOrDefault()?.Type ?? "unknown",
+                ["isProvisional"] = provisional?.IsProvisional == true,
+                ["recommendations"] = rows.Select(row => new { employeeName = row.EmployeeName, type = row.Type, amount = row.Amount }).ToArray()
+            };
+        }
+
         internal static Dictionary<string, object?>? BuildCashAcceptancePayload(
-            CashAcceptanceItem? item)
+            CashAcceptanceItem? item, Dictionary<string, object?>? accountability = null)
         {
             if (item == null)
                 return null;
 
             DateTime observedAt = CashAcceptanceTimelinePolicy.GetObservationTime(item);
+            DateTime cashlessObservedAt = item.PendingCashlessVerification?.ObservedAt is { } time && time != default
+                ? time : observedAt;
             return new Dictionary<string, object?>
             {
                 ["id"] = item.Id.ToString(),
@@ -289,6 +341,9 @@ namespace ClubTimerXbox.Services
                 ["expectedAmount"] = item.ExpectedCashAmount,
                 ["actualAmount"] = item.ActualCashAmount,
                 ["difference"] = item.Difference,
+                ["reviewRevision"] = CashAcceptanceOwnerCorrectionPolicy.ReviewRevision(item),
+                ["supportsOwnerFinalization"] = true,
+                ["accountability"] = accountability,
                 ["isProvisional"] = item.IsProvisional,
                 ["createdAt"] = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                 ["createdAtUnixMs"] = new DateTimeOffset(item.CreatedAt)
@@ -301,7 +356,19 @@ namespace ClubTimerXbox.Services
                     ? new DateTimeOffset(item.FinalizeAt.Value).ToUnixTimeMilliseconds()
                     : 0,
                 ["hasPendingCashlessVerification"] =
-                    item.IsProvisional && item.PendingCashlessVerification != null
+                    item.IsProvisional && item.PendingCashlessVerification != null,
+                ["pendingCashlessVerification"] = item.IsProvisional && item.PendingCashlessVerification is { } pending
+                    ? new Dictionary<string, object?>
+                    {
+                        ["commandId"] = pending.CommandId,
+                        ["expectedAmount"] = pending.ExpectedAmount,
+                        ["actualAmount"] = pending.ActualAmount,
+                        ["difference"] = pending.ActualAmount - pending.ExpectedAmount,
+                        ["programExpectedAmount"] = pending.ProgramExpectedAmount,
+                        ["suspectedEmployeeName"] = pending.SuspectedEmployeeName,
+                        ["observedAt"] = cashlessObservedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                        ["observedAtUnixMs"] = new DateTimeOffset(cashlessObservedAt).ToUnixTimeMilliseconds()
+                    } : null
             };
         }
 
@@ -388,7 +455,7 @@ namespace ClubTimerXbox.Services
                 {
                     gamesToday = snapshot.GamesToday,
                     latestCashAcceptancePresent = snapshot.LatestCashAcceptance != null,
-                    latestCashAcceptance = BuildCashAcceptancePayload(
+                    latestCashAcceptance = CreateCashAcceptancePayload(
                         snapshot.LatestCashAcceptance)
                 },
                 ["financialPace"] = snapshot.FinancialPace == null
@@ -434,7 +501,7 @@ namespace ClubTimerXbox.Services
                 ["financialPacePercent"] = snapshot.FinancialPace?.Percent ?? 0,
                 ["financialPaceAvailable"] = snapshot.FinancialPace?.HasExpenseBaseline == true,
                 ["cashAcceptancePresent"] = snapshot.LatestCashAcceptance != null,
-                ["latestCashAcceptance"] = BuildCashAcceptancePayload(
+                ["latestCashAcceptance"] = CreateCashAcceptancePayload(
                     snapshot.LatestCashAcceptance),
                 ["acceptanceRequired"] = snapshot.AcceptanceRequired,
                 ["acceptanceCompleted"] = snapshot.AcceptanceCompleted
@@ -674,58 +741,7 @@ namespace ClubTimerXbox.Services
                     : 0;
                 DateTime reconciliationCycleStart = CashBalanceCheckpointService
                     .GetCurrentCycleStart(monthStart, nextMonthStart);
-                int constitutionBreakdown = CashReconciliationService
-                    .GetConstitutionBreakdown(monthStart, nextMonthStart);
-                int constitutionRecommendations = CashReconciliationService
-                    .GetConstitutionRecommendationTotal(monthStart, nextMonthStart);
-                var cycleFormalizedMoneyLossesByEmployee = EmployeeLossService
-                    .GetCappedUnpaidMoneyTotalsByEmployee(
-                        monthStart,
-                        nextMonthStart,
-                        null
-                    );
-                int cycleFormalizedMoneyLosses = cycleFormalizedMoneyLossesByEmployee
-                    .Values
-                    .Sum();
-                int accountabilityShortage = Math.Max(0, -constitutionBreakdown);
-                int accountabilityExtra = Math.Max(0, constitutionBreakdown);
-                int accountabilityFormalized = cycleFormalizedMoneyLosses;
-                int accountabilityPending = constitutionRecommendations;
-                string accountabilityResponsible = CashReconciliationService
-                    .GetSuggestedResponsibleForOpenShortages(
-                        monthStart,
-                        nextMonthStart
-                    );
-                if (string.IsNullOrWhiteSpace(accountabilityResponsible))
-                {
-                    string historicalResponsible = CashReconciliationService
-                        .GetSuggestedResponsibleForShortageHistory(
-                            monthStart,
-                            nextMonthStart
-                        );
-                    if (cycleFormalizedMoneyLossesByEmployee.TryGetValue(
-                            historicalResponsible,
-                            out int historicalFormalizedAmount) &&
-                        historicalFormalizedAmount > 0)
-                    {
-                        accountabilityResponsible = historicalResponsible;
-                    }
-                }
-                string accountabilitySuspect = string.IsNullOrWhiteSpace(accountabilityResponsible)
-                    ? CashReconciliationService.GetSuggestedSuspectForOpenShortages(
-                        monthStart,
-                        nextMonthStart
-                    )
-                    : "";
-                if (string.IsNullOrWhiteSpace(accountabilityResponsible) &&
-                    string.IsNullOrWhiteSpace(accountabilitySuspect))
-                {
-                    accountabilitySuspect = CashReconciliationService
-                        .GetSuggestedSuspectForShortageHistory(
-                            monthStart,
-                            nextMonthStart
-                        );
-                }
+                var accountabilityPayload = BuildCashAccountabilityPayload(latestObservedCashAcceptance);
                 int ownerAvailableCashBalanceMonth = CalculateOwnerAvailableBalance(
                     actualCashBalanceMonth,
                     effectiveProgramCashBalanceMonth,
@@ -819,6 +835,7 @@ namespace ClubTimerXbox.Services
                             ? sold
                             : 0,
                         minimumQuantity = item.MinimumQuantity,
+                        stockFoldAfterUnixMs = StockVisibilityPolicy.FoldAfterUnixMs(item),
                         isLowStock = ProductStockService.IsLowStock(item.ProductName),
                         updatedAt = item.UpdatedAt.ToString("yyyy-MM-dd HH:mm:ss")
                     })
@@ -873,11 +890,6 @@ namespace ClubTimerXbox.Services
 
                 var cashReconciliation = CashReconciliationService
                     .GetRecentItems()
-                    .Select(item =>
-                    {
-                        EnsureCashlessShortageSuspect(item, reconciliationCycleStart);
-                        return item;
-                    })
                     .Select(item => new
                     {
                         id = item.Id.ToString(),
@@ -1016,7 +1028,7 @@ namespace ClubTimerXbox.Services
                         incomeCashMonth = incomePaymentMonth.CashAmount,
                         incomeMBankMonth = incomePaymentMonth.MBankAmount,
                         cashlessMonth,
-                        latestCashAcceptance = BuildCashAcceptancePayload(
+                        latestCashAcceptance = CreateCashAcceptancePayload(
                             latestObservedCashAcceptance),
                         actualCashBalanceMonth,
                         programCashBalanceMonth = effectiveProgramCashBalanceMonth,
@@ -1095,22 +1107,7 @@ namespace ClubTimerXbox.Services
 
                     autoSalary = BuildAutoSalaryPayload(autoSalaryReport),
 
-                    cashAccountability = new
-                    {
-                        cycleStartedAt = reconciliationCycleStart.ToString("yyyy-MM-dd HH:mm:ss"),
-                        shortageAmount = accountabilityShortage,
-                        extraAmount = accountabilityExtra,
-                        formalizedAmount = accountabilityFormalized,
-                        pendingAmount = accountabilityPending,
-                        recommendedEmployeeName = !string.IsNullOrWhiteSpace(accountabilityResponsible)
-                            ? accountabilityResponsible
-                            : accountabilitySuspect,
-                        recommendationType = !string.IsNullOrWhiteSpace(accountabilityResponsible)
-                            ? "responsible"
-                            : !string.IsNullOrWhiteSpace(accountabilitySuspect)
-                                ? "suspect"
-                                : "unknown"
-                    },
+                    cashAccountability = accountabilityPayload,
 
                     cashReconciliation,
 
@@ -1944,6 +1941,7 @@ namespace ClubTimerXbox.Services
             return new
             {
                 monthKey = month.MonthKey,
+                ownerWithdrawnAmount = month.OwnerWithdrawnAmount,
                 gameRevenue = month.GameRevenue,
                 totalExpense = month.TotalExpense,
                 difference = month.Difference,
@@ -4766,36 +4764,6 @@ namespace ClubTimerXbox.Services
                 .FirstOrDefault();
         }
 
-        private static void EnsureCashlessShortageSuspect(
-            CashReconciliationItem item,
-            DateTime monthStart)
-        {
-            if (item == null ||
-                item.Kind != CashReconciliationKind.CashlessShortage ||
-                item.Status != CashReconciliationStatus.Open ||
-                item.Amount <= 0 ||
-                !string.IsNullOrWhiteSpace(item.ResponsibleEmployeeName) ||
-                !string.IsNullOrWhiteSpace(item.SuspectedEmployeeName))
-            {
-                return;
-            }
-
-            string suspectedEmployee = FindCashlessShortageSuspect(
-                item.Amount,
-                monthStart,
-                item.CreatedAt
-            );
-
-            if (string.IsNullOrWhiteSpace(suspectedEmployee))
-                return;
-
-            CashReconciliationService.SetSuspectedEmployee(
-                item.Id,
-                suspectedEmployee,
-                $"Рекомендация системы: проверить безнал-операции сотрудника {suspectedEmployee}."
-            );
-        }
-
         private static string FindCashlessShortageSuspect(
             int shortageAmount,
             DateTime fromExclusive,
@@ -4924,11 +4892,46 @@ namespace ClubTimerXbox.Services
             }
 
             CashAcceptancePostingService.FinalizeDue();
-            if (CashAcceptanceService.GetLatestUnfinalized() != null)
+            var provisional = CashAcceptanceService.GetLatestUnfinalized();
+            if (provisional != null)
             {
-                throw new Exception(
-                    "Внести корректировку пока нельзя: приёмка налички находится " +
-                    "в 10-минутном окне проверки. Сверка безнала доступна сразу.");
+                CashAcceptanceOwnerCorrectionPolicy.Validate(
+                    provisional, command.CashAcceptanceId, command.CashAcceptanceRevision);
+                DateTime now = ClubClock.Current.LocalNow;
+                var period = BusinessCalendarService.GetBusinessMonth(now);
+                var pending = provisional.PendingCashlessVerification!;
+                int cashNow = CalculateCashBalanceAfterCheckpoint(
+                    provisional.ActualCashAmount,
+                    CashAcceptanceTimelinePolicy.GetObservationTime(provisional), period.EndExclusive);
+                int cashlessNow = CalculateCashlessBalanceAfterCheckpoint(
+                    pending.ActualAmount,
+                    pending.ObservedAt == default
+                        ? CashAcceptanceTimelinePolicy.GetObservationTime(provisional)
+                        : pending.ObservedAt,
+                    period.StartInclusive, period.EndExclusive);
+                var result = CashAcceptancePostingService.FinalizeByOwner(
+                    provisional, commandId, command.CashAcceptanceId, command.CashAcceptanceRevision,
+                    period.StartInclusive, period.EndExclusive, now, cashNow, cashlessNow);
+                CompleteCommittedCashCorrection(commandId, now, cashNow, cashlessNow, note);
+                return $"Ожидание приёмки завершено владельцем. " +
+                    $"Оформлено потерь: {result.Assignments.Sum(item => item.Amount)} сом. " +
+                    $"Разбор: {result.Breakdown:+#;-#;0} сом. Рекомендации: {result.RecommendationTotal} сом.";
+            }
+
+            CashAcceptanceItem? reviewedAcceptance = null;
+            if (!string.IsNullOrWhiteSpace(command.CashAcceptanceId))
+            {
+                reviewedAcceptance = GetLatestCashAcceptanceForCurrentBusinessMonth()
+                    ?? throw new InvalidOperationException("Приёмка больше не актуальна. Обновите сверку.");
+                CashAcceptanceOwnerCorrectionPolicy.Validate(
+                    reviewedAcceptance, command.CashAcceptanceId, command.CashAcceptanceRevision);
+                if (!string.IsNullOrWhiteSpace(reviewedAcceptance.OwnerCorrectionCommandId))
+                    return "Эта приёмка уже завершена корректировкой владельца. Обновите сверку.";
+                var reviewedMonth = BusinessCalendarService.GetBusinessMonth(
+                    CashAcceptanceTimelinePolicy.GetObservationTime(reviewedAcceptance));
+                CashAcceptanceOwnerCorrectionPolicy.ValidateFinalizedReview(
+                    reviewedAcceptance,
+                    GetLatestCashlessVerificationTime(reviewedMonth.StartInclusive, reviewedMonth.EndExclusive));
             }
 
             var currentMonth = BusinessCalendarService.GetBusinessMonth(
@@ -4937,7 +4940,8 @@ namespace ClubTimerXbox.Services
             var nextMonthStart = currentMonth.EndExclusive;
             DateTime reconciliationCycleStart = CashBalanceCheckpointService
                 .GetCurrentCycleStart(monthStart, nextMonthStart);
-            int actualCashless = command.Amount;
+            int actualCashless = reviewedAcceptance == null ? command.Amount :
+                CalculateActualCashlessBalanceByPeriod(monthStart, nextMonthStart) ?? command.Amount;
             int? actualCash = CalculateActualCashBalanceByPeriod(
                 monthStart,
                 nextMonthStart
@@ -5027,15 +5031,23 @@ namespace ClubTimerXbox.Services
                 $"Рекомендации: {finalRecommendations} сом.";
         }
 
-        private static void CompleteCommittedCashCorrection(
+        internal static void CompleteCommittedCashCorrection(
             string commandId,
             DateTime committedAt,
             int? actualCash,
             int actualCashless,
             string note)
         {
+            var acceptance = CashAcceptanceService.Items.FirstOrDefault(item =>
+                item.OwnerCorrectionCommandId.Equals(commandId, StringComparison.Ordinal));
+            if (acceptance != null)
+            {
+                if (acceptance.IsProvisional)
+                    CashAcceptanceService.MarkFinalized(acceptance.Id, committedAt);
+                ShiftAcceptanceService.CloseCashResponsibility(acceptance, committedAt);
+            }
             CashPenaltyPostingService.Recover();
-            CashlessService.SetAmountForTodayIfNotNewerThan(
+            CashlessService.ApplyCommittedCorrection(
                 committedAt,
                 actualCashless,
                 note,
@@ -5046,9 +5058,12 @@ namespace ClubTimerXbox.Services
                 CashBalanceCheckpointService.AddCurrentMonthCheckpoint(
                     actualCash.Value,
                     note,
-                    commandId
+                    commandId,
+                    committedAt
                 );
             }
+            if (acceptance != null)
+                CashAcceptanceService.CompleteOwnerCorrection(acceptance, committedAt);
         }
 
         private static void PersistCashAssignments(
@@ -5580,6 +5595,10 @@ namespace ClubTimerXbox.Services
             public string MonthKey { get; set; } = "";
             public string OwnerWithdrawMode { get; set; } = "";
             public string RecordId { get; set; } = "";
+
+            public string CashAcceptanceId { get; set; } = "";
+
+            public string CashAcceptanceRevision { get; set; } = "";
             public string ReconciliationId { get; set; } = "";
             public string ResolutionType { get; set; } = "";
             public string LossKind { get; set; } = "";

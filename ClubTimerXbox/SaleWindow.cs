@@ -25,7 +25,7 @@ namespace ClubTimerXbox
         public int TotalAmount { get; private set; }
         public SaleWindowResultType ResultType { get; private set; } = SaleWindowResultType.None;
 
-        private readonly WrapPanel _itemCardsPanel = new WrapPanel();
+        private readonly StockItemListPanel _itemCardsPanel = new StockItemListPanel(wrapItems: true);
         private readonly Button _productsTabButton = new Button();
         private readonly Button _servicesTabButton = new Button();
         private readonly TextBox _quantityTextBox = new TextBox();
@@ -309,7 +309,7 @@ namespace ClubTimerXbox
 
         private void LoadItems()
         {
-            _itemCardsPanel.Children.Clear();
+            _itemCardsPanel.ClearItems();
             UpdateTabStyles();
 
             var filteredItems = _items
@@ -317,12 +317,14 @@ namespace ClubTimerXbox
 
             foreach (var item in filteredItems)
             {
-                _itemCardsPanel.Children.Add(CreateSaleCard(item));
+                var stock = item.Type == SaleItemType.Product
+                    ? ProductStockService.FindByProductName(item.Name) : null;
+                _itemCardsPanel.AddTrackedItem(CreateSaleCard(item),
+                    () => (stock == null ? (int?)null : stock.Quantity, stock?.ZeroStockSinceUtc));
             }
 
-            _selectedItem = filteredItems.Count > 0
-                ? filteredItems[0]
-                : null;
+            _selectedItem = filteredItems.Find(item => item.Type != SaleItemType.Product ||
+                ProductStockService.GetQuantity(item.Name) > 0);
 
             RefreshSaleCardSelection();
             UpdateCalculation();
@@ -418,6 +420,7 @@ namespace ClubTimerXbox
                 Padding = new Thickness(14),
                 Margin = new Thickness(0, 0, 12, 12),
                 Cursor = System.Windows.Input.Cursors.Hand,
+                IsEnabled = !isProduct || stock > 0,
                 Tag = item,
                 Effect = new DropShadowEffect
                 {
@@ -506,7 +509,7 @@ namespace ClubTimerXbox
 
         private void RefreshSaleCardSelection()
         {
-            foreach (var child in _itemCardsPanel.Children)
+            foreach (var child in _itemCardsPanel.ItemViews)
             {
                 if (child is not Border card ||
                     card.Tag is not SaleItem item)
