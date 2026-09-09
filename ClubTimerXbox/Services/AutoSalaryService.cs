@@ -94,9 +94,12 @@ namespace ClubTimerXbox.Services
             };
 
             var bonusInputs = BuildEmployeeBonusInputs(monthStart, nextMonthStart);
+            report.OverNormBonusReviewMessages = OverNormPortionService.GetReviewMessages(monthStart, nextMonthStart);
             var employeeInputs = EmployeeService
                 .GetAllEmployees()
-                .Where(employee => employee.IsActive)
+                .Where(employee => employee.IsActive ||
+                    (bonusInputs.TryGetValue(employee.Name, out var earned) &&
+                     earned.Bonuses.Any(b => b.Type == "OverNormGameRevenuePortion")))
                 .Select(employee =>
                 {
                     var summary = EmployeeStatsService.GetSummary(employee.Name, monthStart);
@@ -345,9 +348,10 @@ namespace ClubTimerXbox.Services
             DateTime firstBusinessDate = BusinessCalendarService.GetBusinessDate(monthStart);
             DateTime lastBusinessDate = BusinessCalendarService.GetBusinessDate(
                 nextMonthStart.AddTicks(-1));
-            foreach (var bonus in source.Bonuses.Where(item => item.Amount > 0))
+            // Use the same salary snapshot as the monthly total, even if a new portion just arrived.
+            foreach (var bonus in monthly.Bonuses.Where(item => item.Amount > 0))
             {
-                DateTime businessDate = BusinessCalendarService.GetBusinessDate(bonus.CreatedAt);
+                DateTime businessDate = bonus.GetBusinessDate();
                 if (businessDate < firstBusinessDate)
                     businessDate = firstBusinessDate;
                 else if (businessDate > lastBusinessDate)
@@ -442,7 +446,9 @@ namespace ClubTimerXbox.Services
                 ApplyPaidTimeForDay(result, scheduleStart, scheduleEnd);
                 ApplyPunctualityBonusForDay(result, scheduleStart, settings);
                 ApplyLateActiveBonusForDay(result, scheduleStart, settings);
-                ApplyOverNormBonusForDay(result, scheduleStart, scheduleEnd, settings);
+                ApplyOverNormBonusForDay(result,
+                    day.Date.AddHours(BusinessCalendarService.BusinessDayStartHour),
+                    scheduleStart, scheduleEnd, settings);
 
                 day = day.AddDays(1);
             }
@@ -664,14 +670,27 @@ namespace ClubTimerXbox.Services
 
         private static void ApplyOverNormBonusForDay(
             Dictionary<string, EmployeeBonusInput> result,
+            DateTime businessDayStart,
             DateTime scheduleStart,
             DateTime scheduleEnd,
             AutoSalarySettings settings)
         {
+            BusinessPeriodRange businessDay = BusinessCalendarService.GetBusinessDay(businessDayStart);
+            if (OverNormPortionService.AppliesTo(businessDay.StartInclusive))
+            {
+                foreach (var item in OverNormPortionService.GetBonuses(businessDay.StartInclusive))
+                {
+                    if (!result.TryGetValue(item.EmployeeName, out var input))
+                    {
+                        input = new EmployeeBonusInput { EmployeeName = item.EmployeeName };
+                        result[item.EmployeeName] = input;
+                    }
+                    input.Bonuses.Add(item.Bonus);
+                }
+                return;
+            }
             if (settings.DailyGameRevenueNorm <= 0 || settings.OverNormBonusPercent <= 0)
                 return;
-
-            BusinessPeriodRange businessDay = BusinessCalendarService.GetBusinessDay(scheduleStart);
             if (businessDay.StartInclusive < FullDayOverNormBonusEffectiveFrom)
             {
                 ApplyLegacyOverNormBonusForDay(

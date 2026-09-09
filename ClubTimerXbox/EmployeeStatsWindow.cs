@@ -1042,7 +1042,9 @@ namespace ClubTimerXbox
                     Children =
                     {
                         CreateBigLine($"{bonus.Title}: +{bonus.Amount} сом"),
-                        CreateLine(bonus.CreatedAt.ToString("dd.MM.yyyy HH:mm")),
+                        CreateLine(bonus.EarnedBusinessDate.HasValue
+                            ? bonus.GetBusinessDate().ToString("dd.MM.yyyy")
+                            : bonus.CreatedAt.ToString("dd.MM.yyyy HH:mm")),
                         CreateDescription(bonus.Description)
                     }
                 }));

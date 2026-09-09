@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Fixes handover responsibility and early owner correction; refines financial pace; folds goods only after 24 continuous zero-stock hours, with shared phone deadlines and restock cancellation." `
+            -Notes "Adds club-scoped product photographs with replace/delete support. Introduces immediate over-plan game bonuses in full 500-som portions, a two-hour participation minimum and fixed integer shares. New bonus rules start on the next business day after installation; past earnings stay unchanged." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,28 +66,32 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Cash acceptance keeps the outgoing and incoming employees visible during
-          the ten-minute review. Owner correction can finalize the reviewed handover
-          early after its linked cashless verification. Revision checks and recovery
-          prevent duplicated postings or replacement of newer facts after retries.
-          Cash responsibility and recommendations use the current investigation.
+          Product photographs are scoped to the selected club and stable product ID.
+          Twelve approved stock images are included for Salikhov only. The updated
+          owner app can take, select, replace or delete a photo; deletion restores
+          branded water without restoring the initial product photo on the next sync.
+          Other clubs do not receive Salikhov's initial images. Ordinary snapshots
+          carry compact photo references; custom images are cached separately.
 
-          Stock, acceptance and sales keep newly empty goods visible for 24 continuous
-          hours, then offer an expandable group with the most recently hidden first.
-          Replenishment cancels hiding; repeated zero or price edits do not restart
-          the timer. The phone stock catalogue uses the same cached UTC deadline.
-          Existing zero stock without a date gets a full day on the updated PC.
-          Services and the purchase catalogue remain visible; draft inputs survive.
+          Every full 500 som of finalized game revenue above the configured plan
+          creates an immediate bonus portion. The configured bonus rate is retained.
+          Only employees with at least two hours in that business day participate,
+          with shares based on their hours at that portion's allocation. If nobody
+          qualifies yet, full portions wait within the same business day. Each share
+          is floored to whole som; existing portions are not redistributed later.
+          Partial revenue below 500 som earns no closing bonus and is not carried
+          into the next day. Bonuses retain their source business day in statistics.
 
-          Financial pace accrues fixed expenses from noon to midnight, keeps saved
-          closed days unchanged and avoids projecting partial fixed costs twice.
-          The owner app keeps monthly forecast and owner withdrawals visible while
-          allowing calculation details to collapse. Live day updates do not replace
-          monthly pace data.
+          The new bonus policy starts on the next business day after the updated PC
+          first runs. Previously earned bonuses and closed accounting months remain
+          unchanged. Late finalized sessions retain their source day; financial pace
+          corrections within an open month are audited. Post-recognition reductions
+          that need review are flagged rather than silently rewriting earned pay.
 
-          The package includes the self-contained Windows runtime and all 11 required
-          alarm/interface sounds. The companion owner APK has been updated locally.
-          Personal product photographs are deferred to a future update.
+          The package includes the self-contained Windows runtime, all 11 required
+          sounds, the branded fallback and all 12 initial product photographs.
+          The companion owner APK has been updated locally. Full photo editing
+          between the phone and an updated production PC remains a post-update check.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {

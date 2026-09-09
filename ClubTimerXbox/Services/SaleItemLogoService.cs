@@ -38,6 +38,9 @@ namespace ClubTimerXbox.Services
 
         public static string? GetLogoPath(SaleItem item)
         {
+            if (item.Type == SaleItemType.Product)
+                return ProductPhotoService.Resolve(item.Name);
+
             string? fileName = GetLogoFileName(item.Name);
 
             if (fileName is null && item.Type == SaleItemType.Service)

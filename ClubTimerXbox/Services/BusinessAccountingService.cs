@@ -217,6 +217,12 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        public static bool IsMonthClosed(string monthKey)
+        {
+            lock (Gate)
+                return State.Months.TryGetValue(monthKey, out var month) && month.IsClosed;
+        }
+
         public static bool TryGetClosedPayroll(
             string monthKey,
             string employeeName,

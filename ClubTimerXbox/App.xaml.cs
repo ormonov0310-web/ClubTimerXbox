@@ -101,6 +101,20 @@ namespace ClubTimerXbox
             KnownDataRepairService.Apply();
             CashPenaltyPostingService.Recover();
             CashAcceptancePostingService.Start();
+            try
+            {
+                OverNormPortionService.Start();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine("Bonus ledger startup: " + ex.GetType().Name);
+                MessageBox.Show("Не удалось открыть журнал бонусов за план. " +
+                    "Не удаляйте файлы данных: обратитесь к владельцу для проверки. " +
+                    "Программа остановлена, чтобы не пересчитать начисления неправильно.",
+                    "Требуется проверка данных", MessageBoxButton.OK, MessageBoxImage.Error);
+                Shutdown();
+                return;
+            }
             CashMonthCloseService.Start();
             BusinessAccountingService.EnsureActivated();
             BusinessDayTransitionService.Start();

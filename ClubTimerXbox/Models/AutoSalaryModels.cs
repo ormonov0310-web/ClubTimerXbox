@@ -46,7 +46,14 @@ namespace ClubTimerXbox.Models
 
     public class AutoSalaryBonusItem
     {
+        public string Id { get; set; } = "";
+
         public DateTime CreatedAt { get; set; }
+
+        public DateTime? EarnedBusinessDate { get; set; }
+
+        public DateTime GetBusinessDate() => EarnedBusinessDate?.Date ??
+            Services.BusinessCalendarService.GetBusinessDate(CreatedAt);
 
         public string Type { get; set; } = "";
 
@@ -168,6 +175,8 @@ namespace ClubTimerXbox.Models
 
     public class AutoSalaryReport
     {
+        public List<string> OverNormBonusReviewMessages { get; set; } = new();
+
         public string MonthKey { get; set; } = "";
 
         public AutoSalarySettings Settings { get; set; } = new AutoSalarySettings();

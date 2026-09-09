@@ -124,6 +124,7 @@ namespace ClubTimerXbox.Services
                 PaymentRecordId = paymentRecordId,
                 IsAttachedToGameSession = gameSessionId != null
             });
+            OverNormPortionService.OnGameIncomeRecorded(businessOccurredAt ?? ClubClock.Current.LocalNow);
         }
 
         public static void AddProductOrServiceIncome(

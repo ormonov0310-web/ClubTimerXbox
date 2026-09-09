@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
@@ -820,12 +821,15 @@ namespace ClubTimerXbox.Services
                     })
                     .ToList();
 
+                ProductPhotoService.EnsureSeed();
                 var productPopularity = ProductPopularityService.GetLifetimePaidQuantities();
                 var stockItems = ProductPopularityService
                     .OrderStock(ProductStockService.StockItems, productPopularity)
                     .Select(item => new
                     {
                         itemType = "Product",
+                        productId = item.Id.ToString(),
+                        photo = ProductPhotoService.Snapshot(item.Id),
                         productName = item.ProductName,
                         name = item.ProductName,
                         quantity = item.Quantity,
@@ -1868,6 +1872,7 @@ namespace ClubTimerXbox.Services
                 timeFundAmount = report.TimeFundAmount,
                 gameRevenueFundAmount = report.GameRevenueFundAmount,
                 productShareFundAmount = report.ProductShareFundAmount,
+                overNormBonusReviewMessages = report.OverNormBonusReviewMessages,
                 productBonusTotalAmount = report.ProductBonusTotalAmount,
                 bonusTotalAmount = report.BonusTotalAmount,
                 employees = report.Employees.Select(employee => new
@@ -1916,7 +1921,9 @@ namespace ClubTimerXbox.Services
                     }).ToList(),
                     bonuses = employee.Bonuses.Select(bonus => new
                     {
+                        id = bonus.Id,
                         createdAt = bonus.CreatedAt.ToString("O"),
+                        businessDateKey = bonus.GetBusinessDate().ToString("yyyy-MM-dd"),
                         type = bonus.Type,
                         title = bonus.Title,
                         description = bonus.Description,
@@ -3321,6 +3328,17 @@ namespace ClubTimerXbox.Services
                         $"Цена товара обновлена: {command.ProductName} → {command.SalePrice} сом."
                     );
 
+                    return;
+                }
+
+                if (command.Type == "SetProductPhoto")
+                {
+                    await ApplyProductPhotoAsync(commandId, command);
+                    if (!await PushCurrentStateAsync(places.ToList()))
+                        throw new InvalidOperationException(
+                            "Фото сохранено на ПК, но снимок не отправлен. Обновите данные клуба позже.");
+                    await MarkCommandApplied(commandId, command, "Фотография товара сохранена.",
+                        pushCurrentState: false);
                     return;
                 }
 
@@ -5430,6 +5448,73 @@ namespace ClubTimerXbox.Services
             return "Product";
         }
 
+        private static async Task ApplyProductPhotoAsync(string commandId, FirebaseCommand command)
+        {
+            var identity = PcIdentityService.Current;
+            string clubId = identity.ClubId;
+            string installationId = identity.InstallationId;
+            if (command.TargetClubId != clubId || command.TargetInstallationId != installationId ||
+                !Guid.TryParse(command.ProductId, out Guid productId) || productId == Guid.Empty ||
+                !ProductStockService.StockItems.Any(p => p.Id == productId))
+                throw new InvalidOperationException("Товар или выбранный клуб уже изменились.");
+
+            var store = ProductPhotoService.Current;
+            store.EnsureSeed(clubId, ProductStockService.StockItems);
+            var old = store.Get(clubId, productId);
+            if (old.LastCommandId == commandId) return;
+            if (command.ExpectedPhotoRevision == null || old.Revision != command.ExpectedPhotoRevision)
+                throw new InvalidOperationException("Фото уже изменилось. Обновите карточку и повторите.");
+            if (command.PhotoAction != "remove" && command.PhotoAction != "assign")
+                throw new InvalidOperationException("Неизвестная команда фотографии.");
+
+            if (command.PhotoAction == "assign")
+            {
+                if (!ProductPhotoStore.IsHash(command.ContentHash))
+                    throw new InvalidOperationException("Неверный идентификатор фотографии.");
+                if (!store.HasBlob(clubId, command.ContentHash))
+                {
+                    string url = await FirebaseAuthService.BuildDatabaseUrlAsync(
+                        $"clubs/{clubId}/productPhotoBlobs/{command.ContentHash}");
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                    using var response = await _httpClient.GetAsync(url,
+                        HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+                    response.EnsureSuccessStatusCode();
+                    const int maxPayload = ProductPhotoStore.MaxImageBytes * 2;
+                    if (response.Content.Headers.ContentLength > maxPayload)
+                        throw new InvalidDataException("Фотография слишком большая.");
+                    await using var input = await response.Content.ReadAsStreamAsync(timeout.Token);
+                    using var payload = new MemoryStream();
+                    var buffer = new byte[8192];
+                    int count;
+                    while ((count = await input.ReadAsync(buffer, timeout.Token)) > 0)
+                    {
+                        if (payload.Length + count > maxPayload)
+                            throw new InvalidDataException("Фотография слишком большая.");
+                        payload.Write(buffer, 0, count);
+                    }
+                    var blob = JsonSerializer.Deserialize<ProductPhotoBlob>(payload.ToArray(),
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (blob?.MimeType != "image/jpeg")
+                        throw new InvalidDataException("Фотография не найдена или имеет неверный формат.");
+                    store.SaveBlob(clubId, command.ContentHash, Convert.FromBase64String(blob.ContentBase64));
+                }
+            }
+
+            // A user can switch installation/club or delete a product during an awaited download.
+            if (PcIdentityService.Current.ClubId != clubId ||
+                PcIdentityService.Current.InstallationId != installationId ||
+                !ProductStockService.StockItems.Any(p => p.Id == productId))
+                throw new InvalidOperationException("Товар или выбранный клуб уже изменились.");
+            store.Apply(clubId, productId, command.ExpectedPhotoRevision.Value,
+                command.PhotoAction, command.ContentHash, commandId);
+        }
+
+        private sealed class ProductPhotoBlob
+        {
+            public string MimeType { get; set; } = "";
+            public string ContentBase64 { get; set; } = "";
+        }
+
         private static async Task MarkCommandApplied(
             string commandId,
             FirebaseCommand command,
@@ -5570,6 +5655,11 @@ namespace ClubTimerXbox.Services
             public string ItemType { get; set; } = "Product";
 
             public string ProductName { get; set; } = "";
+
+            public string ProductId { get; set; } = "";
+            public string PhotoAction { get; set; } = "";
+            public string ContentHash { get; set; } = "";
+            public long? ExpectedPhotoRevision { get; set; }
 
             public string NewProductName { get; set; } = "";
 

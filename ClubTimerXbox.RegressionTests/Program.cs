@@ -3,6 +3,18 @@ using ClubTimerXbox.Services;
 using ClubTimerUpdater;
 using System.Text.Json;
 
+if (args.Contains("--photos", StringComparer.OrdinalIgnoreCase))
+{
+    new ProductPhotoTestSuite().Run();
+    return;
+}
+
+if (args.Contains("--portions", StringComparer.OrdinalIgnoreCase))
+{
+    new OverNormPortionTests().Run();
+    return;
+}
+
 if (args.Contains("--cash", StringComparer.OrdinalIgnoreCase))
 {
     new CashConstitutionTestSuite().Run();
@@ -19,6 +31,8 @@ new CashAcceptanceOwnerTestSuite().Run();
 new StockItemFoldingTestSuite().Run();
 new StockVisibilityTestSuite().Run();
 new FinancialPaceTestSuite().Run();
+new ProductPhotoTestSuite().Run();
+new OverNormPortionTests().Run();
 
 internal sealed class EmployeeSalaryRuleTestSuite
 {

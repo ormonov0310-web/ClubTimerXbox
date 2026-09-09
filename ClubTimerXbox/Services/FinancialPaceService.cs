@@ -72,8 +72,13 @@ namespace ClubTimerXbox.Services
                     DateTime dayEnd = dayStart.AddDays(1);
                     string dayKey = dayStart.ToString("yyyy-MM-dd");
                     bool isClosed = now >= dayEnd;
+                    var portions = OverNormPortionService.GetDay(dayStart);
                     if (isClosed && _state.ClosedDays.TryGetValue(dayKey, out var stored))
                     {
+                        if (portions != null && FinancialPacePortionAdjustment.Apply(stored, portions,
+                                salaryByDay.GetValueOrDefault(dayKey), now,
+                                BusinessAccountingService.IsMonthClosed(month.Key)))
+                            Save();
                         days.Add(Clone(stored));
                         continue;
                     }
@@ -83,6 +88,7 @@ namespace ClubTimerXbox.Services
                         dayEnd,
                         now,
                         salaryByDay.TryGetValue(dayKey, out int salary) ? salary : 0);
+                    calculated.OverNormPortionCount = portions?.Portions.Count ?? 0;
                     if (isClosed && dayStart >= FeatureEffectiveFrom)
                     {
                         calculated.IsClosed = true;
@@ -315,6 +321,8 @@ namespace ClubTimerXbox.Services
                 GameRevenue = source.GameRevenue,
                 Difference = source.Difference,
                 Percent = source.Percent,
+                OverNormPortionCount = source.OverNormPortionCount,
+                RecognitionAdjustments = source.RecognitionAdjustments?.ToList() ?? new(),
                 Timeline = source.Timeline?.Select(Clone).ToList() ?? new List<FinancialPacePoint>()
             };
         }

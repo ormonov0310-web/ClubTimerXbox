@@ -1,0 +1,19 @@
+{
+  "seedId": "salikhov-2026-09-v1",
+  "clubId": "club_2",
+  "defaultAsset": "clubtimer-water-default-v1",
+  "products": {
+    "Горилла": "gorilla-original-05l",
+    "Кола 1 л": "coca-cola-classic-1l",
+    "Летс Го 1 литр": "lets-go-lemon-1l",
+    "Пепси 1 л": "pepsi-1l",
+    "Пико 1 литр": "piko-orange-1l",
+    "Сок. 1 л": "lyubimiy-nectarine-large",
+    "Султан Чай": "sultan-peach-1l",
+    "ТОРНАДО": "nitro-orange-05l",
+    "Фанта 1 литр": "fanta-orange-large",
+    "Фюсти 1 л": "fusetea-lemon-1l",
+    "Яблоко 1 литр": "pear-lemonade-large",
+    "Maxi Чай 1 л": "maxi-strawberry-1l"
+  }
+}

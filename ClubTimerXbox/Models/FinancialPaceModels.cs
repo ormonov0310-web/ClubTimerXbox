@@ -41,7 +41,19 @@ namespace ClubTimerXbox.Models
         public int GameRevenue { get; set; }
         public int Difference { get; set; }
         public int Percent { get; set; }
+        public int OverNormPortionCount { get; set; }
+        public List<FinancialPaceRecognitionAdjustment> RecognitionAdjustments { get; set; } = new();
         public List<FinancialPacePoint> Timeline { get; set; } = new();
+    }
+
+    public sealed record FinancialPaceRecognitionAdjustment
+    {
+        public DateTime RecordedAt { get; init; }
+        public int PreviousGameRevenue { get; init; }
+        public int GameRevenue { get; init; }
+        public int PreviousSalary { get; init; }
+        public int Salary { get; init; }
+        public int PortionCount { get; init; }
     }
 
     public sealed class FinancialPaceMonthSnapshot

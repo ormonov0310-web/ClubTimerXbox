@@ -457,14 +457,17 @@ namespace ClubTimerXbox
 
             var logoPath = SaleItemLogoService.GetLogoPath(item);
 
-            if (!string.IsNullOrWhiteSpace(logoPath))
+            foreach (var path in isProduct
+                ? new[] { logoPath, ProductPhotoService.DefaultPath }
+                : new[] { logoPath })
             {
+                if (string.IsNullOrWhiteSpace(path)) continue;
                 try
                 {
                     visual.Child = new Image
                     {
-                        Source = LoadBitmap(logoPath),
-                        Stretch = Stretch.UniformToFill
+                        Source = LoadBitmap(path),
+                        Stretch = isProduct ? Stretch.Uniform : Stretch.UniformToFill
                     };
 
                     return visual;
