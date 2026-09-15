@@ -31,6 +31,7 @@ namespace ClubTimerXbox
         private DispatcherTimer? _cashRecountButtonTimer;
 
         private int _expectedCashAmount = 0;
+        private CashPhysicalBalanceCalculation? _expectedCashCalculation;
         private DateTime? _displayedCashResponsibilityClosedAt;
 
         private enum ActiveSection
@@ -821,75 +822,20 @@ namespace ClubTimerXbox
             try
             {
                 CashAcceptancePostingService.FinalizeDue();
-                var lastCashAcceptance = CashAcceptanceService.GetLastAcceptance();
-                var lastCashCheckpoint = CashBalanceCheckpointService.Items
-                    .OrderByDescending(item => item.CreatedAt)
-                    .FirstOrDefault();
+                DateTime now = ClubClock.Current.LocalNow;
+                DateTime monthStart = BusinessCalendarService
+                    .GetBusinessMonth(now)
+                    .StartInclusive;
+                _expectedCashCalculation = CashBalanceSummaryService
+                    .CalculatePhysicalCashBalance(
+                        monthStart,
+                        now.AddSeconds(1));
 
-                DateTime fromTime;
-                int baseCashAmount;
-
-                if (lastCashCheckpoint != null &&
-                    (lastCashAcceptance == null ||
-                     lastCashCheckpoint.CreatedAt >= lastCashAcceptance.CreatedAt))
-                {
-                    fromTime = lastCashCheckpoint.CreatedAt;
-                    baseCashAmount = lastCashCheckpoint.CashAmount;
-                }
-                else if (lastCashAcceptance != null)
-                {
-                    // Правильная логика:
-                    // последняя принятая фактическая наличка
-                    // + все новые наличные поступления после этой приёмки
-                    // - все новые наличные расходы после этой приёмки.
-                    fromTime = lastCashAcceptance.CreatedAt;
-                    baseCashAmount = lastCashAcceptance.ActualCashAmount;
-                }
-                else
-                {
-                    // Если приёмки налички ещё ни разу не было,
-                    // временно стартуем с начала текущего месяца.
-                    fromTime = BusinessCalendarService
-                        .GetBusinessMonth(ClubClock.Current.LocalNow)
-                        .StartInclusive;
-                    baseCashAmount = 0;
-                }
-
-                DateTime toTime = ClubClock.Current.LocalNow.AddSeconds(1);
-
-                int cashIncome = 0;
-
-                if (PaymentService.Records != null)
-                {
-                    cashIncome = PaymentService.Records
-                        .Where(record =>
-                            record.CreatedAt > fromTime &&
-                            record.CreatedAt < toTime)
-                        .Sum(record => record.CashAmount);
-                }
-
-                int cashExpenses = 0;
-
-                try
-                {
-                    cashExpenses = CashService.GetCashExpenseTotalByPeriod(fromTime, toTime);
-                }
-                catch
-                {
-                    // Если старый сервис расходов пока не готов или в нём старые данные,
-                    // не даём окну приёмки падать.
-                    cashExpenses = 0;
-                }
-
-                int expected = baseCashAmount + cashIncome - cashExpenses;
-
-                if (expected < 0)
-                    expected = 0;
-
-                return expected;
+                return _expectedCashCalculation.Amount;
             }
             catch
             {
+                _expectedCashCalculation = null;
                 return 0;
             }
         }
@@ -918,6 +864,17 @@ namespace ClubTimerXbox
 
             if (actualCash < 0)
                 actualCash = 0;
+
+            if (_expectedCashCalculation == null)
+            {
+                MessageBox.Show(
+                    "Не удалось проверить расчётную наличку. Приёмка не сохранена.\n\n" +
+                    "Закройте это окно и откройте приёмку снова.",
+                    "Приёмка налички",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                return;
+            }
 
             var recountDecision = ShiftAcceptanceService.CheckCashRecount(
                 _expectedCashAmount,
@@ -959,7 +916,7 @@ namespace ClubTimerXbox
             if (recheckTarget != null)
             {
                 responsible = recheckTarget.ResponsibleEmployeeName;
-                CashAcceptanceService.UpsertProvisional(
+                var updatedAcceptance = CashAcceptanceService.UpsertProvisional(
                     recheckTarget.RootAcceptanceKey,
                     acceptanceKey,
                     checkedBy,
@@ -967,6 +924,13 @@ namespace ClubTimerXbox
                     _expectedCashAmount,
                     actualCash,
                     "Повторная проверка налички");
+                CashExpectationAuditService.Record(
+                    updatedAcceptance.RootAcceptanceKey,
+                    acceptanceKey,
+                    checkedBy,
+                    responsible,
+                    _expectedCashCalculation,
+                    actualCash);
                 ShiftAcceptanceService.AcceptCash();
                 PushCashFactToOwner();
 
@@ -1001,9 +965,10 @@ namespace ClubTimerXbox
             int difference = actualCash - _expectedCashAmount;
             DateTime acceptedAt = ClubClock.Current.LocalNow;
             string rootAcceptanceKey = ShiftAcceptanceService.GetRootAcceptanceKey();
+            CashAcceptanceItem acceptedItem;
             if (ShiftAcceptanceService.ShouldStageCashAcceptance(acceptedAt))
             {
-                CashAcceptanceService.UpsertProvisional(
+                acceptedItem = CashAcceptanceService.UpsertProvisional(
                     rootAcceptanceKey,
                     acceptanceKey,
                     checkedBy,
@@ -1014,7 +979,7 @@ namespace ClubTimerXbox
             }
             else
             {
-                CashAcceptancePostingService.PostFinalAcceptance(
+                acceptedItem = CashAcceptancePostingService.PostFinalAcceptance(
                     checkedBy,
                     responsible,
                     _expectedCashAmount,
@@ -1025,6 +990,14 @@ namespace ClubTimerXbox
                     acceptanceKey,
                     acceptedAt);
             }
+
+            CashExpectationAuditService.Record(
+                acceptedItem.RootAcceptanceKey,
+                acceptanceKey,
+                checkedBy,
+                responsible,
+                _expectedCashCalculation,
+                actualCash);
 
             ShiftAcceptanceService.AcceptCash();
             PushCashFactToOwner();

@@ -68,48 +68,26 @@ namespace ClubTimerXbox.Services
             DateTime fromInclusive,
             DateTime toExclusive)
         {
-            var latestAcceptance = CashAcceptanceService
-                .Items
-                .Where(item =>
-                    !item.IsProvisional &&
-                    CashAcceptanceTimelinePolicy.GetCommitTime(item) < toExclusive)
-                .OrderByDescending(CashAcceptanceTimelinePolicy.GetCommitTime)
-                .FirstOrDefault();
-            var latestCheckpoint = CashBalanceCheckpointService.Items
-                .Where(item => item.CreatedAt < toExclusive)
-                .OrderByDescending(item => item.CreatedAt)
-                .FirstOrDefault();
+            var calculation = CalculatePhysicalCashBalance(
+                fromInclusive,
+                toExclusive);
 
-            if (latestAcceptance == null && latestCheckpoint == null)
-                return null;
+            return calculation.HasObservedSource
+                ? calculation.Amount
+                : null;
+        }
 
-            bool useCheckpoint = CashAcceptanceTimelinePolicy.CheckpointWins(
-                latestAcceptance,
-                latestCheckpoint);
-            DateTime checkpoint = useCheckpoint
-                ? latestCheckpoint!.CreatedAt
-                : CashAcceptanceTimelinePolicy.GetObservationTime(latestAcceptance!);
-            int checkpointAmount = useCheckpoint
-                ? latestCheckpoint!.CashAmount
-                : latestAcceptance!.ActualCashAmount;
-
-            int cashIncomeAfterCheckpoint = PaymentService.Records
-                .Where(record =>
-                    record.CreatedAt > checkpoint &&
-                    record.CreatedAt < toExclusive)
-                .Sum(record => record.CashAmount);
-
-            int cashExpensesAfterCheckpoint = CashService.Records
-                .Where(record =>
-                    record.CreatedAt > checkpoint &&
-                    record.CreatedAt < toExclusive &&
-                    record.Category == "Расходы" &&
-                    record.PaymentMethod == "Наличные")
-                .Sum(record => record.Amount);
-
-            return checkpointAmount +
-                   cashIncomeAfterCheckpoint -
-                   cashExpensesAfterCheckpoint;
+        public static CashPhysicalBalanceCalculation CalculatePhysicalCashBalance(
+            DateTime fromInclusive,
+            DateTime toExclusive)
+        {
+            return CashPhysicalBalancePolicy.Calculate(
+                CashAcceptanceService.Items,
+                CashBalanceCheckpointService.Items,
+                PaymentService.Records,
+                CashService.Records,
+                fromInclusive,
+                toExclusive);
         }
 
         public static int CalculateExpectedCashBalanceByPeriod(

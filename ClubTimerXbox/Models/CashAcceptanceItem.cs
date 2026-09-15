@@ -21,7 +21,7 @@ namespace ClubTimerXbox.Models
 
         public bool IsProvisional { get; set; }
 
-        public DateTime UpdatedAt { get; set; } = DateTime.Now;
+        public DateTime UpdatedAt { get; set; }
 
         public DateTime? FinalizeAt { get; set; }
 

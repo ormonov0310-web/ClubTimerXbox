@@ -41,6 +41,14 @@ internal sealed class NextUpdateWorkflowTestSuite
         Test("expired provisional remains a correction barrier until posted", ExpiredProvisionalStillBlocksCorrection);
         Test("linked cashless settles its own handover before older cards", LinkedCashlessHasFirstPriority);
         Test("checkpoint inside the window cannot hide the finalized fact", FinalizedFactWinsWindowCheckpoint);
+        Test("recount fact does not count earlier cash income twice", RecountFactDoesNotRepeatEarlierIncome);
+        Test("cash income after the latest fact is counted once", IncomeAfterLatestFactCountsOnce);
+        Test("recount fact does not subtract earlier cash expense twice", RecountFactDoesNotRepeatEarlierExpense);
+        Test("cash expense after the latest fact is counted once", ExpenseAfterLatestFactCountsOnce);
+        Test("finalized recount wins an interim owner checkpoint", FinalizedRecountWinsInterimCheckpoint);
+        Test("newer owner checkpoint becomes the cash baseline", NewerCheckpointWinsCashBaseline);
+        Test("physical cash uses expense creation time instead of report time", PhysicalCashUsesExpenseCreationTime);
+        Test("legacy acceptance without observation time uses creation time", LegacyAcceptanceUsesCreationTime);
         Test("daily employee earnings reconcile exactly to monthly components", DailyEmployeeEarningsMatchMonthlyTotals);
 
         Console.WriteLine();
@@ -566,6 +574,217 @@ internal sealed class NextUpdateWorkflowTestSuite
             firstAt.AddMinutes(10),
             CashAcceptanceTimelinePolicy.GetCommitTime(acceptance),
             "source precedence time");
+    }
+
+    private static void RecountFactDoesNotRepeatEarlierIncome()
+    {
+        var firstAt = new DateTime(2026, 9, 15, 11, 0, 0);
+        var calculation = CashPhysicalBalancePolicy.Calculate(
+            new[]
+            {
+                FinalizedAcceptance(
+                    firstAt,
+                    firstAt.AddMinutes(6),
+                    firstAt.AddMinutes(10),
+                    actualCash: 1200)
+            },
+            Array.Empty<CashBalanceCheckpointItem>(),
+            new[] { CashPayment(firstAt.AddMinutes(5), 200) },
+            Array.Empty<CashRecord>(),
+            firstAt.Date,
+            firstAt.AddMinutes(11));
+
+        Equal(1200, calculation.Amount, "recount baseline");
+        Equal(0, calculation.CashIncome, "income already included by recount");
+    }
+
+    private static void IncomeAfterLatestFactCountsOnce()
+    {
+        var firstAt = new DateTime(2026, 9, 15, 11, 0, 0);
+        var calculation = CashPhysicalBalancePolicy.Calculate(
+            new[]
+            {
+                FinalizedAcceptance(firstAt, firstAt, firstAt.AddMinutes(10), actualCash: 1000)
+            },
+            Array.Empty<CashBalanceCheckpointItem>(),
+            new[] { CashPayment(firstAt.AddMinutes(5), 200) },
+            Array.Empty<CashRecord>(),
+            firstAt.Date,
+            firstAt.AddMinutes(11));
+
+        Equal(1200, calculation.Amount, "cash after payment");
+        Equal(200, calculation.CashIncome, "new income");
+    }
+
+    private static void RecountFactDoesNotRepeatEarlierExpense()
+    {
+        var firstAt = new DateTime(2026, 9, 15, 11, 0, 0);
+        var calculation = CashPhysicalBalancePolicy.Calculate(
+            new[]
+            {
+                FinalizedAcceptance(
+                    firstAt,
+                    firstAt.AddMinutes(6),
+                    firstAt.AddMinutes(10),
+                    actualCash: 700)
+            },
+            Array.Empty<CashBalanceCheckpointItem>(),
+            Array.Empty<PaymentRecord>(),
+            new[] { CashExpense(firstAt.AddMinutes(5), 300) },
+            firstAt.Date,
+            firstAt.AddMinutes(11));
+
+        Equal(700, calculation.Amount, "recount expense baseline");
+        Equal(0, calculation.CashExpenses, "expense already included by recount");
+    }
+
+    private static void ExpenseAfterLatestFactCountsOnce()
+    {
+        var firstAt = new DateTime(2026, 9, 15, 11, 0, 0);
+        var calculation = CashPhysicalBalancePolicy.Calculate(
+            new[]
+            {
+                FinalizedAcceptance(
+                    firstAt,
+                    firstAt.AddMinutes(6),
+                    firstAt.AddMinutes(10),
+                    actualCash: 700)
+            },
+            Array.Empty<CashBalanceCheckpointItem>(),
+            Array.Empty<PaymentRecord>(),
+            new[] { CashExpense(firstAt.AddMinutes(7), 300) },
+            firstAt.Date,
+            firstAt.AddMinutes(11));
+
+        Equal(400, calculation.Amount, "cash after expense");
+        Equal(300, calculation.CashExpenses, "new expense");
+    }
+
+    private static void FinalizedRecountWinsInterimCheckpoint()
+    {
+        var firstAt = new DateTime(2026, 9, 15, 11, 0, 0);
+        var acceptance = FinalizedAcceptance(
+            firstAt,
+            firstAt.AddMinutes(6),
+            firstAt.AddMinutes(10),
+            actualCash: 900);
+        var calculation = CashPhysicalBalancePolicy.Calculate(
+            new[] { acceptance },
+            new[]
+            {
+                new CashBalanceCheckpointItem
+                {
+                    CreatedAt = firstAt.AddMinutes(8),
+                    CashAmount = 1000
+                }
+            },
+            Array.Empty<PaymentRecord>(),
+            Array.Empty<CashRecord>(),
+            firstAt.Date,
+            firstAt.AddMinutes(11));
+
+        Equal(CashPhysicalBalanceSource.Acceptance, calculation.Source, "winning source");
+        Equal(acceptance.Id, calculation.SourceId!.Value, "acceptance source id");
+        Equal(900, calculation.Amount, "finalized fact amount");
+    }
+
+    private static void NewerCheckpointWinsCashBaseline()
+    {
+        var firstAt = new DateTime(2026, 9, 15, 11, 0, 0);
+        var checkpoint = new CashBalanceCheckpointItem
+        {
+            CreatedAt = firstAt.AddMinutes(12),
+            CashAmount = 1200
+        };
+        var calculation = CashPhysicalBalancePolicy.Calculate(
+            new[]
+            {
+                FinalizedAcceptance(
+                    firstAt,
+                    firstAt.AddMinutes(6),
+                    firstAt.AddMinutes(10),
+                    actualCash: 900)
+            },
+            new[] { checkpoint },
+            new[] { CashPayment(firstAt.AddMinutes(13), 100) },
+            Array.Empty<CashRecord>(),
+            firstAt.Date,
+            firstAt.AddMinutes(14));
+
+        Equal(CashPhysicalBalanceSource.Checkpoint, calculation.Source, "winning source");
+        Equal(checkpoint.Id, calculation.SourceId!.Value, "checkpoint source id");
+        Equal(1300, calculation.Amount, "checkpoint plus later income");
+    }
+
+    private static void PhysicalCashUsesExpenseCreationTime()
+    {
+        var firstAt = new DateTime(2026, 9, 15, 11, 0, 0);
+        var expense = CashExpense(firstAt.AddMinutes(5), 200);
+        expense.BusinessOccurredAt = firstAt.AddMonths(-1);
+        var calculation = CashPhysicalBalancePolicy.Calculate(
+            new[]
+            {
+                FinalizedAcceptance(firstAt, firstAt, firstAt.AddMinutes(1), actualCash: 1000)
+            },
+            Array.Empty<CashBalanceCheckpointItem>(),
+            Array.Empty<PaymentRecord>(),
+            new[] { expense },
+            firstAt.Date,
+            firstAt.AddMinutes(6));
+
+        Equal(800, calculation.Amount, "physical cash after backdated report expense");
+        Equal(200, calculation.CashExpenses, "physical expense");
+    }
+
+    private static void LegacyAcceptanceUsesCreationTime()
+    {
+        var createdAt = new DateTime(2026, 7, 1, 11, 0, 0);
+        string json = $"{{\"CreatedAt\":\"{createdAt:O}\",\"ActualCashAmount\":1000}}";
+        var acceptance = System.Text.Json.JsonSerializer
+            .Deserialize<CashAcceptanceItem>(json)!;
+
+        Equal(
+            createdAt,
+            CashAcceptanceTimelinePolicy.GetObservationTime(acceptance),
+            "legacy observation time");
+    }
+
+    private static CashAcceptanceItem FinalizedAcceptance(
+        DateTime createdAt,
+        DateTime observedAt,
+        DateTime finalizedAt,
+        int actualCash)
+    {
+        return new CashAcceptanceItem
+        {
+            CreatedAt = createdAt,
+            UpdatedAt = observedAt,
+            FinalizedAt = finalizedAt,
+            IsProvisional = false,
+            ActualCashAmount = actualCash
+        };
+    }
+
+    private static PaymentRecord CashPayment(DateTime createdAt, int amount)
+    {
+        return new PaymentRecord
+        {
+            CreatedAt = createdAt,
+            TotalAmount = amount,
+            CashAmount = amount
+        };
+    }
+
+    private static CashRecord CashExpense(DateTime createdAt, int amount)
+    {
+        return new CashRecord
+        {
+            CreatedAt = createdAt,
+            Type = CashRecordType.Expense,
+            Category = "Расходы",
+            PaymentMethod = "Наличные",
+            Amount = amount
+        };
     }
 
     private static void DailyEmployeeEarningsMatchMonthlyTotals()

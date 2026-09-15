@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Adds club-scoped product photographs with replace/delete support. Introduces immediate over-plan game bonuses in full 500-som portions, a two-hour participation minimum and fixed integer shares. New bonus rules start on the next business day after installation; past earnings stay unchanged." `
+            -Notes "Cash acceptance now uses the latest recount as its physical balance baseline. Payments and expenses already included by that recount are not counted twice. Acceptance, cash summary and owner data use the same calculation; existing cards and manual corrections remain unchanged." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,32 +66,24 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Product photographs are scoped to the selected club and stable product ID.
-          Twelve approved stock images are included for Salikhov only. The updated
-          owner app can take, select, replace or delete a photo; deletion restores
-          branded water without restoring the initial product photo on the next sync.
-          Other clubs do not receive Salikhov's initial images. Ordinary snapshots
-          carry compact photo references; custom images are cached separately.
+          Cash acceptance and the current cash summary now use one physical-balance
+          calculation. A repeated accepted cash fact becomes the new baseline at the
+          time of its latest recount, so payments already included in that fact are
+          not added again and expenses already included are not subtracted again.
 
-          Every full 500 som of finalized game revenue above the configured plan
-          creates an immediate bonus portion. The configured bonus rate is retained.
-          Only employees with at least two hours in that business day participate,
-          with shares based on their hours at that portion's allocation. If nobody
-          qualifies yet, full portions wait within the same business day. Each share
-          is floored to whole som; existing portions are not redistributed later.
-          Partial revenue below 500 som earns no closing bonus and is not carried
-          into the next day. Bonuses retain their source business day in statistics.
+          An owner checkpoint created during the ten-minute acceptance window cannot
+          hide a fact finalized later. A genuinely newer checkpoint still becomes the
+          baseline. Physical cash follows the real transaction time while accounting
+          dates continue to control reports.
 
-          The new bonus policy starts on the next business day after the updated PC
-          first runs. Previously earned bonuses and closed accounting months remain
-          unchanged. Late finalized sessions retain their source day; financial pace
-          corrections within an open month are audited. Post-recognition reductions
-          that need review are flagged rather than silently rewriting earned pay.
+          Legacy acceptance records without a saved recount time fall back to their
+          original creation time. If the balance calculation cannot be completed,
+          acceptance stops instead of treating expected cash as zero. Each accepted
+          fact writes a bounded local diagnostic breakdown for future investigation;
+          it is not uploaded and does not add Firebase polling or background traffic.
 
-          The package includes the self-contained Windows runtime, all 11 required
-          sounds, the branded fallback and all 12 initial product photographs.
-          The companion owner APK has been updated locally. Full photo editing
-          between the phone and an updated production PC remains a post-update check.
+          Existing shortages, extras, penalties, bonuses, owner corrections and
+          closed cards are not recalculated or changed by this update.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {
