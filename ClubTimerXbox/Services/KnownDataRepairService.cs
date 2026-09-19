@@ -17,6 +17,17 @@ namespace ClubTimerXbox.Services
         private const int SalikhovIncorrectExtraAmount = 1330;
         private const int SalikhovIncorrectFormalizedAmount = 28;
 
+        private static readonly KnownCashAcceptanceDuplicateSpec
+            SalikhovLateFinalizationDuplicate = new(
+                Guid.Parse("d1fb94aa-6da6-4952-b46b-e33ee69138b0"),
+                Guid.Parse("37acccac-f3ea-4810-b09d-2041622039f0"),
+                Guid.Parse("68f951c6-6d2c-cabc-1c07-38dce97581ef"),
+                "fb5c54658ab740b282bfdb8e0933bb59->9212194e967b4f8e8cad1b2aa108c048",
+                "\u0410\u0440\u0433\u0435\u043d",
+                "\u0422\u0435\u0441\u0442",
+                4348,
+                4148);
+
         private static readonly Guid IncorrectLossId =
             Guid.Parse("12f5de06-13c9-44a5-aac4-103435ad79c6");
 
@@ -82,7 +93,20 @@ namespace ClubTimerXbox.Services
             {
                 ApplyEmployeeRenameRepair();
                 ApplySalikhovAccumulatedCashlessRepair();
+                ApplySalikhovLateFinalizationRepair();
             }
+        }
+
+        private static void ApplySalikhovLateFinalizationRepair()
+        {
+            bool cardRepaired = CashReconciliationService
+                .TryRepairKnownAcceptanceDuplicate(
+                    SalikhovLateFinalizationDuplicate);
+            if (!cardRepaired)
+                return;
+
+            CashAcceptanceService.TryRepairKnownDuplicate(
+                SalikhovLateFinalizationDuplicate);
         }
 
         private static void ApplySalikhovAccumulatedCashlessRepair()

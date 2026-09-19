@@ -294,6 +294,35 @@ namespace ClubTimerXbox.Services
             catch { item.OwnerCorrectionCompletedAt = previous; throw; }
         }
 
+        public static bool TryRepairKnownDuplicate(
+            KnownCashAcceptanceDuplicateSpec spec)
+        {
+            var item = Items.FirstOrDefault(candidate =>
+                candidate.Id == spec.AcceptanceId);
+            if (item == null)
+                return false;
+
+            string snapshot = JsonSerializer.Serialize(Items);
+            try
+            {
+                KnownDataRepairResult result =
+                    KnownCashAcceptanceDuplicatePolicy.RepairAcceptance(
+                        item,
+                        spec);
+                if (result == KnownDataRepairResult.NotMatched)
+                    return false;
+                if (result == KnownDataRepairResult.Applied)
+                    Save();
+                return true;
+            }
+            catch
+            {
+                Items = JsonSerializer.Deserialize<List<CashAcceptanceItem>>(snapshot)
+                    ?? new List<CashAcceptanceItem>();
+                throw;
+            }
+        }
+
         public static List<CashAcceptanceItem> GetByPeriod(DateTime fromInclusive, DateTime toExclusive)
         {
             return Items

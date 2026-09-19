@@ -1000,6 +1000,7 @@ namespace ClubTimerXbox
                 actualCash);
 
             ShiftAcceptanceService.AcceptCash();
+            CashAcceptancePostingService.FinalizeSupersededBy(acceptedItem);
             PushCashFactToOwner();
 
             string message =

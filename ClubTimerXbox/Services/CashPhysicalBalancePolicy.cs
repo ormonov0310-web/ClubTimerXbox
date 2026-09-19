@@ -45,12 +45,9 @@ namespace ClubTimerXbox.Services
             DateTime fallbackFromInclusive,
             DateTime toExclusive)
         {
-            var latestAcceptance = acceptances
-                .Where(item =>
-                    !item.IsProvisional &&
-                    CashAcceptanceTimelinePolicy.GetCommitTime(item) < toExclusive)
-                .OrderByDescending(CashAcceptanceTimelinePolicy.GetCommitTime)
-                .FirstOrDefault();
+            var latestAcceptance = CashAcceptanceTimelinePolicy.FindLatestFinalized(
+                acceptances,
+                toExclusive);
             var latestCheckpoint = checkpoints
                 .Where(item => item.CreatedAt < toExclusive)
                 .OrderByDescending(item => item.CreatedAt)

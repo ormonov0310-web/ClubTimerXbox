@@ -47,6 +47,11 @@ internal sealed class NextUpdateWorkflowTestSuite
         Test("cash expense after the latest fact is counted once", ExpenseAfterLatestFactCountsOnce);
         Test("finalized recount wins an interim owner checkpoint", FinalizedRecountWinsInterimCheckpoint);
         Test("newer owner checkpoint becomes the cash baseline", NewerCheckpointWinsCashBaseline);
+        Test("later observed cash fact wins over stale late finalization", LaterObservedFactWinsStaleFinalization);
+        Test("new handover supersedes an older provisional root", NewHandoverSupersedesOlderProvisional);
+        Test("restart finalization keeps the persisted deadline", RestartFinalizationKeepsDeadline);
+        Test("known late-finalization duplicate is repaired exactly once", KnownDuplicateIsRepairedOnce);
+        Test("known duplicate repair refuses a formalized shortage", KnownDuplicateRefusesFormalizedShortage);
         Test("physical cash uses expense creation time instead of report time", PhysicalCashUsesExpenseCreationTime);
         Test("legacy acceptance without observation time uses creation time", LegacyAcceptanceUsesCreationTime);
         Test("daily employee earnings reconcile exactly to monthly components", DailyEmployeeEarningsMatchMonthlyTotals);
@@ -716,6 +721,218 @@ internal sealed class NextUpdateWorkflowTestSuite
         Equal(1300, calculation.Amount, "checkpoint plus later income");
     }
 
+    private static void LaterObservedFactWinsStaleFinalization()
+    {
+        var day = new DateTime(2026, 9, 19);
+        var stale = FinalizedAcceptance(
+            day.AddHours(2).AddMinutes(52).AddSeconds(17),
+            day.AddHours(2).AddMinutes(52).AddSeconds(17),
+            day.AddHours(11).AddMinutes(18).AddSeconds(18),
+            actualCash: 4348);
+        var corrected = FinalizedAcceptance(
+            day.AddHours(2).AddMinutes(53).AddSeconds(6),
+            day.AddHours(2).AddMinutes(53).AddSeconds(6),
+            day.AddHours(2).AddMinutes(58).AddSeconds(37),
+            actualCash: 4148);
+        var checkpoint = new CashBalanceCheckpointItem
+        {
+            CreatedAt = corrected.FinalizedAt!.Value,
+            CashAmount = 4148
+        };
+
+        var calculation = CashPhysicalBalancePolicy.Calculate(
+            new[] { stale, corrected },
+            new[] { checkpoint },
+            Array.Empty<PaymentRecord>(),
+            Array.Empty<CashRecord>(),
+            day,
+            day.AddHours(11).AddMinutes(19));
+
+        Equal(CashPhysicalBalanceSource.Checkpoint, calculation.Source, "winning source");
+        Equal(4148, calculation.Amount, "cash after owner correction");
+    }
+
+    private static void NewHandoverSupersedesOlderProvisional()
+    {
+        var firstAt = new DateTime(2026, 9, 19, 2, 52, 17);
+        var old = new CashAcceptanceItem
+        {
+            Id = Guid.NewGuid(),
+            CreatedAt = firstAt,
+            UpdatedAt = firstAt,
+            IsProvisional = true,
+            RootAcceptanceKey = "bektur->argen"
+        };
+        var current = new CashAcceptanceItem
+        {
+            Id = Guid.NewGuid(),
+            CreatedAt = firstAt.AddSeconds(49),
+            UpdatedAt = firstAt.AddSeconds(49),
+            IsProvisional = true,
+            RootAcceptanceKey = "argen->test"
+        };
+        var sameRootRecount = new CashAcceptanceItem
+        {
+            Id = Guid.NewGuid(),
+            CreatedAt = firstAt.AddSeconds(48),
+            UpdatedAt = firstAt.AddSeconds(48),
+            IsProvisional = true,
+            RootAcceptanceKey = current.RootAcceptanceKey
+        };
+        var ownerCorrectionPending = new CashAcceptanceItem
+        {
+            Id = Guid.NewGuid(),
+            CreatedAt = firstAt.AddSeconds(40),
+            UpdatedAt = firstAt.AddSeconds(40),
+            IsProvisional = true,
+            RootAcceptanceKey = "owner-pending",
+            OwnerCorrectionCommandId = "owner-command"
+        };
+
+        var superseded = CashAcceptanceProvisionalPolicy.GetSuperseded(
+            new[] { old, sameRootRecount, ownerCorrectionPending, current },
+            current);
+
+        Equal(1, superseded.Count, "superseded count");
+        Equal(old.Id, superseded[0].Id, "superseded acceptance");
+    }
+
+    private static void RestartFinalizationKeepsDeadline()
+    {
+        var deadline = new DateTime(2026, 9, 19, 3, 2, 17);
+        var item = new CashAcceptanceItem { FinalizeAt = deadline };
+
+        Equal(
+            deadline,
+            CashAcceptanceTimelinePolicy.GetDueCommitTime(
+                item,
+                new DateTime(2026, 9, 19, 11, 18, 18)),
+            "logical finalization time");
+    }
+
+    private static void KnownDuplicateIsRepairedOnce()
+    {
+        var spec = KnownDuplicateSpec();
+        var acceptance = KnownDuplicateAcceptance(spec);
+        var card = KnownDuplicateCard(spec);
+        var resolvedAt = new DateTime(2026, 9, 19, 14, 0, 0);
+
+        Equal(
+            KnownDataRepairResult.Applied,
+            KnownCashAcceptanceDuplicatePolicy.RepairAcceptance(
+                acceptance,
+                spec),
+            "acceptance repair");
+        Equal(spec.ActualAmount, acceptance.ExpectedCashAmount, "repaired expected cash");
+        Equal(0, acceptance.Difference, "repaired acceptance difference");
+
+        Equal(
+            KnownDataRepairResult.Applied,
+            KnownCashAcceptanceDuplicatePolicy.RepairReconciliation(
+                card,
+                spec,
+                resolvedAt),
+            "card repair");
+        Equal(CashReconciliationStatus.Resolved, card.Status, "resolved card");
+        Equal(CashReconciliationResolution.InputCorrection, card.Resolution, "repair resolution");
+        Equal(0, card.Amount, "open amount");
+        Equal(spec.ShortageAmount, card.ResolvedAmount, "resolved amount");
+        Equal(0, card.FormalizedAmount, "no employee penalty");
+
+        Equal(
+            KnownDataRepairResult.AlreadyApplied,
+            KnownCashAcceptanceDuplicatePolicy.RepairAcceptance(
+                acceptance,
+                spec),
+            "acceptance replay");
+        Equal(
+            KnownDataRepairResult.AlreadyApplied,
+            KnownCashAcceptanceDuplicatePolicy.RepairReconciliation(
+                card,
+                spec,
+                resolvedAt.AddMinutes(1)),
+            "card replay");
+        Equal(resolvedAt, card.ResolvedAt!.Value, "replay keeps resolution time");
+    }
+
+    private static void KnownDuplicateRefusesFormalizedShortage()
+    {
+        var spec = KnownDuplicateSpec();
+        var card = KnownDuplicateCard(spec);
+        card.FormalizedAmount = spec.ShortageAmount;
+        card.LossAllocations.Add(new CashLossAllocation
+        {
+            EmployeeName = spec.ResponsibleEmployeeName,
+            Amount = spec.ShortageAmount
+        });
+
+        Equal(
+            KnownDataRepairResult.NotMatched,
+            KnownCashAcceptanceDuplicatePolicy.RepairReconciliation(
+                card,
+                spec,
+                new DateTime(2026, 9, 19, 14, 0, 0)),
+            "formalized card must not be rewritten");
+        Equal(spec.ShortageAmount, card.Amount, "card remains open");
+        Equal(spec.ShortageAmount, card.FormalizedAmount, "formalized amount remains");
+    }
+
+    private static KnownCashAcceptanceDuplicateSpec KnownDuplicateSpec()
+    {
+        return new KnownCashAcceptanceDuplicateSpec(
+            Guid.Parse("d1fb94aa-6da6-4952-b46b-e33ee69138b0"),
+            Guid.Parse("37acccac-f3ea-4810-b09d-2041622039f0"),
+            Guid.Parse("68f951c6-6d2c-cabc-1c07-38dce97581ef"),
+            "fb5c54658ab740b282bfdb8e0933bb59->9212194e967b4f8e8cad1b2aa108c048",
+            "Argen",
+            "Test",
+            4348,
+            4148);
+    }
+
+    private static CashAcceptanceItem KnownDuplicateAcceptance(
+        KnownCashAcceptanceDuplicateSpec spec)
+    {
+        return new CashAcceptanceItem
+        {
+            Id = spec.AcceptanceId,
+            CreatedAt = new DateTime(2026, 9, 19, 11, 18, 48),
+            UpdatedAt = new DateTime(2026, 9, 19, 11, 18, 48),
+            FinalizedAt = new DateTime(2026, 9, 19, 11, 28, 48),
+            RootAcceptanceKey = spec.RootAcceptanceKey,
+            AcceptanceKey = spec.RootAcceptanceKey,
+            CheckedByEmployeeName = spec.CheckedByEmployeeName,
+            ResponsibleEmployeeName = spec.ResponsibleEmployeeName,
+            ExpectedCashAmount = spec.IncorrectExpectedAmount,
+            ActualCashAmount = spec.ActualAmount,
+            Difference = spec.ActualAmount - spec.IncorrectExpectedAmount,
+            Note = "Provisional cash acceptance"
+        };
+    }
+
+    private static CashReconciliationItem KnownDuplicateCard(
+        KnownCashAcceptanceDuplicateSpec spec)
+    {
+        return new CashReconciliationItem
+        {
+            Id = spec.ReconciliationId,
+            InvestigationId = spec.InvestigationId,
+            OperationId = spec.OperationId,
+            CreatedAt = new DateTime(2026, 9, 19, 11, 18, 48),
+            Kind = CashReconciliationKind.CashShortage,
+            Origin = CashReconciliationOrigin.CashAcceptance,
+            Status = CashReconciliationStatus.Open,
+            Stage = CashReconciliationStage.AwaitingCashlessVerification,
+            Amount = spec.ShortageAmount,
+            OriginalAmount = spec.ShortageAmount,
+            ExpectedAmount = spec.IncorrectExpectedAmount,
+            ActualAmount = spec.ActualAmount,
+            ProgramExpectedAmount = spec.IncorrectExpectedAmount,
+            CheckedByEmployeeName = spec.CheckedByEmployeeName,
+            ResponsibleEmployeeName = spec.ResponsibleEmployeeName
+        };
+    }
+
     private static void PhysicalCashUsesExpenseCreationTime()
     {
         var firstAt = new DateTime(2026, 9, 15, 11, 0, 0);
@@ -757,6 +974,7 @@ internal sealed class NextUpdateWorkflowTestSuite
     {
         return new CashAcceptanceItem
         {
+            Id = Guid.NewGuid(),
             CreatedAt = createdAt,
             UpdatedAt = observedAt,
             FinalizedAt = finalizedAt,

@@ -113,5 +113,28 @@ namespace ClubTimerXbox.Services
                 .ThenBy(item => item.CreatedAt)
                 .ToList();
         }
+
+        public static List<CashAcceptanceItem> GetSuperseded(
+            IEnumerable<CashAcceptanceItem> items,
+            CashAcceptanceItem current)
+        {
+            DateTime currentObservedAt =
+                CashAcceptanceTimelinePolicy.GetObservationTime(current);
+            string currentRoot = current.RootAcceptanceKey.Trim();
+
+            return items
+                .Where(item =>
+                    item.IsProvisional &&
+                    item.Id != current.Id &&
+                    string.IsNullOrWhiteSpace(item.OwnerCorrectionCommandId) &&
+                    !item.RootAcceptanceKey.Trim().Equals(
+                        currentRoot,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    CashAcceptanceTimelinePolicy.GetObservationTime(item) <=
+                        currentObservedAt)
+                .OrderBy(CashAcceptanceTimelinePolicy.GetObservationTime)
+                .ThenBy(item => item.CreatedAt)
+                .ToList();
+        }
     }
 }

@@ -86,32 +86,9 @@ namespace ClubTimerXbox.Services
                 {
                     try
                     {
-                        DateTime occurredAt = CashAcceptanceTimelinePolicy
-                            .GetObservationTime(item);
-                        string operationKey = string.IsNullOrWhiteSpace(item.RootAcceptanceKey)
-                            ? item.AcceptanceKey.Trim()
-                            : item.RootAcceptanceKey.Trim();
-                        if (string.IsNullOrWhiteSpace(operationKey))
-                            operationKey = item.Id.ToString("N");
-                        Guid investigationId = BuildInvestigationId(operationKey);
-                        bool hasPendingCashless = item.PendingCashlessVerification != null;
-
-                        PostLedger(
-                            item.CheckedByEmployeeName,
-                            item.ResponsibleEmployeeName,
-                            item.ExpectedCashAmount,
-                            item.ActualCashAmount,
-                            item.Note,
-                            operationKey,
-                            occurredAt,
-                            deferSettlement: hasPendingCashless,
-                            investigationId: investigationId);
-                        PostPendingCashlessVerification(
+                        FinalizeProvisional(
                             item,
-                            operationKey,
-                            item.PendingCashlessVerification,
-                            investigationId);
-                        CashAcceptanceService.MarkFinalized(item.Id, now);
+                            CashAcceptanceTimelinePolicy.GetDueCommitTime(item, now));
                         finalizedAny = true;
                     }
                     catch
@@ -128,6 +105,14 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        public static void FinalizeSupersededBy(CashAcceptanceItem current)
+        {
+            lock (Gate)
+            {
+                FinalizeSupersededCore(current, continueOnFailure: true);
+            }
+        }
+
         public static CashAccountingResult FinalizeByOwner(
             CashAcceptanceItem item, string commandId, string acceptanceId, string revision,
             DateTime from, DateTime to, DateTime now, int actualCash, int actualCashless)
@@ -137,6 +122,7 @@ namespace ClubTimerXbox.Services
                 CashAcceptanceOwnerCorrectionPolicy.Validate(item, acceptanceId, revision);
                 if (!item.IsProvisional || CashAcceptanceService.GetLatestUnfinalized()?.Id != item.Id)
                     throw new InvalidOperationException("Приёмка уже изменилась. Обновите сверку.");
+                FinalizeSupersededCore(item, continueOnFailure: false);
                 CashAcceptanceService.SetOwnerCorrection(item, commandId);
                 try
                 {
@@ -151,6 +137,59 @@ namespace ClubTimerXbox.Services
                     throw;
                 }
             }
+        }
+
+        private static void FinalizeSupersededCore(
+            CashAcceptanceItem current,
+            bool continueOnFailure)
+        {
+            DateTime finalizedAt = CashAcceptanceTimelinePolicy
+                .GetObservationTime(current);
+            foreach (var item in CashAcceptanceProvisionalPolicy.GetSuperseded(
+                         CashAcceptanceService.Items,
+                         current))
+            {
+                try
+                {
+                    FinalizeProvisional(item, finalizedAt);
+                }
+                catch when (continueOnFailure)
+                {
+                    // Сохранённую предварительную запись повторно обработает таймер.
+                }
+            }
+        }
+
+        private static void FinalizeProvisional(
+            CashAcceptanceItem item,
+            DateTime finalizedAt)
+        {
+            DateTime occurredAt = CashAcceptanceTimelinePolicy
+                .GetObservationTime(item);
+            string operationKey = string.IsNullOrWhiteSpace(item.RootAcceptanceKey)
+                ? item.AcceptanceKey.Trim()
+                : item.RootAcceptanceKey.Trim();
+            if (string.IsNullOrWhiteSpace(operationKey))
+                operationKey = item.Id.ToString("N");
+            Guid investigationId = BuildInvestigationId(operationKey);
+            bool hasPendingCashless = item.PendingCashlessVerification != null;
+
+            PostLedger(
+                item.CheckedByEmployeeName,
+                item.ResponsibleEmployeeName,
+                item.ExpectedCashAmount,
+                item.ActualCashAmount,
+                item.Note,
+                operationKey,
+                occurredAt,
+                deferSettlement: hasPendingCashless,
+                investigationId: investigationId);
+            PostPendingCashlessVerification(
+                item,
+                operationKey,
+                item.PendingCashlessVerification,
+                investigationId);
+            CashAcceptanceService.MarkFinalized(item.Id, finalizedAt);
         }
 
         private static void PostLedger(

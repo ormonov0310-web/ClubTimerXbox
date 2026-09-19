@@ -204,12 +204,9 @@ namespace ClubTimerXbox.Services
                 .Where(item => item.CreatedAt < toExclusive)
                 .OrderByDescending(item => item.CreatedAt)
                 .FirstOrDefault();
-            var acceptance = CashAcceptanceService.Items
-                .Where(item =>
-                    !item.IsProvisional &&
-                    CashAcceptanceTimelinePolicy.GetCommitTime(item) < toExclusive)
-                .OrderByDescending(CashAcceptanceTimelinePolicy.GetCommitTime)
-                .FirstOrDefault();
+            var acceptance = CashAcceptanceTimelinePolicy.FindLatestFinalized(
+                CashAcceptanceService.Items,
+                toExclusive);
             if (CashAcceptanceTimelinePolicy.CheckpointWins(acceptance, checkpoint))
             {
                 return CalculateCashBalanceAfterCheckpoint(

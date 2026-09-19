@@ -792,6 +792,42 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        public static bool TryRepairKnownAcceptanceDuplicate(
+            KnownCashAcceptanceDuplicateSpec spec)
+        {
+            lock (Gate)
+            {
+                var item = _items.FirstOrDefault(entry =>
+                    entry.Id == spec.ReconciliationId);
+                if (item == null)
+                    return false;
+
+                string snapshot = JsonSerializer.Serialize(_items);
+                try
+                {
+                    KnownDataRepairResult result =
+                        KnownCashAcceptanceDuplicatePolicy.RepairReconciliation(
+                            item,
+                            spec,
+                            ClubClock.Current.LocalNow);
+                    if (result == KnownDataRepairResult.NotMatched)
+                        return false;
+                    if (result == KnownDataRepairResult.Applied)
+                        Save();
+                    return true;
+                }
+                catch
+                {
+                    var restored = JsonSerializer
+                        .Deserialize<List<CashReconciliationItem>>(snapshot)
+                        ?? new List<CashReconciliationItem>();
+                    _items.Clear();
+                    _items.AddRange(restored);
+                    throw;
+                }
+            }
+        }
+
         public static bool TryReopenKnownSupersededRawDifference(
             Guid id,
             int expectedOriginalAmount,

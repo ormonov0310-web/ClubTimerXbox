@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Cash acceptance now uses the latest recount as its physical balance baseline. Payments and expenses already included by that recount are not counted twice. Acceptance, cash summary and owner data use the same calculation; existing cards and manual corrections remain unchanged." `
+            -Notes "Cash acceptance now orders physical facts by recount time instead of delayed technical finalization. Restart recovery keeps the original ten-minute deadline, and a new handover closes an older pending handover without duplicating shortages. The confirmed Salikhov 200 som technical duplicate is repaired only when its exact open, unposted records still match." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,24 +66,24 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Cash acceptance and the current cash summary now use one physical-balance
-          calculation. A repeated accepted cash fact becomes the new baseline at the
-          time of its latest recount, so payments already included in that fact are
-          not added again and expenses already included are not subtracted again.
+          Cash acceptance now orders physical facts by the time cash was actually
+          recounted, not by a delayed technical finalization after PC startup. A stale
+          pending handover can no longer replace a newer recount or owner checkpoint.
 
-          An owner checkpoint created during the ten-minute acceptance window cannot
-          hide a fact finalized later. A genuinely newer checkpoint still becomes the
-          baseline. Physical cash follows the real transaction time while accounting
-          dates continue to control reports.
+          Restart recovery keeps the original ten-minute deadline. A distinct new
+          handover closes an older pending handover, while a recount of the same
+          handover continues to update its original card without creating another
+          shortage.
 
-          Legacy acceptance records without a saved recount time fall back to their
-          original creation time. If the balance calculation cannot be completed,
-          acceptance stops instead of treating expected cash as zero. Each accepted
-          fact writes a bounded local diagnostic breakdown for future investigation;
-          it is not uploaded and does not add Firebase polling or background traffic.
+          The confirmed Salikhov incident is repaired by exact acceptance,
+          investigation and reconciliation IDs. The incorrect 4348 som expectation
+          is restored to the physical 4148 som fact, and the open 200 som duplicate is
+          closed as an input correction without an employee penalty. The repair runs
+          only if those exact records are still open and unposted; it refuses to alter
+          a formalized penalty or any later card.
 
-          Existing shortages, extras, penalties, bonuses, owner corrections and
-          closed cards are not recalculated or changed by this update.
+          No new Firebase polling, listeners or periodic writes were added. Other
+          shortages, extras, penalties, bonuses and owner corrections are unchanged.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {
