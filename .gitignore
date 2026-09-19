@@ -371,6 +371,9 @@ FodyWeavers.xsd
 # Private local credentials and recovery notes
 /.local-secrets/
 
+# Private idea inbox review state (never publish chat history)
+/.codex/local-notes/
+
 # Generated release packages
 release/
 

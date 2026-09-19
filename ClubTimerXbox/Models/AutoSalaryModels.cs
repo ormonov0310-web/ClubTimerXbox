@@ -103,6 +103,8 @@ namespace ClubTimerXbox.Models
 
         public int PaidAmount { get; set; }
 
+        public int DebtTransferredAmount { get; set; }
+
         public int CarryInAmount { get; set; }
 
         public int CurrentPeriodRemainingAmount { get; set; }

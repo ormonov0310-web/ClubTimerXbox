@@ -180,7 +180,10 @@ namespace ClubTimerXbox.Services
                     }
                 }
 
-                int currentRemaining = gross - losses - paid;
+                int debtTransferred = EmployeeDebtService.GetSalaryTransferTotal(
+                    input.EmployeeId,
+                    report.MonthKey);
+                int currentRemaining = gross - losses - paid - debtTransferred;
                 string currentMonthKey = BusinessCalendarService
                     .GetBusinessMonth(ClubClock.Current.LocalNow)
                     .Key;
@@ -223,6 +226,7 @@ namespace ClubTimerXbox.Services
                     ProductLossesAmount = input.Summary.MonthUnpaidProductLosses,
                     ViolationLossesAmount = input.Summary.MonthUnpaidViolationLosses,
                     PaidAmount = paid,
+                    DebtTransferredAmount = debtTransferred,
                     CarryInAmount = carryIn,
                     CurrentPeriodRemainingAmount = currentRemaining,
                     RemainingAmount = remaining,
@@ -240,6 +244,33 @@ namespace ClubTimerXbox.Services
                             item.EffectiveUntil > monthStart)
                         .ToList()
                 });
+            }
+
+            string activeMonthKey = BusinessCalendarService
+                .GetBusinessMonth(ClubClock.Current.LocalNow)
+                .Key;
+            if (report.MonthKey.Equals(activeMonthKey, StringComparison.OrdinalIgnoreCase) &&
+                EmployeeDebtService.HasOutstandingContracts)
+            {
+                IReadOnlyDictionary<string, List<AutoSalaryDayEarning>> dailyEarnings =
+                    BuildDailyEarningsByEmployee(monthStart, report);
+                if (EmployeeDebtService.ReconcileAutomatic(report, dailyEarnings))
+                {
+                    foreach (AutoSalaryEmployeeResult employee in report.Employees)
+                    {
+                        employee.DebtTransferredAmount =
+                            EmployeeDebtService.GetSalaryTransferTotal(
+                                employee.EmployeeId,
+                                report.MonthKey);
+                        employee.CurrentPeriodRemainingAmount =
+                            employee.GrossAmount -
+                            employee.LossesAmount -
+                            employee.PaidAmount -
+                            employee.DebtTransferredAmount;
+                        employee.RemainingAmount =
+                            employee.CurrentPeriodRemainingAmount + employee.CarryInAmount;
+                    }
+                }
             }
 
             return report;

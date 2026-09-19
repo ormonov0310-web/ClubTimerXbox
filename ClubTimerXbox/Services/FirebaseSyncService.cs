@@ -1324,6 +1324,9 @@ namespace ClubTimerXbox.Services
                                     productLossesAmount = autoSalary.ProductLossesAmount,
                                     violationLossesAmount = autoSalary.ViolationLossesAmount,
                                     paidAmount = autoSalary.PaidAmount,
+                                    debtTransferredAmount = autoSalary.DebtTransferredAmount,
+                                    currentPeriodRemainingAmount = autoSalary.CurrentPeriodRemainingAmount,
+                                    carryInAmount = autoSalary.CarryInAmount,
                                     remainingAmount = autoSalary.RemainingAmount,
                                     timeRatingPercent = autoSalary.TimeRatingPercent,
                                     revenueRatingPercent = autoSalary.RevenueRatingPercent,
@@ -1348,7 +1351,8 @@ namespace ClubTimerXbox.Services
                             journal = allJournal,
                             incomeJournal = incomeJournal,
                             shortageJournal = shortageJournal,
-                            salaryHistory = employeeSalaryHistory
+                            salaryHistory = employeeSalaryHistory,
+                            debt = BuildEmployeeDebtPayload(employee.EmployeeId, monthStart)
                         };
                     }).ToList(),
 
@@ -1935,6 +1939,7 @@ namespace ClubTimerXbox.Services
                     rawMoneyLossesAmount = employee.RawMoneyLossesAmount,
                     productLossesAmount = employee.ProductLossesAmount,
                     paidAmount = employee.PaidAmount,
+                    debtTransferredAmount = employee.DebtTransferredAmount,
                     carryInAmount = employee.CarryInAmount,
                     currentPeriodRemainingAmount = employee.CurrentPeriodRemainingAmount,
                     remainingAmount = employee.RemainingAmount
@@ -2871,7 +2876,8 @@ namespace ClubTimerXbox.Services
 
             return !expenseCategory.Equals("Зарплата", StringComparison.OrdinalIgnoreCase) &&
                    !expenseCategory.Equals("Закупка", StringComparison.OrdinalIgnoreCase) &&
-                   !expenseCategory.Equals("Владелец", StringComparison.OrdinalIgnoreCase);
+                   !expenseCategory.Equals("Владелец", StringComparison.OrdinalIgnoreCase) &&
+                   !expenseCategory.Equals("Возврат долга", StringComparison.OrdinalIgnoreCase);
         }
 
         private static object[] BuildEmployeeMonthItems(
@@ -3013,6 +3019,9 @@ namespace ClubTimerXbox.Services
                                 productLossesAmount = autoSalary.ProductLossesAmount,
                                 violationLossesAmount = autoSalary.ViolationLossesAmount,
                                 paidAmount = autoSalary.PaidAmount,
+                                debtTransferredAmount = autoSalary.DebtTransferredAmount,
+                                currentPeriodRemainingAmount = autoSalary.CurrentPeriodRemainingAmount,
+                                carryInAmount = autoSalary.CarryInAmount,
                                 remainingAmount = autoSalary.RemainingAmount,
                                 timeRatingPercent = autoSalary.TimeRatingPercent,
                                 revenueRatingPercent = autoSalary.RevenueRatingPercent,
@@ -3035,7 +3044,8 @@ namespace ClubTimerXbox.Services
                         journal = allJournal,
                         incomeJournal = incomeJournal,
                         shortageJournal = shortageJournal,
-                        salaryHistory = employeeSalaryHistory
+                        salaryHistory = employeeSalaryHistory,
+                        debt = BuildEmployeeDebtPayload(employee.EmployeeId, monthStart)
                     };
                 })
                 .Cast<object>()
@@ -3084,6 +3094,98 @@ namespace ClubTimerXbox.Services
                     };
                 })
                 .ToArray();
+        }
+
+        private static object BuildEmployeeDebtPayload(
+            string employeeId,
+            DateTime monthStart)
+        {
+            BusinessPeriodRange period = BusinessCalendarService.GetBusinessMonthByAnchor(
+                monthStart);
+            EmployeeDebtEmployeeSnapshot snapshot = EmployeeDebtService.GetEmployeeSnapshot(
+                employeeId,
+                period.StartInclusive);
+            return new
+            {
+                monthKey = snapshot.MonthKey,
+                openingDebtAmount = snapshot.OpeningDebtAmount,
+                addedDebtAmount = snapshot.AddedDebtAmount,
+                repaidDebtAmount = snapshot.RepaidDebtAmount,
+                forgivenDebtAmount = snapshot.ForgivenDebtAmount,
+                closingDebtAmount = snapshot.ClosingDebtAmount,
+                openingCreditAmount = snapshot.OpeningCreditAmount,
+                receivedCreditAmount = snapshot.ReceivedCreditAmount,
+                withdrawnCreditAmount = snapshot.WithdrawnCreditAmount,
+                closingCreditAmount = snapshot.ClosingCreditAmount,
+                hasPausedDebt = snapshot.HasPausedDebt,
+                contracts = snapshot.Contracts.Select(contract => new
+                {
+                    id = contract.Id,
+                    debtorEmployeeId = contract.DebtorEmployeeId,
+                    debtorName = contract.DebtorName,
+                    creditorEmployeeId = contract.CreditorEmployeeId,
+                    creditorName = contract.CreditorName,
+                    createdAt = contract.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                    principalAmount = contract.PrincipalAmount,
+                    repaidAmount = contract.RepaidAmount,
+                    forgivenAmount = contract.ForgivenAmount,
+                    remainingAmount = contract.RemainingAmount,
+                    deductionPercent = contract.DeductionPercent,
+                    status = contract.Status.ToString(),
+                    isAutomaticQueueHead = contract.IsAutomaticQueueHead,
+                    hasFreezeRequest = contract.HasFreezeRequest,
+                    freezeRequestId = contract.FreezeRequestId,
+                    freezeRequestedAt = contract.FreezeRequestedAt?.ToString(
+                        "yyyy-MM-dd HH:mm:ss") ?? "",
+                    freezeRequestedDurationDays = contract.FreezeRequestedDurationDays,
+                    freezeRejectedAt = contract.FreezeRejectedAt?.ToString(
+                        "yyyy-MM-dd HH:mm:ss") ?? "",
+                    freezeRequestAvailableAt = contract.FreezeRequestAvailableAt?.ToString(
+                        "yyyy-MM-dd HH:mm:ss") ?? "",
+                    pauseStartedAt = contract.PauseStartedAt?.ToString(
+                        "yyyy-MM-dd HH:mm:ss") ?? "",
+                    pauseUntil = contract.PauseUntil?.ToString(
+                        "yyyy-MM-dd HH:mm:ss") ?? "",
+                    revision = contract.Revision,
+                    events = contract.Events
+                        .Where(item => item.CreatedAt >= period.StartInclusive &&
+                                       item.CreatedAt < period.EndExclusive)
+                        .Select(BuildEmployeeDebtEventPayload)
+                        .ToArray()
+                }).ToArray(),
+                days = snapshot.Days.Select(day => new
+                {
+                    businessDate = day.BusinessDate.ToString("yyyy-MM-dd"),
+                    repaidAmount = day.RepaidAmount,
+                    receivedAmount = day.ReceivedAmount,
+                    withdrawnAmount = day.WithdrawnAmount,
+                    forgivenAmount = day.ForgivenAmount,
+                    events = day.Events.Select(BuildEmployeeDebtEventPayload).ToArray()
+                }).ToArray()
+            };
+        }
+
+        private static object BuildEmployeeDebtEventPayload(EmployeeDebtEvent item)
+        {
+            return new
+            {
+                id = item.Id,
+                operationId = item.OperationId,
+                contractId = item.ContractId,
+                kind = item.Kind.ToString(),
+                createdAt = item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                sourceBusinessDate = item.SourceBusinessDate?.ToString("yyyy-MM-dd") ?? "",
+                salarySourceMonthKey = item.SalarySourceMonthKey,
+                amount = item.Amount,
+                previousPercent = item.PreviousPercent,
+                newPercent = item.NewPercent,
+                actorEmployeeId = item.ActorEmployeeId,
+                actorName = item.ActorName,
+                paymentMethod = item.PaymentMethod,
+                note = item.Note,
+                freezeDurationDays = item.FreezeDurationDays,
+                freezeUntil = item.FreezeUntil?.ToString("yyyy-MM-dd HH:mm:ss") ?? ""
+            };
         }
 
         private static object[] BuildStockPurchaseItems(
@@ -3601,15 +3703,24 @@ namespace ClubTimerXbox.Services
 
                 if (command.Type == "AddSalaryPayment")
                 {
-                    ApplyAddSalaryPayment(commandId, command);
+                    EmployeePayoutResult payout = ApplyAddSalaryPayment(commandId, command);
                     var (salaryMonthStart, _) = ParseCommandMonth(command.MonthKey);
 
                     await MarkCommandApplied(
                         commandId,
                         command,
-                        $"Зарплата выдана: {command.EmployeeName}, {command.Amount} сом, тип: {NormalizePaymentMethod(command.PaymentMethod)}, месяц: {salaryMonthStart:yyyy-MM}."
+                        $"Выплачено: {command.EmployeeName}, {command.Amount} сом, " +
+                        $"зарплата {payout.SalaryAmount} сом, возврат долга {payout.DebtCreditAmount} сом, " +
+                        $"тип: {NormalizePaymentMethod(command.PaymentMethod)}, месяц: {salaryMonthStart:yyyy-MM}."
                     );
 
+                    return;
+                }
+
+                if (command.Type == "ManageEmployeeDebt")
+                {
+                    string result = ApplyManageEmployeeDebt(commandId, command);
+                    await MarkCommandApplied(commandId, command, result);
                     return;
                 }
 
@@ -5091,7 +5202,153 @@ namespace ClubTimerXbox.Services
             CashPenaltyPostingService.Post(assignments, source);
         }
 
-        private static void ApplyAddSalaryPayment(
+        private static string ApplyManageEmployeeDebt(
+            string commandId,
+            FirebaseCommand command)
+        {
+            string operationId = $"firebase-debt:{commandId}";
+            string action = command.DebtAction.Trim().ToLowerInvariant();
+            if (action == "create")
+            {
+                IReadOnlyDictionary<DateTime, int> baseline =
+                    BuildDebtEarningBaseline(command.DebtorEmployeeId);
+                EmployeeDebtContract created = EmployeeDebtService.CreateContract(
+                    command.DebtorEmployeeId,
+                    command.CreditorEmployeeId,
+                    command.Amount,
+                    command.DebtPercent,
+                    "Владелец",
+                    operationId,
+                    baseline,
+                    command.Description);
+                return $"Долг создан: {created.DebtorNameSnapshot} → " +
+                       $"{created.CreditorNameSnapshot}, {command.Amount} сом, " +
+                       $"удержание {created.DeductionPercent}%.";
+            }
+
+            EmployeeDebtContract contract = EmployeeDebtService.GetContract(command.DebtContractId)
+                ?? throw new Exception("Договор долга не найден.");
+            if (action == "increase")
+            {
+                EmployeeDebtService.IncreasePrincipal(
+                    contract.Id,
+                    command.Amount,
+                    command.ExpectedDebtRevision,
+                    "Владелец",
+                    operationId,
+                    command.Description);
+                return $"Долг увеличен на {command.Amount} сом.";
+            }
+
+            if (action == "rate")
+            {
+                IReadOnlyDictionary<DateTime, int> baseline =
+                    BuildDebtEarningBaseline(contract.DebtorEmployeeId);
+                contract = EmployeeDebtService.GetContract(contract.Id) ?? contract;
+                EmployeeDebtService.ChangeDeductionPercent(
+                    contract.Id,
+                    command.DebtPercent,
+                    command.ExpectedDebtRevision,
+                    "Владелец",
+                    operationId,
+                    baseline);
+                return $"Процент удержания изменён на {command.DebtPercent}%.";
+            }
+
+            if (action == "pause" || action == "resume")
+            {
+                IReadOnlyDictionary<DateTime, int> baseline =
+                    BuildDebtEarningBaseline(contract.DebtorEmployeeId);
+                contract = EmployeeDebtService.GetContract(contract.Id) ?? contract;
+                bool paused = action == "pause";
+                EmployeeDebtService.SetPausedByOwner(
+                    contract.Id,
+                    paused,
+                    command.ExpectedDebtRevision,
+                    "Владелец",
+                    operationId,
+                    baseline,
+                    paused ? command.DebtFreezeDurationDays : 0);
+                return paused
+                    ? "Автоматическое погашение приостановлено."
+                    : "Автоматическое погашение возобновлено.";
+            }
+
+            if (action == "approve_freeze" || action == "reject_freeze")
+            {
+                bool approve = action == "approve_freeze";
+                IReadOnlyDictionary<DateTime, int>? baseline = approve
+                    ? BuildDebtEarningBaseline(contract.DebtorEmployeeId)
+                    : null;
+                contract = EmployeeDebtService.GetContract(contract.Id) ?? contract;
+                EmployeeDebtService.ResolveFreezeRequest(
+                    contract.Id,
+                    "",
+                    true,
+                    approve,
+                    command.ExpectedDebtRevision,
+                    operationId,
+                    baseline,
+                    command.Description);
+                return approve ? "Запрос на заморозку одобрен." : "Запрос на заморозку отклонён.";
+            }
+
+            if (action == "salary_repayment")
+            {
+                EmployeeDebtService.RepayFromAvailableSalary(
+                    contract.Id,
+                    command.Amount,
+                    "",
+                    true,
+                    command.ExpectedDebtRevision,
+                    operationId,
+                    command.Description);
+                return $"Из зарплаты в счёт долга перечислено {command.Amount} сом.";
+            }
+
+            if (action == "hand_repayment")
+            {
+                EmployeeDebtService.RecordHandToHandRepayment(
+                    contract.Id,
+                    command.Amount,
+                    "",
+                    true,
+                    command.ExpectedDebtRevision,
+                    operationId,
+                    command.Description);
+                return $"Личная передача {command.Amount} сом подтверждена.";
+            }
+
+            if (action == "forgive")
+            {
+                EmployeeDebtService.Forgive(
+                    contract.Id,
+                    command.Amount,
+                    "",
+                    true,
+                    command.ExpectedDebtRevision,
+                    operationId,
+                    command.Description);
+                return $"Прощено {command.Amount} сом. Сумма не отмечена как оплаченная.";
+            }
+
+            throw new Exception($"Неизвестное действие с долгом: {command.DebtAction}");
+        }
+
+        private static IReadOnlyDictionary<DateTime, int> BuildDebtEarningBaseline(
+            string debtorEmployeeId)
+        {
+            Employee debtor = EmployeeService.FindById(debtorEmployeeId)
+                              ?? throw new Exception("Должник не найден.");
+            BusinessPeriodRange period = BusinessCalendarService.GetBusinessMonth(
+                ClubClock.Current.LocalNow);
+            AutoSalaryReport report = AutoSalaryService.BuildReport(period.StartInclusive);
+            return AutoSalaryService
+                .BuildDailyEarnings(debtor.Name, period.StartInclusive, report)
+                .ToDictionary(item => item.Date.Date, item => Math.Max(0, item.TotalAmount));
+        }
+
+        private static EmployeePayoutResult ApplyAddSalaryPayment(
             string commandId,
             FirebaseCommand command)
         {
@@ -5114,17 +5371,20 @@ namespace ClubTimerXbox.Services
                 .Employees
                 .FirstOrDefault(item =>
                     item.EmployeeName.Equals(employee.Name, StringComparison.OrdinalIgnoreCase));
-            int remaining = salary?.RemainingAmount ?? 0;
+            int remaining = Math.Max(0, salary?.RemainingAmount ?? 0);
+            int debtCredit = EmployeeDebtService.GetAvailableCredit(employee.EmployeeId);
 
-            if (remaining <= 0)
-                throw new Exception("У работника нет остатка зарплаты после штрафов.");
+            if (remaining + debtCredit <= 0)
+                throw new Exception("У работника нет доступной зарплаты или возврата долга.");
 
-            if (command.Amount > remaining)
-                throw new Exception($"Нельзя выдать больше остатка после штрафов: {remaining} сом.");
+            if (command.Amount > remaining + debtCredit)
+                throw new Exception(
+                    $"Нельзя выдать больше доступного остатка: " +
+                    $"зарплата {remaining} сом, возврат долга {debtCredit} сом.");
 
-            BusinessAccountingService.PaySalaryFifo(
-                ownerName: "Владелец",
-                employeeName: employee.Name,
+            return EmployeePayoutService.Pay(
+                actorName: "Владелец",
+                employeeId: employee.EmployeeId,
                 amount: command.Amount,
                 paymentMethod: NormalizePaymentMethod(command.PaymentMethod),
                 description: string.IsNullOrWhiteSpace(command.Description)
@@ -5325,6 +5585,8 @@ namespace ClubTimerXbox.Services
             ProductIncomingService.Clear();
             StockAuditService.Clear();
             StockPurchaseService.Clear();
+            EmployeeDebtService.Clear();
+            EmployeePayoutService.Clear();
             ShiftAcceptanceService.Reset();
         }
 
@@ -5697,6 +5959,14 @@ namespace ClubTimerXbox.Services
             public string NewEmployeeName { get; set; } = "";
             public string EmployeeId { get; set; } = "";
             public string PinCode { get; set; } = "";
+
+            public string DebtAction { get; set; } = "";
+            public string DebtContractId { get; set; } = "";
+            public string DebtorEmployeeId { get; set; } = "";
+            public string CreditorEmployeeId { get; set; } = "";
+            public int DebtPercent { get; set; } = 30;
+            public long ExpectedDebtRevision { get; set; } = -1;
+            public int DebtFreezeDurationDays { get; set; } = 1;
 
             public int TimeRatingPercent { get; set; } = 100;
             public int RevenueRatingPercent { get; set; } = 100;

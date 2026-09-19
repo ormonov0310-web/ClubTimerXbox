@@ -117,8 +117,11 @@ namespace ClubTimerXbox
 
         private void Render()
         {
-            int remaining = GetRemainingAmount();
-            _remainingText.Text = $"Осталось: {remaining} сом";
+            var availability = GetAvailability();
+            int remaining = availability.Salary + availability.DebtCredit;
+            _remainingText.Text =
+                $"Доступно: {remaining} сом\n" +
+                $"Зарплата: {availability.Salary} сом, возврат долга: {availability.DebtCredit} сом";
 
             int? currentCash = GetCurrentActualCashBalance();
 
@@ -149,12 +152,25 @@ namespace ClubTimerXbox
 
         private int GetRemainingAmount()
         {
+            var availability = GetAvailability();
+            return availability.Salary + availability.DebtCredit;
+        }
+
+        private (int Salary, int DebtCredit) GetAvailability()
+        {
+            var employee = EmployeeService.FindByName(_employeeName);
             var employeeSalary = AutoSalaryService
                 .BuildReport(_monthStart)
                 .Employees
-                .FirstOrDefault(employee => employee.EmployeeName == _employeeName);
+                .FirstOrDefault(item => item.EmployeeName == _employeeName);
 
-            return employeeSalary?.RemainingAmount ?? 0;
+            return (
+                Math.Max(0, employeeSalary?.RemainingAmount ?? 0),
+                employee == null || !BusinessCalendarService.GetBusinessMonth(_monthStart).Key.Equals(
+                    BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow).Key,
+                    StringComparison.OrdinalIgnoreCase)
+                    ? 0
+                    : EmployeeDebtService.GetAvailableCredit(employee.EmployeeId));
         }
 
         private int? GetCurrentActualCashBalance()
@@ -247,9 +263,11 @@ namespace ClubTimerXbox
             }
 
             string operationId = $"employee-salary:{Guid.NewGuid():N}";
-            BusinessAccountingService.PaySalaryFifo(
-                ownerName: _employeeName,
-                employeeName: _employeeName,
+            var employee = EmployeeService.FindByName(_employeeName)
+                           ?? throw new InvalidOperationException("Сотрудник не найден.");
+            EmployeePayoutService.Pay(
+                actorName: _employeeName,
+                employeeId: employee.EmployeeId,
                 amount: amount,
                 paymentMethod: "Наличные",
                 description: "Аванс наличными из кассы сотрудником",

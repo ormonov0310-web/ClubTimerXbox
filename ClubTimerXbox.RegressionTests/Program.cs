@@ -1,3 +1,4 @@
+using ClubTimerXbox;
 using ClubTimerXbox.Models;
 using ClubTimerXbox.Services;
 using ClubTimerUpdater;
@@ -33,6 +34,417 @@ new StockVisibilityTestSuite().Run();
 new FinancialPaceTestSuite().Run();
 new ProductPhotoTestSuite().Run();
 new OverNormPortionTests().Run();
+new EmployeeDebtTestSuite().Run();
+
+internal sealed class EmployeeDebtTestSuite
+{
+    private int _passed;
+    private static readonly DateTime AugustCreated = new(2026, 8, 31, 12, 0, 0);
+    private static readonly DateTime SeptemberPayment = new(2026, 9, 2, 12, 0, 0);
+
+    public void Run()
+    {
+        Test("salary repayment conserves every som", SalaryRepaymentConservesMoney);
+        Test("hand payment does not create withdrawable credit", HandPaymentDoesNotCreateCredit);
+        Test("forgiveness is separate from paid money", ForgivenessIsNotPayment);
+        Test("credit withdrawal cannot recreate the debt", CreditWithdrawalKeepsDebtSettled);
+        Test("month checkpoint carries debt and credit", MonthCheckpointCarriesBalances);
+        Test("automatic percent uses only whole soms", AutomaticPercentUsesWholeSoms);
+        Test("automatic fraction carries without creating money", AutomaticFractionCarriesSafely);
+        Test("automatic percent includes every salary component", AutomaticPercentIncludesEverySalaryComponent);
+        Test("automatic repayment stops at the debt balance", AutomaticRepaymentStopsAtDebtBalance);
+        Test("debt transfer is not a second club expense", DebtTransferIsNotSecondClubExpense);
+        Test("freeze accepts only approved durations", FreezeAcceptsOnlyApprovedDurations);
+        Test("freeze duration starts from approval", FreezeDurationStartsFromApproval);
+        Test("rejected freeze waits twelve hours", RejectedFreezeWaitsTwelveHours);
+        Test("expired freeze returns contract to active history", ExpiredFreezeReturnsToActiveHistory);
+        Test("resume baseline never charges paused earnings", ResumeBaselineNeverChargesPausedEarnings);
+        Test("manual repayment leaves four to ten som for automatic close", ManualRepaymentLeavesAutomaticReserve);
+        Test("manual repayment respects available employee money", ManualRepaymentRespectsAvailableMoney);
+        Test("debt statistics hide empty monthly values", DebtStatisticsHideEmptyMonthValues);
+        Test("debt statistics show only meaningful contract values", DebtStatisticsShowMeaningfulContractValues);
+        Console.WriteLine();
+        Console.WriteLine($"PASS: {_passed} employee debt scenarios.");
+    }
+
+    private void SalaryRepaymentConservesMoney()
+    {
+        EmployeeDebtState state = State(
+            Event(EmployeeDebtEventKind.Created, 1000, AugustCreated),
+            Event(EmployeeDebtEventKind.SalaryRepayment, 300, SeptemberPayment));
+        BusinessPeriodRange period = BusinessCalendarService.GetBusinessMonthByAnchor(
+            new DateTime(2026, 9, 1, 6, 0, 0));
+        EmployeeDebtEmployeeSnapshot debtor = Snapshot(state, "debtor", period);
+        EmployeeDebtEmployeeSnapshot creditor = Snapshot(state, "creditor", period);
+
+        Equal(700, debtor.ClosingDebtAmount, "remaining debt");
+        Equal(300, debtor.RepaidDebtAmount, "repaid debt");
+        Equal(300, creditor.ClosingCreditAmount, "creditor balance");
+        Equal(1000, debtor.ClosingDebtAmount + creditor.ClosingCreditAmount, "conserved principal");
+    }
+
+    private void HandPaymentDoesNotCreateCredit()
+    {
+        EmployeeDebtState state = State(
+            Event(EmployeeDebtEventKind.Created, 1000, AugustCreated),
+            Event(EmployeeDebtEventKind.HandToHandRepayment, 250, SeptemberPayment));
+        BusinessPeriodRange period = BusinessCalendarService.GetBusinessMonthByAnchor(
+            new DateTime(2026, 9, 1, 6, 0, 0));
+        Equal(750, Snapshot(state, "debtor", period).ClosingDebtAmount, "remaining debt");
+        Equal(0, Snapshot(state, "creditor", period).ClosingCreditAmount, "no duplicate credit");
+    }
+
+    private void ForgivenessIsNotPayment()
+    {
+        EmployeeDebtState state = State(
+            Event(EmployeeDebtEventKind.Created, 1000, AugustCreated),
+            Event(EmployeeDebtEventKind.Forgiven, 400, SeptemberPayment));
+        BusinessPeriodRange period = BusinessCalendarService.GetBusinessMonthByAnchor(
+            new DateTime(2026, 9, 1, 6, 0, 0));
+        EmployeeDebtEmployeeSnapshot debtor = Snapshot(state, "debtor", period);
+        Equal(600, debtor.ClosingDebtAmount, "remaining debt");
+        Equal(0, debtor.RepaidDebtAmount, "not reported as paid");
+        Equal(400, debtor.ForgivenDebtAmount, "forgiven amount");
+    }
+
+    private void CreditWithdrawalKeepsDebtSettled()
+    {
+        EmployeeDebtState state = State(
+            Event(EmployeeDebtEventKind.Created, 1000, AugustCreated),
+            Event(EmployeeDebtEventKind.SalaryRepayment, 300, SeptemberPayment),
+            Event(EmployeeDebtEventKind.CreditWithdrawal, 120, SeptemberPayment.AddHours(1)));
+        BusinessPeriodRange period = BusinessCalendarService.GetBusinessMonthByAnchor(
+            new DateTime(2026, 9, 1, 6, 0, 0));
+        Equal(700, Snapshot(state, "debtor", period).ClosingDebtAmount, "debt unchanged by withdrawal");
+        Equal(180, Snapshot(state, "creditor", period).ClosingCreditAmount, "withdrawn once");
+    }
+
+    private void MonthCheckpointCarriesBalances()
+    {
+        EmployeeDebtState state = State(
+            Event(EmployeeDebtEventKind.Created, 1000, AugustCreated),
+            Event(EmployeeDebtEventKind.SalaryRepayment, 200, AugustCreated.AddHours(1)),
+            Event(EmployeeDebtEventKind.SalaryRepayment, 100, SeptemberPayment));
+        BusinessPeriodRange period = BusinessCalendarService.GetBusinessMonthByAnchor(
+            new DateTime(2026, 9, 1, 6, 0, 0));
+        EmployeeDebtEmployeeSnapshot debtor = Snapshot(state, "debtor", period);
+        EmployeeDebtEmployeeSnapshot creditor = Snapshot(state, "creditor", period);
+        Equal(800, debtor.OpeningDebtAmount, "opening debt");
+        Equal(700, debtor.ClosingDebtAmount, "closing debt");
+        Equal(200, creditor.OpeningCreditAmount, "opening credit");
+        Equal(300, creditor.ClosingCreditAmount, "closing credit");
+    }
+
+    private void AutomaticPercentUsesWholeSoms()
+    {
+        AutomaticDebtDeduction result = EmployeeDebtAutomaticCalculator.Calculate(1000, 30, 0);
+        Equal(300, result.Amount, "30 percent");
+        Equal(0, result.FractionRemainder, "no fraction");
+    }
+
+    private void AutomaticFractionCarriesSafely()
+    {
+        AutomaticDebtDeduction first = EmployeeDebtAutomaticCalculator.Calculate(1, 30, 0);
+        AutomaticDebtDeduction second = EmployeeDebtAutomaticCalculator.Calculate(
+            3,
+            30,
+            first.FractionRemainder);
+        Equal(0, first.Amount, "first whole som");
+        Equal(30, first.FractionRemainder, "first fraction");
+        Equal(1, second.Amount, "combined whole som");
+        Equal(20, second.FractionRemainder, "remaining fraction");
+    }
+
+    private static void AutomaticPercentIncludesEverySalaryComponent()
+    {
+        var day = new AutoSalaryDayEarning
+        {
+            TimeAmount = 100,
+            GameAmount = 200,
+            ProductServiceBonusAmount = 30,
+            OtherBonusAmount = 70
+        };
+
+        Equal(400, day.TotalAmount, "complete salary base");
+        AutomaticDebtDeduction result = EmployeeDebtAutomaticCalculator.Calculate(
+            day.TotalAmount,
+            30,
+            0);
+        Equal(120, result.Amount, "30 percent of complete salary base");
+    }
+
+    private static void AutomaticRepaymentStopsAtDebtBalance()
+    {
+        Equal(
+            50,
+            EmployeeDebtAutomaticCalculator.LimitToBalances(120, 50, 400),
+            "last debt payment");
+        Equal(
+            40,
+            EmployeeDebtAutomaticCalculator.LimitToBalances(120, 50, 40),
+            "available salary limit");
+        Equal(
+            0,
+            EmployeeDebtAutomaticCalculator.LimitToBalances(120, 0, 400),
+            "closed debt deduction");
+    }
+
+    private static void DebtTransferIsNotSecondClubExpense()
+    {
+        var obligation = new EmployeePayrollObligation
+        {
+            AccruedAmount = 1000,
+            DebtTransferredAmount = 300
+        };
+        Equal(1000, obligation.AccruedAmount, "salary expense stays whole");
+        Equal(700, obligation.RemainingAmount, "debtor salary after transfer");
+
+        var debtReturn = new CashRecord
+        {
+            Category = "Расходы",
+            ExpenseCategory = "Возврат долга"
+        };
+        if (CashService.IsClubExpense(debtReturn))
+            throw new InvalidOperationException("debt return was counted as club expense");
+
+        var ordinaryExpense = new CashRecord
+        {
+            Category = "Расходы",
+            ExpenseCategory = "Аренда"
+        };
+        if (!CashService.IsClubExpense(ordinaryExpense))
+            throw new InvalidOperationException("ordinary club expense was excluded");
+    }
+
+    private static void FreezeAcceptsOnlyApprovedDurations()
+    {
+        foreach (int duration in new[] { 1, 3, 7, 10 })
+            EmployeeDebtFreezePolicy.ValidateDuration(duration);
+
+        bool rejected = false;
+        try
+        {
+            EmployeeDebtFreezePolicy.ValidateDuration(2);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            rejected = true;
+        }
+        if (!rejected)
+            throw new InvalidOperationException("unsupported freeze duration was accepted");
+    }
+
+    private static void FreezeDurationStartsFromApproval()
+    {
+        DateTime approvedAt = new(2026, 9, 19, 18, 30, 0);
+        DateTime pauseUntil = EmployeeDebtFreezePolicy.CalculatePauseUntil(approvedAt, 3);
+        if (pauseUntil != new DateTime(2026, 9, 22, 18, 30, 0))
+            throw new InvalidOperationException($"unexpected pause deadline: {pauseUntil:O}");
+
+        var contract = new EmployeeDebtContract
+        {
+            Status = EmployeeDebtStatus.Paused,
+            PauseUntil = pauseUntil
+        };
+        if (EmployeeDebtFreezePolicy.ShouldAutoResume(contract, pauseUntil.AddSeconds(-1)))
+            throw new InvalidOperationException("freeze expired before its deadline");
+        if (!EmployeeDebtFreezePolicy.ShouldAutoResume(contract, pauseUntil))
+            throw new InvalidOperationException("freeze did not expire at its deadline");
+    }
+
+    private static void RejectedFreezeWaitsTwelveHours()
+    {
+        DateTime rejectedAt = new(2026, 9, 19, 8, 0, 0);
+        DateTime availableAt = EmployeeDebtFreezePolicy.CalculateRequestAvailableAt(rejectedAt);
+        if (availableAt != rejectedAt.AddHours(12))
+            throw new InvalidOperationException("rejection cooldown is not twelve hours");
+        if (!EmployeeDebtFreezePolicy.IsRejectionCooldownActive(
+                availableAt,
+                availableAt.AddTicks(-1)))
+        {
+            throw new InvalidOperationException("rejection cooldown ended too early");
+        }
+        if (EmployeeDebtFreezePolicy.IsRejectionCooldownActive(availableAt, availableAt))
+            throw new InvalidOperationException("rejection cooldown did not end on time");
+    }
+
+    private static void ExpiredFreezeReturnsToActiveHistory()
+    {
+        EmployeeDebtState state = State(
+            Event(EmployeeDebtEventKind.Created, 1000, AugustCreated),
+            Event(EmployeeDebtEventKind.FreezeApproved, 0, SeptemberPayment),
+            Event(EmployeeDebtEventKind.FreezeExpired, 0, SeptemberPayment.AddDays(1)));
+        BusinessPeriodRange period = BusinessCalendarService.GetBusinessMonthByAnchor(
+            new DateTime(2026, 9, 1, 6, 0, 0));
+        EmployeeDebtContractSnapshot contract = Snapshot(state, "debtor", period)
+            .Contracts
+            .Single();
+        if (contract.Status != EmployeeDebtStatus.Active)
+            throw new InvalidOperationException($"expected active contract, actual {contract.Status}");
+    }
+
+    private static void ResumeBaselineNeverChargesPausedEarnings()
+    {
+        int grossCapturedAtResume = 900;
+        AutomaticDebtDeduction paused = EmployeeDebtAutomaticCalculator.Calculate(
+            grossCapturedAtResume - grossCapturedAtResume,
+            30,
+            0);
+        AutomaticDebtDeduction future = EmployeeDebtAutomaticCalculator.Calculate(
+            1000 - grossCapturedAtResume,
+            30,
+            paused.FractionRemainder);
+        Equal(0, paused.Amount, "paused earnings");
+        Equal(30, future.Amount, "future earnings only");
+    }
+
+    private static void ManualRepaymentLeavesAutomaticReserve()
+    {
+        Equal(7, EmployeeDebtManualRepaymentPolicy.CalculateAutomaticReserve(77), "77 reserve");
+        Equal(10, EmployeeDebtManualRepaymentPolicy.CalculateAutomaticReserve(73), "73 reserve");
+        Equal(4, EmployeeDebtManualRepaymentPolicy.CalculateAutomaticReserve(74), "74 reserve");
+        Equal(10, EmployeeDebtManualRepaymentPolicy.CalculateAutomaticReserve(80), "80 reserve");
+        Equal(8, EmployeeDebtManualRepaymentPolicy.CalculateAutomaticReserve(8), "small debt reserve");
+        Equal(
+            70,
+            EmployeeDebtManualRepaymentPolicy.CalculateMaximumManualPayment(77, 500),
+            "77 manual maximum");
+    }
+
+    private static void ManualRepaymentRespectsAvailableMoney()
+    {
+        Equal(
+            25,
+            EmployeeDebtManualRepaymentPolicy.CalculateMaximumManualPayment(77, 25),
+            "salary-limited maximum");
+        Equal(
+            0,
+            EmployeeDebtManualRepaymentPolicy.CalculateMaximumManualPayment(8, 100),
+            "automatic close for small debt");
+        Equal(
+            0,
+            EmployeeDebtManualRepaymentPolicy.CalculateMaximumManualPayment(77, 0),
+            "no available salary");
+    }
+
+    private static void DebtStatisticsHideEmptyMonthValues()
+    {
+        IReadOnlyList<EmployeeDebtStatsLine> empty =
+            EmployeeDebtStatsPresentation.BuildMonthLines(new EmployeeDebtEmployeeSnapshot
+            {
+                OpeningCreditAmount = 90,
+                ReceivedCreditAmount = 40,
+                WithdrawnCreditAmount = 20,
+                ClosingCreditAmount = 110
+            });
+        Equal(0, empty.Count, "credit accounting labels are not shown");
+
+        IReadOnlyList<EmployeeDebtStatsLine> actual =
+            EmployeeDebtStatsPresentation.BuildMonthLines(new EmployeeDebtEmployeeSnapshot
+            {
+                AddedDebtAmount = 100,
+                RepaidDebtAmount = 30,
+                ClosingDebtAmount = 70
+            });
+        Equal(3, actual.Count, "only positive debt values");
+        Equal("Новый долг: 100 сом", actual[0].Text, "new debt label");
+        Equal("Погашено: 30 сом", actual[1].Text, "repaid label");
+        Equal("Остаток долга: 70 сом", actual[2].Text, "remaining label");
+    }
+
+    private static void DebtStatisticsShowMeaningfulContractValues()
+    {
+        IReadOnlyList<EmployeeDebtStatsLine> lines =
+            EmployeeDebtStatsPresentation.BuildContractLines(
+                new EmployeeDebtContractSnapshot
+                {
+                    CreatedAt = new DateTime(2026, 9, 19, 12, 30, 0),
+                    PrincipalAmount = 100,
+                    RepaidAmount = 0,
+                    ForgivenAmount = 0,
+                    RemainingAmount = 100
+                });
+        Equal(3, lines.Count, "date principal and remainder only");
+        Equal("Создан: 19.09.2026 12:30", lines[0].Text, "created label");
+        Equal("Сумма долга: 100 сом", lines[1].Text, "principal label");
+        Equal("Остаток долга: 100 сом", lines[2].Text, "remaining label");
+    }
+
+    private static EmployeeDebtState State(params EmployeeDebtEvent[] events)
+    {
+        return new EmployeeDebtState
+        {
+            Contracts = new List<EmployeeDebtContract>
+            {
+                new()
+                {
+                    Id = "contract",
+                    DebtorEmployeeId = "debtor",
+                    DebtorNameSnapshot = "Должник",
+                    CreditorEmployeeId = "creditor",
+                    CreditorNameSnapshot = "Кредитор",
+                    CreatedAt = AugustCreated,
+                    DeductionPercent = 30,
+                    Status = EmployeeDebtStatus.Active,
+                    Revision = 1
+                }
+            },
+            Events = events.ToList()
+        };
+    }
+
+    private static EmployeeDebtEvent Event(
+        EmployeeDebtEventKind kind,
+        int amount,
+        DateTime createdAt)
+    {
+        return new EmployeeDebtEvent
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            OperationId = Guid.NewGuid().ToString("N"),
+            ContractId = "contract",
+            Kind = kind,
+            Amount = amount,
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+            SalarySourceMonthKey = kind == EmployeeDebtEventKind.SalaryRepayment
+                ? createdAt.ToString("yyyy-MM")
+                : "",
+            NewPercent = kind == EmployeeDebtEventKind.Created ? 30 : 0
+        };
+    }
+
+    private static EmployeeDebtEmployeeSnapshot Snapshot(
+        EmployeeDebtState state,
+        string employeeId,
+        BusinessPeriodRange period)
+    {
+        return EmployeeDebtLedgerCalculator.BuildEmployeeSnapshot(
+            state,
+            employeeId,
+            period,
+            (_, fallback) => fallback);
+    }
+
+    private void Test(string name, Action action)
+    {
+        action();
+        _passed++;
+        Console.WriteLine($"PASS: {name}");
+    }
+
+    private static void Equal(int expected, int actual, string name)
+    {
+        if (expected != actual)
+            throw new InvalidOperationException($"{name}: expected {expected}, actual {actual}");
+    }
+
+    private static void Equal(string expected, string actual, string name)
+    {
+        if (!string.Equals(expected, actual, StringComparison.Ordinal))
+            throw new InvalidOperationException($"{name}: expected {expected}, actual {actual}");
+    }
+}
 
 internal sealed class EmployeeSalaryRuleTestSuite
 {

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -23,7 +24,7 @@ namespace ClubTimerXbox
             Salary,
             Bonuses,
             Rating,
-            Time,
+            Debt,
             Income,
             ProductsServices,
             Losses
@@ -35,7 +36,7 @@ namespace ClubTimerXbox
         private readonly TextBlock _salaryValueText = new TextBlock();
         private readonly TextBlock _timeValueText = new TextBlock();
         private readonly TextBlock _ratingValueText = new TextBlock();
-        private readonly TextBlock _workValueText = new TextBlock();
+        private readonly TextBlock _debtValueText = new TextBlock();
         private readonly TextBlock _gameIncomeValueText = new TextBlock();
         private readonly TextBlock _productsIncomeValueText = new TextBlock();
         private readonly TextBlock _lossValueText = new TextBlock();
@@ -57,7 +58,9 @@ namespace ClubTimerXbox
             Interval = TimeSpan.FromMilliseconds(80)
         };
         private Border _ratingCard = null!;
+        private Border _debtCard = null!;
         private int _currentOverallRating = 100;
+        private bool _currentDebtPaused;
         private bool _ratingBoostPlayed;
 
         private DateTime _monthStart = BusinessCalendarService
@@ -295,11 +298,12 @@ namespace ClubTimerXbox
                 Color.FromRgb(248, 250, 252),
                 StatsSection.Rating);
             grid.Children.Add(_ratingCard);
-            grid.Children.Add(CreateSummaryCard(
-                "Время",
-                _workValueText,
-                Color.FromRgb(167, 139, 250),
-                StatsSection.Time));
+            _debtCard = CreateSummaryCard(
+                "Долг",
+                _debtValueText,
+                Color.FromRgb(203, 213, 225),
+                StatsSection.Debt);
+            grid.Children.Add(_debtCard);
             grid.Children.Add(CreateSummaryCard(
                 "Выручка",
                 _gameIncomeValueText,
@@ -393,10 +397,14 @@ namespace ClubTimerXbox
         private void Render()
         {
             var summary = EmployeeStatsService.GetSummary(_employeeName, _monthStart);
+            var employee = EmployeeService.FindByName(_employeeName);
             var autoSalary = AutoSalaryService
                 .BuildReport(_monthStart)
                 .Employees
-                .FirstOrDefault(employee => employee.EmployeeName == _employeeName);
+                .FirstOrDefault(item => item.EmployeeName == _employeeName);
+            EmployeeDebtEmployeeSnapshot debt = employee == null
+                ? new EmployeeDebtEmployeeSnapshot()
+                : EmployeeDebtService.GetEmployeeSnapshot(employee.EmployeeId, _monthStart);
 
             _monthText.Text = GetMonthTitle(_monthStart);
             _grossValueText.Text = $"{autoSalary?.GrossAmount ?? 0} сом";
@@ -409,12 +417,16 @@ namespace ClubTimerXbox
                 : $"{overallRating}%";
             _ratingValueText.Foreground = new SolidColorBrush(GetRatingColor(overallRating));
             UpdateRatingBorderAnimationState();
-            _workValueText.Text = EmployeeStatsService.FormatTime(GetDisplayedWorkTime(summary, autoSalary));
+            RenderDebtSummaryValue(debt);
+            _currentDebtPaused = debt.HasPausedDebt;
             _gameIncomeValueText.Text = $"{summary.MonthGameIncome} сом";
             _productsIncomeValueText.Text = $"{summary.MonthProductsIncome} сом";
             _lossValueText.Text = $"{autoSalary?.LossesAmount ?? summary.MonthUnpaidLosses} сом";
             _sectionTitleText.Text = GetSectionTitle();
-            _sectionInfoText.Text = GetSectionInfoText(summary, autoSalary);
+            _sectionInfoText.Text = GetSectionInfoText(summary, autoSalary, debt);
+            _sectionInfoText.Visibility = string.IsNullOrWhiteSpace(_sectionInfoText.Text)
+                ? Visibility.Collapsed
+                : Visibility.Visible;
 
             UpdateSummaryCardStyles();
 
@@ -444,9 +456,9 @@ namespace ClubTimerXbox
                 return;
             }
 
-            if (_section == StatsSection.Time)
+            if (_section == StatsSection.Debt)
             {
-                RenderTimeSection();
+                RenderDebtSection(employee, debt);
                 return;
             }
 
@@ -473,14 +485,17 @@ namespace ClubTimerXbox
                 StatsSection.Salary => "Общая",
                 StatsSection.Bonuses => "Премии и бонусы",
                 StatsSection.Rating => "Рейтинг",
-                StatsSection.Time => "Время",
+                StatsSection.Debt => "Долг",
                 StatsSection.Income => "Выручка",
                 StatsSection.ProductsServices => "Товары и услуги",
                 _ => "Штрафы"
             };
         }
 
-        private string GetSectionInfoText(EmployeeStatsSummary summary, AutoSalaryEmployeeResult? autoSalary)
+        private string GetSectionInfoText(
+            EmployeeStatsSummary summary,
+            AutoSalaryEmployeeResult? autoSalary,
+            EmployeeDebtEmployeeSnapshot debt)
         {
             if (_section == StatsSection.TakenHistory)
                 return "История авансов и выдач зарплаты за выбранный месяц.";
@@ -494,8 +509,8 @@ namespace ClubTimerXbox
             if (_section == StatsSection.Rating)
                 return "Рейтинг времени и игр влияет только на будущие начисления сотрудника.";
 
-            if (_section == StatsSection.Time)
-                return $"Общее время смен: {EmployeeStatsService.FormatTime(GetDisplayedWorkTime(summary, autoSalary))}.";
+            if (_section == StatsSection.Debt)
+                return "";
 
             if (_section == StatsSection.Income)
                 return $"Игровая выручка: {summary.MonthGameIncome} сом. Общая выручка: {summary.MonthTotalIncome} сом.";
@@ -515,9 +530,12 @@ namespace ClubTimerXbox
                 {
                     bool isRatingBoost = pair.Key == StatsSection.Rating &&
                                          _currentOverallRating > 100;
-                    card.Background = new SolidColorBrush(isActive
-                        ? Color.FromRgb(30, 58, 88)
-                        : Color.FromRgb(24, 32, 43));
+                    bool isPausedDebt = pair.Key == StatsSection.Debt && _currentDebtPaused;
+                    card.Background = new SolidColorBrush(isPausedDebt
+                        ? Color.FromRgb(55, 58, 64)
+                        : isActive
+                            ? Color.FromRgb(30, 58, 88)
+                            : Color.FromRgb(24, 32, 43));
                     card.BorderBrush = new SolidColorBrush(isRatingBoost
                         ? Color.FromRgb(74, 222, 128)
                         : isActive
@@ -1293,34 +1311,480 @@ namespace ClubTimerXbox
             }
         }
 
-        private void RenderTimeSection()
+        private void RenderDebtSummaryValue(EmployeeDebtEmployeeSnapshot debt)
         {
-            var monthEnd = _monthStart.AddMonths(1);
-            var shifts = EmployeeStatsService.GetShifts(_employeeName, _monthStart, monthEnd);
-
-            if (shifts.Count == 0)
+            _debtValueText.Inlines.Clear();
+            if (debt.ClosingDebtAmount <= 0 && debt.ClosingCreditAmount <= 0)
             {
-                _contentPanel.Children.Add(CreateMutedText("Смен за выбранный месяц нет."));
+                _debtValueText.Inlines.Add(new Run("0 сом")
+                {
+                    Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225))
+                });
                 return;
             }
 
-            foreach (var shift in shifts)
+            if (debt.ClosingDebtAmount > 0)
             {
-                string endText = shift.ClosedAt == null
-                    ? "смена открыта"
-                    : shift.ClosedAt.Value.ToString("dd.MM.yyyy HH:mm");
+                _debtValueText.Inlines.Add(new Run($"-{debt.ClosingDebtAmount} сом")
+                {
+                    Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113))
+                });
+            }
 
-                _contentPanel.Children.Add(CreateCard(new StackPanel
+            if (debt.ClosingDebtAmount > 0 && debt.ClosingCreditAmount > 0)
+                _debtValueText.Inlines.Add(new LineBreak());
+
+            if (debt.ClosingCreditAmount > 0)
+            {
+                _debtValueText.Inlines.Add(new Run($"+{debt.ClosingCreditAmount} сом")
+                {
+                    Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128))
+                });
+            }
+        }
+
+        private void RenderDebtSection(
+            Employee? employee,
+            EmployeeDebtEmployeeSnapshot debt)
+        {
+            if (employee == null)
+            {
+                _contentPanel.Children.Add(CreateMutedText("Сотрудник не найден."));
+                return;
+            }
+
+            IReadOnlyList<EmployeeDebtStatsLine> monthLines =
+                EmployeeDebtStatsPresentation.BuildMonthLines(debt);
+            if (monthLines.Count > 0)
+            {
+                var monthPanel = new StackPanel();
+                monthPanel.Children.Add(CreateBigLine("Итог выбранного месяца"));
+                foreach (EmployeeDebtStatsLine line in monthLines)
+                {
+                    monthPanel.Children.Add(line.IsEmphasized
+                        ? CreateBigLine(line.Text)
+                        : CreateLine(line.Text));
+                }
+                _contentPanel.Children.Add(CreateCard(monthPanel));
+            }
+
+            bool isCurrentMonth = BusinessCalendarService
+                .GetBusinessMonthByAnchor(_monthStart)
+                .Key
+                .Equals(
+                    BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow).Key,
+                    StringComparison.OrdinalIgnoreCase);
+            foreach (EmployeeDebtContractSnapshot contract in debt.Contracts)
+            {
+                bool isDebtor = contract.DebtorEmployeeId.Equals(
+                    employee.EmployeeId,
+                    StringComparison.OrdinalIgnoreCase);
+                bool isCreditor = contract.CreditorEmployeeId.Equals(
+                    employee.EmployeeId,
+                    StringComparison.OrdinalIgnoreCase);
+                var panel = new StackPanel();
+                panel.Children.Add(CreateBigLine(
+                    $"{contract.DebtorName} → {contract.CreditorName}"));
+                foreach (EmployeeDebtStatsLine line in
+                         EmployeeDebtStatsPresentation.BuildContractLines(contract))
+                {
+                    panel.Children.Add(line.IsEmphasized
+                        ? CreateBigLine(line.Text)
+                        : CreateLine(line.Text));
+                }
+                if (contract.RemainingAmount > 0 && contract.DeductionPercent > 0)
+                {
+                    panel.Children.Add(CreateLine(
+                        $"Автоматическое удержание: {contract.DeductionPercent}%"));
+                }
+                if (!contract.IsAutomaticQueueHead && contract.RemainingAmount > 0)
+                {
+                    panel.Children.Add(CreateLine("Статус: ожидает своей очереди"));
+                }
+                else if (contract.Status == EmployeeDebtStatus.Paused &&
+                         !contract.PauseUntil.HasValue)
+                {
+                    panel.Children.Add(CreateLine("Статус: погашение приостановлено"));
+                }
+
+                if (contract.HasFreezeRequest)
+                {
+                    panel.Children.Add(CreateRatingStatusLine(
+                        $"Должник просит приостановить автоматические удержания на " +
+                        $"{Math.Max(1, contract.FreezeRequestedDurationDays)} дн.",
+                        Color.FromRgb(250, 204, 21)));
+                }
+                else if (contract.Status == EmployeeDebtStatus.Paused && contract.PauseUntil.HasValue)
+                {
+                    panel.Children.Add(CreateRatingStatusLine(
+                        $"Заморозка действует до {contract.PauseUntil:dd.MM.yyyy HH:mm}.",
+                        Color.FromRgb(156, 163, 175)));
+                }
+
+                if (isCurrentMonth && contract.RemainingAmount > 0)
+                {
+                    if (isDebtor)
+                    {
+                        panel.Children.Add(CreateDebtActionButton(
+                            "Погасить из зарплаты",
+                            Color.FromRgb(22, 101, 52),
+                            () => RepayDebtFromSalary(employee, contract)));
+                        (string freezeTitle, Color freezeColor) = GetDebtFreezeButtonStyle(contract);
+                        panel.Children.Add(CreateDebtActionButton(
+                            freezeTitle,
+                            freezeColor,
+                            () => OpenDebtFreezeWindow(employee, contract)));
+                    }
+
+                    if (isCreditor)
+                    {
+                        if (contract.HasFreezeRequest)
+                        {
+                            var freezeButtons = new StackPanel
+                            {
+                                Orientation = Orientation.Horizontal,
+                                Margin = new Thickness(0, 8, 0, 0)
+                            };
+                            freezeButtons.Children.Add(CreateDebtActionButton(
+                                $"Одобрить {Math.Max(1, contract.FreezeRequestedDurationDays)} дн.",
+                                Color.FromRgb(75, 85, 99),
+                                () => ResolveDebtFreeze(employee, contract, true),
+                                165));
+                            freezeButtons.Children.Add(CreateDebtActionButton(
+                                "Отказать",
+                                Color.FromRgb(127, 29, 29),
+                                () => ResolveDebtFreeze(employee, contract, false),
+                                130));
+                            panel.Children.Add(freezeButtons);
+                        }
+
+                        panel.Children.Add(CreateDebtActionButton(
+                            "Подтвердить оплату из рук в руки",
+                            Color.FromRgb(22, 101, 52),
+                            () => RecordHandDebtPayment(employee, contract)));
+                        panel.Children.Add(CreateDebtActionButton(
+                            "Простить долг",
+                            Color.FromRgb(127, 29, 29),
+                            () => ForgiveDebt(employee, contract)));
+                    }
+                }
+
+                _contentPanel.Children.Add(CreateCard(panel));
+            }
+
+            if (debt.Days.Count == 0)
+                return;
+
+            _contentPanel.Children.Add(CreateBigLine("Операции по дням"));
+            foreach (EmployeeDebtDaySnapshot day in debt.Days)
+            {
+                var panel = new StackPanel
                 {
                     Children =
                     {
-                        CreateBigLine($"{shift.StartedAt:dd.MM.yyyy HH:mm}"),
-                        CreateLine($"Конец: {endText}"),
-                        CreateLine($"Длительность: {EmployeeStatsService.FormatTime(shift.Duration)}"),
-                        CreateLine(shift.IsClosed ? "Статус: закрыта" : "Статус: активна")
+                        CreateBigLine(day.BusinessDate.ToString("dd.MM.yyyy"))
                     }
-                }));
+                };
+                if (day.RepaidAmount > 0)
+                    panel.Children.Add(CreateLine($"Погашено вами: {day.RepaidAmount} сом"));
+                if (day.ReceivedAmount > 0)
+                    panel.Children.Add(CreateLine($"Перечислено вам: {day.ReceivedAmount} сом"));
+                if (day.WithdrawnAmount > 0)
+                    panel.Children.Add(CreateLine($"Получено вами: {day.WithdrawnAmount} сом"));
+                if (day.ForgivenAmount > 0)
+                    panel.Children.Add(CreateLine($"Прощено: {day.ForgivenAmount} сом"));
+                foreach (EmployeeDebtEvent item in day.Events)
+                {
+                    panel.Children.Add(CreateDescription(
+                        $"{item.CreatedAt:HH:mm} • {GetDebtEventTitle(item)}"));
+                }
+                _contentPanel.Children.Add(CreateCard(panel));
             }
+        }
+
+        private Button CreateDebtActionButton(
+            string title,
+            Color background,
+            Action action,
+            double width = 300)
+        {
+            var button = new Button
+            {
+                Content = title,
+                Width = width,
+                Height = 38,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 8, 8, 0),
+                Background = new SolidColorBrush(background),
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.SemiBold
+            };
+            button.Click += (_, _) => action();
+            return button;
+        }
+
+        private void RepayDebtFromSalary(
+            Employee employee,
+            EmployeeDebtContractSnapshot contract)
+        {
+            var dialog = new EmployeeDebtRepaymentWindow(
+                () => EmployeeDebtService.GetManualRepaymentQuote(contract.Id),
+                (amount, revision) => EmployeeDebtService.RepayFromAvailableSalary(
+                    contract.Id,
+                    amount,
+                    employee.EmployeeId,
+                    false,
+                    revision,
+                    $"pc-debt-salary:{Guid.NewGuid():N}",
+                    "Добровольное погашение из доступной зарплаты."))
+            {
+                Owner = this
+            };
+            if (dialog.ShowDialog() != true)
+                return;
+            Render();
+            _ = FirebaseSyncService.PushCurrentStateAsync();
+        }
+
+        private static (string Title, Color Color) GetDebtFreezeButtonStyle(
+            EmployeeDebtContractSnapshot contract)
+        {
+            if (contract.HasFreezeRequest)
+                return ("Запрос ожидается", Color.FromRgb(146, 64, 14));
+            if (contract.Status == EmployeeDebtStatus.Paused)
+                return ("Заморозка активна", Color.FromRgb(75, 85, 99));
+            if (EmployeeDebtFreezePolicy.IsRejectionCooldownActive(
+                    contract.FreezeRequestAvailableAt,
+                    ClubClock.Current.LocalNow))
+            {
+                return ("Запрос отказан", Color.FromRgb(127, 29, 29));
+            }
+            return ("Запросить заморозку", Color.FromRgb(75, 85, 99));
+        }
+
+        private void OpenDebtFreezeWindow(
+            Employee employee,
+            EmployeeDebtContractSnapshot contract)
+        {
+            EmployeeDebtContract latest = RequireLatestDebtContract(contract.Id);
+            DateTime now = ClubClock.Current.LocalNow;
+            EmployeeDebtFreezeWindowMode mode = latest.FreezeRequestedAt.HasValue
+                ? EmployeeDebtFreezeWindowMode.Pending
+                : latest.Status == EmployeeDebtStatus.Paused
+                    ? EmployeeDebtFreezeWindowMode.Paused
+                    : EmployeeDebtFreezePolicy.IsRejectionCooldownActive(
+                        latest.FreezeRequestAvailableAt,
+                        now)
+                        ? EmployeeDebtFreezeWindowMode.Rejected
+                        : EmployeeDebtFreezeWindowMode.Request;
+            int durationDays = latest.FreezeRequestedAt.HasValue
+                ? Math.Max(1, latest.FreezeRequestedDurationDays)
+                : latest.FreezeRequestedDurationDays;
+            if (mode == EmployeeDebtFreezeWindowMode.Paused &&
+                latest.PauseStartedAt.HasValue &&
+                latest.PauseUntil.HasValue)
+            {
+                durationDays = Math.Max(
+                    1,
+                    (int)Math.Round(
+                        (latest.PauseUntil.Value - latest.PauseStartedAt.Value).TotalDays));
+            }
+
+            var dialog = new EmployeeDebtFreezeWindow(
+                mode,
+                durationDays,
+                latest.FreezeRequestedAt,
+                mode == EmployeeDebtFreezeWindowMode.Paused
+                    ? latest.PauseUntil
+                    : latest.FreezeRequestAvailableAt)
+            {
+                Owner = this
+            };
+            if (dialog.ShowDialog() != true)
+            {
+                Render();
+                return;
+            }
+
+            if (mode == EmployeeDebtFreezeWindowMode.Request && dialog.SelectedDurationDays > 0)
+            {
+                RunDebtAction(() =>
+                {
+                    EmployeeDebtContract current = RequireLatestDebtContract(contract.Id);
+                    EmployeeDebtService.RequestFreeze(
+                        current.Id,
+                        employee.EmployeeId,
+                        dialog.SelectedDurationDays,
+                        current.Revision,
+                        $"pc-debt-freeze-request:{Guid.NewGuid():N}",
+                        $"Запрос должника на {dialog.SelectedDurationDays} дн. из статистики сотрудника.");
+                });
+                return;
+            }
+
+            if (mode == EmployeeDebtFreezeWindowMode.Paused && dialog.ResumeRequested)
+            {
+                RunDebtAction(() =>
+                {
+                    EmployeeDebtContract current = RequireLatestDebtContract(contract.Id);
+                    IReadOnlyDictionary<DateTime, int> baseline =
+                        BuildCurrentDebtBaseline(current.DebtorEmployeeId);
+                    current = RequireLatestDebtContract(contract.Id);
+                    EmployeeDebtService.ResumeByDebtor(
+                        current.Id,
+                        employee.EmployeeId,
+                        current.Revision,
+                        $"pc-debt-freeze-resume:{Guid.NewGuid():N}",
+                        baseline,
+                        "Должник досрочно возобновил автоматическое погашение.");
+                });
+            }
+        }
+
+        private void ResolveDebtFreeze(
+            Employee creditor,
+            EmployeeDebtContractSnapshot contract,
+            bool approve)
+        {
+            RunDebtAction(() =>
+            {
+                EmployeeDebtContract latest = RequireLatestDebtContract(contract.Id);
+                IReadOnlyDictionary<DateTime, int>? baseline = approve
+                    ? BuildCurrentDebtBaseline(latest.DebtorEmployeeId)
+                    : null;
+                latest = RequireLatestDebtContract(contract.Id);
+                EmployeeDebtService.ResolveFreezeRequest(
+                    latest.Id,
+                    creditor.EmployeeId,
+                    false,
+                    approve,
+                    latest.Revision,
+                    $"pc-debt-freeze-answer:{Guid.NewGuid():N}",
+                    baseline,
+                    approve ? "Кредитор одобрил паузу." : "Кредитор отклонил паузу.");
+            });
+        }
+
+        private void RecordHandDebtPayment(
+            Employee creditor,
+            EmployeeDebtContractSnapshot contract)
+        {
+            var dialog = new EmployeeDebtAmountWindow(
+                "Оплата из рук в руки",
+                $"Какую сумму должник передал лично? Остаток: {contract.RemainingAmount} сом.",
+                contract.RemainingAmount)
+            {
+                Owner = this
+            };
+            if (dialog.ShowDialog() != true)
+                return;
+            RunDebtAction(() =>
+            {
+                EmployeeDebtContract latest = RequireLatestDebtContract(contract.Id);
+                EmployeeDebtService.RecordHandToHandRepayment(
+                    latest.Id,
+                    dialog.Amount,
+                    creditor.EmployeeId,
+                    false,
+                    latest.Revision,
+                    $"pc-debt-hand:{Guid.NewGuid():N}",
+                    "Кредитор подтвердил личное получение денег.");
+            });
+        }
+
+        private void ForgiveDebt(Employee creditor, EmployeeDebtContractSnapshot contract)
+        {
+            var dialog = new EmployeeDebtAmountWindow(
+                "Простить долг",
+                $"Какую сумму простить? Она не будет считаться оплатой. Остаток: {contract.RemainingAmount} сом.",
+                contract.RemainingAmount)
+            {
+                Owner = this
+            };
+            if (dialog.ShowDialog() != true)
+                return;
+            if (MessageBox.Show(
+                    $"Простить {dialog.Amount} сом без оплаты?",
+                    "Простить долг",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            {
+                return;
+            }
+            RunDebtAction(() =>
+            {
+                EmployeeDebtContract latest = RequireLatestDebtContract(contract.Id);
+                EmployeeDebtService.Forgive(
+                    latest.Id,
+                    dialog.Amount,
+                    creditor.EmployeeId,
+                    false,
+                    latest.Revision,
+                    $"pc-debt-forgive:{Guid.NewGuid():N}",
+                    "Кредитор простил долг.");
+            });
+        }
+
+        private void RunDebtAction(Action action)
+        {
+            try
+            {
+                action();
+                Render();
+                _ = FirebaseSyncService.PushCurrentStateAsync();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    ex.Message,
+                    "Долг",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                Render();
+            }
+        }
+
+        private static EmployeeDebtContract RequireLatestDebtContract(string contractId)
+        {
+            return EmployeeDebtService.GetContract(contractId)
+                   ?? throw new InvalidOperationException("Договор долга не найден.");
+        }
+
+        private static IReadOnlyDictionary<DateTime, int> BuildCurrentDebtBaseline(
+            string debtorEmployeeId)
+        {
+            Employee debtor = EmployeeService.FindById(debtorEmployeeId)
+                              ?? throw new InvalidOperationException("Должник не найден.");
+            BusinessPeriodRange period = BusinessCalendarService.GetBusinessMonth(
+                ClubClock.Current.LocalNow);
+            AutoSalaryReport report = AutoSalaryService.BuildReport(period.StartInclusive);
+            return AutoSalaryService
+                .BuildDailyEarnings(debtor.Name, period.StartInclusive, report)
+                .ToDictionary(item => item.Date.Date, item => Math.Max(0, item.TotalAmount));
+        }
+
+        private static string GetDebtEventTitle(EmployeeDebtEvent item)
+        {
+            string amount = item.Amount > 0 ? $" {item.Amount} сом" : "";
+            return item.Kind switch
+            {
+                EmployeeDebtEventKind.Created => $"долг создан:{amount}",
+                EmployeeDebtEventKind.Increased => $"долг увеличен:{amount}",
+                EmployeeDebtEventKind.AutomaticRepayment => $"автоматически погашено:{amount}",
+                EmployeeDebtEventKind.SalaryRepayment => $"погашено из зарплаты:{amount}",
+                EmployeeDebtEventKind.HandToHandRepayment => $"передано из рук в руки:{amount}",
+                EmployeeDebtEventKind.Forgiven => $"прощено:{amount}",
+                EmployeeDebtEventKind.FreezeRequested => "запрошена заморозка",
+                EmployeeDebtEventKind.FreezeApproved => "заморозка одобрена",
+                EmployeeDebtEventKind.FreezeRejected => "заморозка отклонена",
+                EmployeeDebtEventKind.Resumed => "удержания возобновлены",
+                EmployeeDebtEventKind.RateChanged =>
+                    $"процент изменён: {item.PreviousPercent}% → {item.NewPercent}%",
+                EmployeeDebtEventKind.CreditWithdrawal => $"возврат получен:{amount}",
+                EmployeeDebtEventKind.PausedByOwner => "удержания приостановлены владельцем",
+                EmployeeDebtEventKind.FreezeExpired => "срок заморозки завершён",
+                _ => item.Kind.ToString()
+            };
         }
 
         private void RenderIncomeSection()

@@ -53,7 +53,7 @@ jobs:
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Cash acceptance now orders physical facts by recount time instead of delayed technical finalization. Restart recovery keeps the original ten-minute deadline, and a new handover closes an older pending handover without duplicating shortages. The confirmed Salikhov 200 som technical duplicate is repaired only when its exact open, unposted records still match." `
+            -Notes "Adds club-local personal employee debt contracts with owner controls, employee history and protected automatic repayment from future earnings. Salary payouts now combine salary and returned debt credit without creating club revenue or a second payroll expense. Freeze requests use fixed terms and local countdowns through the existing compact synchronization path, with no new polling." `
             -DownloadUrl $url `
             -SelfContained
 
@@ -66,24 +66,25 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
           $notes = @"
-          Cash acceptance now orders physical facts by the time cash was actually
-          recounted, not by a delayed technical finalization after PC startup. A stale
-          pending handover can no longer replace a newer recount or owner checkpoint.
+          Adds club-local personal debt contracts between employees. The owner can
+          create and manage contracts from the phone, while employees see a concise
+          debt card, meaningful balances and dated operations on the club PC.
 
-          Restart recovery keeps the original ten-minute deadline. A distinct new
-          handover closes an older pending handover, while a recount of the same
-          handover continues to update its original card without creating another
-          shortage.
+          Automatic repayment uses only earnings created after the contract or its
+          resumption. Each whole som is transferred from the debtor's available salary
+          to the creditor's withdrawable credit without becoming club revenue or a
+          second payroll expense. A combined payout uses returned debt credit first,
+          then the employee's remaining salary, and remains idempotent after retries.
 
-          The confirmed Salikhov incident is repaired by exact acceptance,
-          investigation and reconciliation IDs. The incorrect 4348 som expectation
-          is restored to the physical 4148 som fact, and the open 200 som duplicate is
-          closed as an input correction without an employee penalty. The repair runs
-          only if those exact records are still open and unposted; it refuses to alter
-          a formalized penalty or any later card.
+          Debtors may request a freeze for 1, 3, 7 or 10 days. The creditor or owner
+          approves or rejects it, a rejection enforces a 12-hour wait, and an approved
+          freeze resumes automatically from future earnings after its deadline. The
+          countdown is calculated locally and never writes once per second.
 
-          No new Firebase polling, listeners or periodic writes were added. Other
-          shortages, extras, penalties, bonuses and owner corrections are unchanged.
+          Debt state reuses the existing compact club snapshot and durable phone
+          command journal. No new Firebase listener, polling loop or periodic upload
+          was added, and existing cash, salary and historical debt-free data are not
+          rewritten by the update.
           "@
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {

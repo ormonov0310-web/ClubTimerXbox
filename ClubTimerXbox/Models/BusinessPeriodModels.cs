@@ -30,6 +30,8 @@ namespace ClubTimerXbox.Models
 
         public int PaidAmount { get; set; }
 
+        public int DebtTransferredAmount { get; set; }
+
         public int TimeAmount { get; set; }
 
         public int GameRevenueAmount { get; set; }
@@ -55,7 +57,7 @@ namespace ClubTimerXbox.Models
         public List<AutoSalaryDayEarning> DailyEarnings { get; set; } = new();
 
         public int RemainingAmount =>
-            AccruedAmount + BonusAmount - PenaltyAmount - PaidAmount;
+            AccruedAmount + BonusAmount - PenaltyAmount - PaidAmount - DebtTransferredAmount;
     }
 
     public sealed class PayrollPaymentAllocation

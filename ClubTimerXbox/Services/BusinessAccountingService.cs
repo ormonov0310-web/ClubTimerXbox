@@ -56,11 +56,13 @@ namespace ClubTimerXbox.Services
                         .Where(item => item.RemainingAmount != 0)
                         .Select(item => new EmployeePayrollObligation
                         {
+                            EmployeeId = item.EmployeeId,
                             EmployeeName = item.EmployeeName,
                             MonthKey = previousPeriod.Key,
                             AccruedAmount = item.GrossAmount,
                             PenaltyAmount = item.LossesAmount,
-                            PaidAmount = item.PaidAmount
+                            PaidAmount = item.PaidAmount,
+                            DebtTransferredAmount = item.DebtTransferredAmount
                         })
                         .ToList();
                     State.Months[previousPeriod.Key] = new BusinessMonthLedger
@@ -160,6 +162,7 @@ namespace ClubTimerXbox.Services
                         AccruedAmount = item.GrossAmount,
                         PenaltyAmount = item.LossesAmount,
                         PaidAmount = item.PaidAmount,
+                        DebtTransferredAmount = item.DebtTransferredAmount,
                         TimeAmount = item.TimeAmount,
                         GameRevenueAmount = item.GameRevenueAmount,
                         ProductBonusAmount = item.ProductBonusAmount,
@@ -213,7 +216,11 @@ namespace ClubTimerXbox.Services
                     .Where(item => item.EmployeeName.Equals(
                         employeeName,
                         StringComparison.OrdinalIgnoreCase))
-                    .Sum(item => item.RemainingAmount);
+                    .Sum(item =>
+                    {
+                        SynchronizeDebtTransferredAmount(item);
+                        return item.RemainingAmount;
+                    });
             }
         }
 
@@ -239,8 +246,82 @@ namespace ClubTimerXbox.Services
                 if (stored == null)
                     return false;
 
+                SynchronizeDebtTransferredAmount(stored);
                 obligation = stored;
                 return true;
+            }
+        }
+
+        public static IReadOnlyList<EmployeeDebtSalaryAllocation> BuildDebtSalaryAllocations(
+            string employeeId,
+            string employeeName,
+            int amount,
+            string throughMonthKey,
+            int currentPeriodAvailable)
+        {
+            employeeId = employeeId.Trim();
+            employeeName = employeeName.Trim();
+            throughMonthKey = throughMonthKey.Trim();
+            if (amount <= 0)
+                throw new ArgumentOutOfRangeException(nameof(amount));
+
+            lock (Gate)
+            {
+                int remaining = amount;
+                var result = new List<EmployeeDebtSalaryAllocation>();
+                var closed = State.Months.Values
+                    .Where(month => month.IsClosed &&
+                                    string.CompareOrdinal(month.MonthKey, throughMonthKey) <= 0)
+                    .OrderBy(month => month.MonthKey, StringComparer.Ordinal)
+                    .SelectMany(month => month.Payroll)
+                    .Where(item =>
+                        (!string.IsNullOrWhiteSpace(employeeId) &&
+                         item.EmployeeId.Equals(employeeId, StringComparison.OrdinalIgnoreCase)) ||
+                        item.EmployeeName.Equals(employeeName, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                foreach (EmployeePayrollObligation obligation in closed)
+                {
+                    SynchronizeDebtTransferredAmount(obligation, employeeId);
+                    int available = Math.Max(0, obligation.RemainingAmount);
+                    if (available <= 0)
+                        continue;
+                    int use = Math.Min(available, remaining);
+                    result.Add(new EmployeeDebtSalaryAllocation
+                    {
+                        SourceMonthKey = obligation.MonthKey,
+                        Amount = use
+                    });
+                    remaining -= use;
+                    if (remaining == 0)
+                        break;
+                }
+
+                bool throughMonthClosed = State.Months.TryGetValue(
+                    throughMonthKey,
+                    out BusinessMonthLedger? throughMonth) && throughMonth.IsClosed;
+                if (remaining > 0 && !throughMonthClosed)
+                {
+                    int use = Math.Min(Math.Max(0, currentPeriodAvailable), remaining);
+                    if (use > 0)
+                    {
+                        result.Add(new EmployeeDebtSalaryAllocation
+                        {
+                            SourceMonthKey = throughMonthKey,
+                            SourceBusinessDate = BusinessCalendarService.GetBusinessDate(
+                                ClubClock.Current.LocalNow),
+                            Amount = use
+                        });
+                        remaining -= use;
+                    }
+                }
+
+                if (remaining > 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Недостаточно доступной зарплаты. Не хватает {remaining} сом.");
+                }
+
+                return result;
             }
         }
 
@@ -273,6 +354,8 @@ namespace ClubTimerXbox.Services
                         employeeName,
                         StringComparison.OrdinalIgnoreCase))
                     .ToList();
+                foreach (EmployeePayrollObligation obligation in obligations)
+                    SynchronizeDebtTransferredAmount(obligation);
 
                 if (!State.Months.TryGetValue(throughMonthKey, out var throughMonth) ||
                     !throughMonth.IsClosed)
@@ -293,7 +376,8 @@ namespace ClubTimerXbox.Services
                             MonthKey = throughMonthKey,
                             AccruedAmount = reportItem.GrossAmount,
                             PenaltyAmount = reportItem.LossesAmount,
-                            PaidAmount = reportItem.PaidAmount
+                            PaidAmount = reportItem.PaidAmount,
+                            DebtTransferredAmount = reportItem.DebtTransferredAmount
                         });
                     }
                 }
@@ -447,6 +531,24 @@ namespace ClubTimerXbox.Services
                                SessionSaleSettlementService.GetFinancialOccurredAt(line) < period.EndExclusive)
                 .Sum(line => ResolvePurchasePrice(line.ItemName, line.PurchasePrice) * line.Quantity);
             return standaloneCost + sessionCost;
+        }
+
+        private static void SynchronizeDebtTransferredAmount(
+            EmployeePayrollObligation obligation,
+            string fallbackEmployeeId = "")
+        {
+            string employeeId = obligation.EmployeeId;
+            if (string.IsNullOrWhiteSpace(employeeId))
+                employeeId = fallbackEmployeeId;
+            if (string.IsNullOrWhiteSpace(employeeId))
+                employeeId = EmployeeService.FindByName(obligation.EmployeeName)?.EmployeeId ?? "";
+            if (string.IsNullOrWhiteSpace(employeeId) || string.IsNullOrWhiteSpace(obligation.MonthKey))
+                return;
+
+            obligation.EmployeeId = employeeId;
+            obligation.DebtTransferredAmount = EmployeeDebtService.GetSalaryTransferTotal(
+                employeeId,
+                obligation.MonthKey);
         }
 
         private static bool IsProduct(CheckoutItem item)

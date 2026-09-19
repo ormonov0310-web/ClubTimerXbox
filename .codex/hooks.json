@@ -15,6 +15,19 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -NonInteractive -Command '$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); $root = (& git rev-parse --show-toplevel 2>$null); if ($LASTEXITCODE -ne 0) { exit 0 }; & (Join-Path $root \".codex/hooks/idea-inbox.ps1\")'",
+            "timeout": 5,
+            "statusMessage": "Checking whether ClubTimerXbox idea notes need review",
+            "additionalContextLimit": 1000
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "^Bash$",
@@ -39,6 +52,17 @@
             "statusMessage": "Checking changed files"
           }
         ]
+      },
+      {
+        "matcher": "^(apply_patch|Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -NonInteractive -Command '$root = (& git rev-parse --show-toplevel 2>$null); if ($LASTEXITCODE -ne 0) { exit 0 }; & (Join-Path $root \".codex/hooks/mark-android-change.ps1\")'",
+            "timeout": 10,
+            "statusMessage": "Tracking Android owner app changes"
+          }
+        ]
       }
     ],
     "Stop": [
@@ -49,6 +73,16 @@
             "command": "pwsh -NoProfile -NonInteractive -Command \"$raw = [Console]::In.ReadToEnd(); try { $event = $raw | ConvertFrom-Json -Depth 100 } catch { [ordered]@{ continue = $true } | ConvertTo-Json -Compress; exit 0 }; $stateRoot = Join-Path $env:TEMP 'ClubTimerXbox-CodexHooks'; $key = (('{0}-{1}' -f $event.session_id, $event.turn_id) -replace '[^a-zA-Z0-9_-]', '_'); $marker = Join-Path $stateRoot ($key + '.changed'); if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) { [ordered]@{ continue = $true } | ConvertTo-Json -Compress; exit 0 }; $root = (& git rev-parse --show-toplevel 2>$null); if ($LASTEXITCODE -ne 0) { [ordered]@{ continue = $true } | ConvertTo-Json -Compress; exit 0 }; $categories = @(Get-Content -LiteralPath $marker -ErrorAction SilentlyContinue | Select-Object -Unique); $failures = @(); $diffOutput = (& git -C $root diff --check 2>&1 | Out-String); if ($LASTEXITCODE -ne 0) { $failures += ('git diff --check: ' + $diffOutput.Trim()) }; $trackedLocalSecrets = @(& git -C $root ls-files -- .local-secrets); if ($trackedLocalSecrets.Count -gt 0) { $failures += ('Tracked local secrets: ' + ($trackedLocalSecrets -join ', ')) }; if ($categories -contains 'dotnet') { $outputDir = Join-Path $root '.codex-build\\hooks'; New-Item -ItemType Directory -Force -Path $outputDir | Out-Null; $project = Join-Path $root 'ClubTimerXbox.RegressionTests\\ClubTimerXbox.RegressionTests.csproj'; $buildOutput = (& dotnet build $project -c Debug '-p:SkipCopyUpdater=true' -o $outputDir 2>&1 | Out-String); $buildExit = $LASTEXITCODE; if ($buildExit -ne 0) { $failures += ('dotnet build failed: ' + $buildOutput.Trim()) } else { $testDll = Join-Path $outputDir 'ClubTimerXbox.RegressionTests.dll'; $testOutput = (& dotnet $testDll 2>&1 | Out-String); if ($LASTEXITCODE -ne 0) { $failures += ('Regression tests failed: ' + $testOutput.Trim()) } } }; if ($categories -contains 'firebase-js') { $nodeCommand = Get-Command node -ErrorAction SilentlyContinue; $nodePath = if ($null -ne $nodeCommand) { $nodeCommand.Source } else { Join-Path $env:USERPROFILE '.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe' }; if (Test-Path -LiteralPath $nodePath -PathType Leaf) { $nodeOutput = (& $nodePath --check (Join-Path $root 'firebase-functions\\index.js') 2>&1 | Out-String); if ($LASTEXITCODE -ne 0) { $failures += ('Firebase JavaScript syntax check failed: ' + $nodeOutput.Trim()) } } else { $failures += 'Node.js is unavailable; Firebase JavaScript syntax was not checked.' } }; if ($categories -contains 'firebase-json') { foreach ($jsonName in @('firebase.json', 'firebase-database.rules.json')) { try { $null = Get-Content -LiteralPath (Join-Path $root $jsonName) -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100 } catch { $failures += ($jsonName + ' is invalid JSON: ' + $_.Exception.Message) } } }; if ($failures.Count -eq 0) { [System.IO.File]::Delete($marker); [ordered]@{ continue = $true } | ConvertTo-Json -Compress; exit 0 }; $reason = 'ClubTimerXbox validation failed. ' + ($failures -join ' | '); if ($reason.Length -gt 3500) { $reason = $reason.Substring($reason.Length - 3500) }; if ([bool]$event.stop_hook_active) { [ordered]@{ continue = $true; systemMessage = $reason } | ConvertTo-Json -Compress -Depth 5 } else { [ordered]@{ decision = 'block'; reason = $reason } | ConvertTo-Json -Compress -Depth 5 }\"",
             "timeout": 120,
             "statusMessage": "Building ClubTimerXbox and running regression tests"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -NonInteractive -Command '$root = (& git rev-parse --show-toplevel 2>$null); if ($LASTEXITCODE -ne 0) { [ordered]@{ continue = $true } | ConvertTo-Json -Compress; exit 0 }; & (Join-Path $root \".codex/hooks/android-stop.ps1\")'",
+            "timeout": 180,
+            "statusMessage": "Testing and updating the connected Android phone"
           }
         ]
       }

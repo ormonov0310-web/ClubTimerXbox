@@ -9,7 +9,7 @@ namespace ClubTimerXbox.Services
     {
         private static readonly List<CashRecord> _records = CashStorageService.Load();
         private static readonly HashSet<string> NonClubExpenseCategories = new HashSet<string>(
-            new[] { "Зарплата", "Закупка", "Владелец" },
+            new[] { "Зарплата", "Закупка", "Владелец", "Возврат долга" },
             StringComparer.OrdinalIgnoreCase
         );
 
@@ -303,6 +303,37 @@ namespace ClubTimerXbox.Services
                 Category = "Расходы",
                 ExpenseCategory = "Зарплата",
                 PaymentMethod = paymentMethod,
+                PlaceName = ""
+            });
+        }
+
+        public static void AddDebtReturnWithdrawal(
+            string actorName,
+            string creditorEmployeeName,
+            int amount,
+            string paymentMethod,
+            string description = "")
+        {
+            actorName = actorName.Trim();
+            creditorEmployeeName = creditorEmployeeName.Trim();
+            if (amount <= 0 || string.IsNullOrWhiteSpace(creditorEmployeeName))
+                return;
+
+            AddRecord(new CashRecord
+            {
+                CreatedAt = ClubClock.Current.LocalNow,
+                EmployeeName = string.IsNullOrWhiteSpace(actorName)
+                    ? creditorEmployeeName
+                    : actorName,
+                IncomeEmployeeName = creditorEmployeeName,
+                RelatedEmployeeName = creditorEmployeeName,
+                Type = CashRecordType.Expense,
+                Title = $"Возврат долга: {creditorEmployeeName}",
+                Description = description,
+                Amount = amount,
+                Category = "Расходы",
+                ExpenseCategory = "Возврат долга",
+                PaymentMethod = NormalizePaymentMethod(paymentMethod),
                 PlaceName = ""
             });
         }
@@ -674,11 +705,12 @@ namespace ClubTimerXbox.Services
                 "Подписка",
                 "Закупка",
                 "Зарплата",
+                "Возврат долга",
                 "Другое"
             };
         }
 
-        private static bool IsClubExpense(CashRecord record)
+        internal static bool IsClubExpense(CashRecord record)
         {
             return record.Category == "Расходы" &&
                    !NonClubExpenseCategories.Contains(record.ExpenseCategory ?? "");
