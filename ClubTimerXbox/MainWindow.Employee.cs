@@ -100,6 +100,35 @@ namespace ClubTimerXbox
             {
                 ConfirmAndShowCurrentEmployeeInfo();
             }
+            else if (actionWindow.SelectedAction == EmployeeActionResult.AccessSalary)
+            {
+                ShowSalaryByPersonalCode();
+            }
+        }
+
+        private void ShowSalaryByPersonalCode()
+        {
+            if (EmployeeService.CurrentEmployee == null || IsStockAcceptanceBlockingEmployeeStats())
+            {
+                MessageBox.Show("Сначала откройте смену и завершите приёмку.", "Зарплата");
+                return;
+            }
+            var identify = new EmployeeSalaryAccessWindow { Owner = this };
+            if (identify.ShowDialog() != true || identify.IdentifiedEmployee == null)
+                return;
+            try
+            {
+                var access = EmployeeSalaryAccessService.Open(identify.IdentifiedEmployee);
+                var window = new EmployeeSalaryTakenWindow(
+                    identify.IdentifiedEmployee.Name,
+                    BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow).StartInclusive,
+                    accessSession: access) { Owner = this };
+                window.ShowDialog();
+            }
+            catch (Exception error)
+            {
+                MessageBox.Show(error.Message, "Зарплата", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
 
         private void ChangeEmployee()

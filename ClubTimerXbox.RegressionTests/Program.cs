@@ -4,6 +4,12 @@ using ClubTimerXbox.Services;
 using ClubTimerUpdater;
 using System.Text.Json;
 
+if (args.Length >= 2 && args[0] == "--salary-ui")
+{
+    SalaryDialogVisualChecks.Run(Path.GetFullPath(args[1]));
+    return;
+}
+
 if (args.Contains("--photos", StringComparer.OrdinalIgnoreCase))
 {
     new ProductPhotoTestSuite().Run();
@@ -53,6 +59,11 @@ internal sealed class EmployeeDebtTestSuite
         Test("automatic fraction carries without creating money", AutomaticFractionCarriesSafely);
         Test("automatic percent includes every salary component", AutomaticPercentIncludesEverySalaryComponent);
         Test("automatic repayment stops at the debt balance", AutomaticRepaymentStopsAtDebtBalance);
+        Test("automatic repayment protects signed 200 som reserve", AutomaticReserveUsesSignedSalary);
+        Test("bonus after full payout leaves employee share", BonusAfterFullPayoutKeepsEmployeeShare);
+        Test("reserve skips fractions without later catch-up", ReserveSkipsFractions);
+        Test("stale report cannot spend a prior debt transfer twice", StaleDebtReportUsesRemainingBalance);
+        Test("automatic reserve conserves random salary scenarios", AutomaticReserveConservesBalances);
         Test("debt transfer is not a second club expense", DebtTransferIsNotSecondClubExpense);
         Test("freeze accepts only approved durations", FreezeAcceptsOnlyApprovedDurations);
         Test("freeze duration starts from approval", FreezeDurationStartsFromApproval);
@@ -187,6 +198,92 @@ internal sealed class EmployeeDebtTestSuite
             0,
             EmployeeDebtAutomaticCalculator.LimitToBalances(120, 0, 400),
             "closed debt deduction");
+    }
+
+    private static int AutomaticBudget(int current, int carry = 0, int reported = 0, int actual = 0)
+    {
+        return EmployeeDebtAutomaticCalculator.GetAvailableSalary(
+            new AutoSalaryEmployeeResult
+            {
+                CurrentPeriodRemainingAmount = current,
+                RemainingAmount = current + carry,
+                DebtTransferredAmount = reported
+            }, actual);
+    }
+
+    private static void AutomaticReserveUsesSignedSalary()
+    {
+        Equal(0, AutomaticBudget(100, -200), "negative carry blocks automatic repayment");
+        Equal(0, AutomaticBudget(200), "exact protected balance");
+        Equal(1, AutomaticBudget(201), "one som above reserve");
+        Equal(20, AutomaticBudget(220), "twenty som above reserve");
+        Equal(100, AutomaticBudget(100, 500), "positive carry cannot fund a current-month transfer");
+        Equal(0, AutomaticBudget(-50, 500), "negative current month cannot fund transfer");
+        Equal(0, AutomaticBudget(int.MinValue), "extreme negative balance remains protected");
+        Equal(20, EmployeeDebtAutomaticCalculator.CalculateWithinBalances(
+            100, 30, 0, 1000, AutomaticBudget(220)).Amount, "reserve caps percentage");
+    }
+
+    private static void BonusAfterFullPayoutKeepsEmployeeShare()
+    {
+        // Without carry or another expense, even the old 30% formula leaves 70%.
+        Equal(70, 100 - EmployeeDebtAutomaticCalculator.Calculate(100, 30, 0).Amount,
+            "plain bonus alone does not explain a negative balance");
+        foreach (int bonus in new[] { 1, 3, 100, 200, 201, 250, 300, 1000 })
+        {
+            var deduction = EmployeeDebtAutomaticCalculator.CalculateWithinBalances(
+                bonus, 30, 0, 10000, AutomaticBudget(bonus));
+            Equal(bonus, deduction.Amount + (bonus - deduction.Amount), "bonus conservation");
+            if (bonus - deduction.Amount < Math.Min(bonus, 200))
+                throw new InvalidOperationException("bonus repayment consumed protected salary");
+        }
+        var threeHundred = EmployeeDebtAutomaticCalculator.CalculateWithinBalances(
+            300, 30, 0, 10000, AutomaticBudget(300));
+        Equal(90, threeHundred.Amount, "creditor receives 30 percent of 300");
+        Equal(210, 300 - threeHundred.Amount, "employee keeps 210");
+        var closedDebt = EmployeeDebtAutomaticCalculator.CalculateWithinBalances(300, 30, 99, 0, 1000);
+        Equal(0, closedDebt.Amount, "settled debt gets no new money");
+    }
+
+    private static void ReserveSkipsFractions()
+    {
+        var skipped = EmployeeDebtAutomaticCalculator.CalculateWithinBalances(
+            3, 30, 90, 1000, 0);
+        Equal(0, skipped.Amount, "no repayment below reserve");
+        Equal(0, skipped.FractionRemainder, "skipped fraction is not owed later");
+        var next = EmployeeDebtAutomaticCalculator.CalculateWithinBalances(
+            100, 30, skipped.FractionRemainder, 1000, 1000);
+        Equal(30, next.Amount, "only the next earning is charged");
+        var capped = EmployeeDebtAutomaticCalculator.CalculateWithinBalances(103, 30, 90, 1000, 20);
+        Equal(20, capped.Amount, "capped repayment");
+        Equal(0, capped.FractionRemainder, "capped remainder is discarded");
+    }
+
+    private static void StaleDebtReportUsesRemainingBalance()
+    {
+        Equal(10, AutomaticBudget(300, 0, 100, 190), "exclude later 90 som transfer");
+        Equal(0, AutomaticBudget(300, 0, 100, 200), "repeated snapshot protects 200");
+        Equal(100, AutomaticBudget(300, 0, 200, 100), "a stale smaller ledger does not add funds");
+    }
+
+    private static void AutomaticReserveConservesBalances()
+    {
+        var random = new Random(200);
+        for (int i = 0; i < 5000; i++)
+        {
+            int current = random.Next(-500, 5000);
+            int carry = random.Next(-1000, 1000);
+            int debt = random.Next(0, 5000);
+            int delta = random.Next(0, 3000);
+            var result = EmployeeDebtAutomaticCalculator.CalculateWithinBalances(
+                delta, random.Next(1, 101), random.Next(0, 100), debt,
+                AutomaticBudget(current, carry));
+            if (result.Amount < 0 || result.Amount > debt || result.Amount > Math.Max(0, current) ||
+                (result.Amount > 0 && current + carry - result.Amount < 200))
+                throw new InvalidOperationException("repayment exceeds a protected balance");
+            Equal(current + carry, current + carry - result.Amount + result.Amount,
+                "employee balance plus creditor transfer");
+        }
     }
 
     private static void DebtTransferIsNotSecondClubExpense()

@@ -8,28 +8,22 @@ namespace ClubTimerXbox
     {
         None,
         ChangeEmployee,
-        ShowStatistics
+        ShowStatistics,
+        AccessSalary
     }
 
-    public class EmployeeActionWindow : Window
+    public class EmployeeActionWindow : AdaptiveDialogWindow
     {
         public EmployeeActionResult SelectedAction { get; private set; } = EmployeeActionResult.None;
 
         private readonly string _currentEmployeeName;
 
-        public EmployeeActionWindow(string currentEmployeeName)
+        public EmployeeActionWindow(string currentEmployeeName) : base(500, 360)
         {
             _currentEmployeeName = currentEmployeeName;
 
             Title = "Смена сотрудника";
-            Width = 500;
-            Height = 380;
-            MinWidth = 460;
-            MinHeight = 340;
-            WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            Background = new SolidColorBrush(Color.FromRgb(16, 20, 28));
-
-            Content = CreateContent();
+            SetAdaptiveContent(CreateContent());
         }
 
         private UIElement CreateContent()
@@ -43,19 +37,10 @@ namespace ClubTimerXbox
             {
                 Text = $"Смена: {_currentEmployeeName}",
                 Foreground = Brushes.White,
-                FontSize = 30,
+                FontSize = 24,
                 FontWeight = FontWeights.Bold,
-                Margin = new Thickness(0, 0, 0, 10)
-            });
-
-            root.Children.Add(new TextBlock
-            {
-                Text = "Выберите действие. Для просмотра статистики потребуется код текущего сотрудника.",
-                Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
-                FontSize = 15,
                 TextWrapping = TextWrapping.Wrap,
-                LineHeight = 23,
-                Margin = new Thickness(0, 0, 0, 24)
+                Margin = new Thickness(0, 0, 0, 10)
             });
 
             var changeButton = CreateBigButton("Сменить сотрудника");
@@ -84,6 +69,13 @@ namespace ClubTimerXbox
 
             root.Children.Add(changeButton);
             root.Children.Add(statsButton);
+            var salaryButton = CreateBigButton("Посмотреть / взять зарплату");
+            salaryButton.Click += (_, _) =>
+            {
+                SelectedAction = EmployeeActionResult.AccessSalary;
+                DialogResult = true;
+            };
+            root.Children.Add(salaryButton);
             root.Children.Add(cancelButton);
 
             return root;
@@ -93,8 +85,10 @@ namespace ClubTimerXbox
         {
             return new Button
             {
-                Content = text,
-                Height = 48,
+                Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap,
+                    TextAlignment = TextAlignment.Center },
+                MinHeight = 48,
+                Padding = new Thickness(10, 8, 10, 8),
                 FontSize = 17,
                 FontWeight = FontWeights.SemiBold,
                 Margin = new Thickness(0, 0, 0, 12)

@@ -50,10 +50,11 @@ jobs:
           $version = "${{ steps.release.outputs.version }}"
           $tag = "${{ steps.release.outputs.tag }}"
           $url = "https://github.com/${{ github.repository }}/releases/download/$tag/ClubTimerXbox-$version.zip"
+          $notes = Get-Content -LiteralPath "docs/release-notes/$version.md" -Raw -Encoding UTF8
           ./scripts/package-release.ps1 `
             -Version $version `
             -Channel stable `
-            -Notes "Adds club-local personal employee debt contracts with owner controls, employee history and protected automatic repayment from future earnings. Salary payouts now combine salary and returned debt credit without creating club revenue or a second payroll expense. Freeze requests use fixed terms and local countdowns through the existing compact synchronization path, with no new polling." `
+            -Notes $notes `
             -DownloadUrl $url `
             -SelfContained
 
@@ -65,27 +66,7 @@ jobs:
           $tag = "${{ steps.release.outputs.tag }}"
           $version = "${{ steps.release.outputs.version }}"
           $asset = "release/ClubTimerXbox-$version.zip"
-          $notes = @"
-          Adds club-local personal debt contracts between employees. The owner can
-          create and manage contracts from the phone, while employees see a concise
-          debt card, meaningful balances and dated operations on the club PC.
-
-          Automatic repayment uses only earnings created after the contract or its
-          resumption. Each whole som is transferred from the debtor's available salary
-          to the creditor's withdrawable credit without becoming club revenue or a
-          second payroll expense. A combined payout uses returned debt credit first,
-          then the employee's remaining salary, and remains idempotent after retries.
-
-          Debtors may request a freeze for 1, 3, 7 or 10 days. The creditor or owner
-          approves or rejects it, a rejection enforces a 12-hour wait, and an approved
-          freeze resumes automatically from future earnings after its deadline. The
-          countdown is calculated locally and never writes once per second.
-
-          Debt state reuses the existing compact club snapshot and durable phone
-          command journal. No new Firebase listener, polling loop or periodic upload
-          was added, and existing cash, salary and historical debt-free data are not
-          rewritten by the update.
-          "@
+          $notesPath = "docs/release-notes/$version.md"
 
           if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {
             gh release upload $tag $asset --clobber --repo "${{ github.repository }}"
@@ -93,5 +74,5 @@ jobs:
             gh release create $tag $asset `
               --repo "${{ github.repository }}" `
               --title "Club Timer Xbox $version" `
-              --notes $notes
+              --notes-file $notesPath
           }

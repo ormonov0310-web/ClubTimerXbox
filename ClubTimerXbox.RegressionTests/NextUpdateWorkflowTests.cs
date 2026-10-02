@@ -55,9 +55,78 @@ internal sealed class NextUpdateWorkflowTestSuite
         Test("physical cash uses expense creation time instead of report time", PhysicalCashUsesExpenseCreationTime);
         Test("legacy acceptance without observation time uses creation time", LegacyAcceptanceUsesCreationTime);
         Test("daily employee earnings reconcile exactly to monthly components", DailyEmployeeEarningsMatchMonthlyTotals);
+        Test("salary PIN identifies recipient without changing duty employee", SalaryPinIdentifiesRecipient);
+        Test("salary PIN refuses ambiguous or inactive accounts", SalaryPinRejectsAmbiguousAccounts);
+        Test("salary access is bound to the witnessed shift", SalaryAccessKeepsWitness);
+        Test("salary access audit excludes credentials", SalaryAccessAuditExcludesCredentials);
 
         Console.WriteLine();
         Console.WriteLine($"PASS: {_passed} next update workflow scenarios.");
+    }
+
+    private static void SalaryPinIdentifiesRecipient()
+    {
+        var duty = new Employee { EmployeeId = "duty", Name = "Duty", PinCode = "1111", IsActive = true };
+        var recipient = new Employee { EmployeeId = "recipient", Name = "Recipient", PinCode = "9876", IsActive = true };
+        var resolved = EmployeeSalaryAccessService.Identify(new[] { duty, recipient }, " 9876 ");
+        Assert(ReferenceEquals(recipient, resolved), "PIN must resolve the recipient");
+        Equal("duty", duty.EmployeeId, "duty identity unchanged");
+        Equal("1111", duty.PinCode, "duty authentication unchanged");
+    }
+
+    private static void SalaryPinRejectsAmbiguousAccounts()
+    {
+        var first = new Employee { EmployeeId = "one", PinCode = "1234", IsActive = true };
+        var second = new Employee { EmployeeId = "two", PinCode = "1234", IsActive = true };
+        Assert(EmployeeSalaryAccessService.Identify(new[] { first, second }, "1234") == null,
+            "duplicate PIN must not choose the first employee");
+        second.IsActive = false;
+        Assert(ReferenceEquals(first, EmployeeSalaryAccessService.Identify(new[] { first, second }, "1234")),
+            "inactive account must not shadow the active one");
+        first.IsActive = false;
+        Assert(EmployeeSalaryAccessService.Identify(new[] { first, second }, "1234") == null,
+            "inactive employee cannot withdraw");
+        Assert(EmployeeSalaryAccessService.Identify(new[] { first, second }, " ") == null,
+            "empty PIN refused");
+    }
+
+    private static void SalaryAccessKeepsWitness()
+    {
+        var duty = new Employee { EmployeeId = "duty", Name = "Duty", IsActive = true };
+        var recipient = new Employee { EmployeeId = "recipient", Name = "Recipient", IsActive = true };
+        var shift = new ShiftLogItem { EmployeeName = "Duty" };
+        var session = new EmployeeSalaryAccessSession
+        {
+            EmployeeId = recipient.EmployeeId, EmployeeName = recipient.Name,
+            DutyEmployeeId = duty.EmployeeId, DutyEmployeeName = duty.Name, ShiftId = shift.Id
+        };
+        EmployeeSalaryAccessService.Validate(session, recipient, duty, shift);
+        shift.IsClosed = true;
+        bool refused = false;
+        try { EmployeeSalaryAccessService.Validate(session, recipient, duty, shift); }
+        catch (InvalidOperationException) { refused = true; }
+        Assert(refused, "closed witnessed shift invalidates session");
+        shift.IsClosed = false;
+        shift.Id = Guid.NewGuid();
+        refused = false;
+        try { EmployeeSalaryAccessService.Validate(session, recipient, duty, shift); }
+        catch (InvalidOperationException) { refused = true; }
+        Assert(refused, "a new shift by the same admin requires a new PIN check");
+    }
+
+    private static void SalaryAccessAuditExcludesCredentials()
+    {
+        var session = new EmployeeSalaryAccessSession
+        {
+            Id = "audit-id", EmployeeId = "recipient", EmployeeName = "Recipient",
+            DutyEmployeeId = "duty", DutyEmployeeName = "Duty",
+            OpenedAt = new DateTime(2026, 10, 1, 18, 0, 0), ShiftId = Guid.NewGuid()
+        };
+        string json = System.Text.Json.JsonSerializer.Serialize(session);
+        Assert(!json.Contains("pin", StringComparison.OrdinalIgnoreCase), "no PIN in access audit");
+        Assert(json.Contains("recipient") && json.Contains("duty"), "audit contains both identities");
+        Equal("employee-salary:audit-id", session.PayoutOperationId, "stable payout correlation");
+        Assert(EmployeeSalaryAccessService.Describe(session).Contains("Duty"), "cash history names witness");
     }
 
     private static void LegacyUnpaidMigration()

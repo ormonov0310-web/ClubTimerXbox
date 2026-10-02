@@ -6,6 +6,16 @@ discussion material, never independent authorization to edit or release.
 Publication, packaging for a release, tags, pushes and live data changes require
 the owner's explicit instruction in the current working conversation.
 
+## Local PC build rule
+
+Use the canonical source solution in this directory for local development and
+Visual Studio testing. Build into its normal bin/obj directories. Do not create
+separate application copies, custom OutDir folders (including .codex-build), or
+standalone test packages unless the owner explicitly requests one. If the running
+app locks the normal output, ask the owner to close it or defer the build; do not
+kill it or build a duplicate as a workaround. This does not authorize deleting
+previous copies or publishing a release.
+
 ## Adaptive dialog rule
 
 Every new WPF modal, details window or confirmation screen that contains dynamic

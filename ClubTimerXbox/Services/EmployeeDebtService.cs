@@ -723,7 +723,9 @@ namespace ClubTimerXbox.Services
                     if (ResumeExpiredPauseLocked(contract, salary.EmployeeId, days, now))
                         changed = true;
 
-                    int availableSalary = Math.Max(0, salary.CurrentPeriodRemainingAmount);
+                    int availableSalary = EmployeeDebtAutomaticCalculator.GetAvailableSalary(
+                        salary,
+                        GetSalaryTransferTotal(salary.EmployeeId, report.MonthKey));
                     DateTime contractBusinessDate = BusinessCalendarService
                         .GetBusinessDate(contract.CreatedAt)
                         .Date;
@@ -782,19 +784,14 @@ namespace ClubTimerXbox.Services
                         cursor.UpdatedAt = now;
 
                         AutomaticDebtDeduction calculation =
-                            EmployeeDebtAutomaticCalculator.Calculate(
+                            EmployeeDebtAutomaticCalculator.CalculateWithinBalances(
                                 grossDelta,
                                 contract.DeductionPercent,
-                                cursor.FractionRemainder);
-                        int requested = calculation.Amount;
+                                cursor.FractionRemainder,
+                                GetRemainingLocked(contract.Id, DateTime.MaxValue),
+                                availableSalary);
                         cursor.FractionRemainder = calculation.FractionRemainder;
-                        int debtRemaining = GetRemainingLocked(contract.Id, DateTime.MaxValue);
-                        int amount = EmployeeDebtAutomaticCalculator.LimitToBalances(
-                            requested,
-                            debtRemaining,
-                            availableSalary);
-                        if (amount < requested)
-                            cursor.FractionRemainder = 0;
+                        int amount = calculation.Amount;
                         changed = true;
                         if (amount <= 0)
                             continue;
@@ -1290,6 +1287,36 @@ namespace ClubTimerXbox.Services
 
     internal static class EmployeeDebtAutomaticCalculator
     {
+        public const int ProtectedSalaryAmount = 200;
+
+        public static int GetAvailableSalary(
+            AutoSalaryEmployeeResult salary,
+            int currentTransferredAmount)
+        {
+            // A report can predate another reconciliation; never reuse its spent balance.
+            long laterTransfers = Math.Max(0L,
+                (long)currentTransferredAmount - salary.DebtTransferredAmount);
+            return (int)Math.Max(0L, Math.Min(
+                (long)salary.CurrentPeriodRemainingAmount - laterTransfers,
+                (long)salary.RemainingAmount - laterTransfers - ProtectedSalaryAmount));
+        }
+
+        public static AutomaticDebtDeduction CalculateWithinBalances(
+            int grossDelta,
+            int deductionPercent,
+            int fractionRemainder,
+            int debtRemaining,
+            int availableSalary)
+        {
+            if (availableSalary <= 0 || debtRemaining <= 0)
+                return new AutomaticDebtDeduction(0, 0);
+            AutomaticDebtDeduction requested = Calculate(
+                grossDelta, deductionPercent, fractionRemainder);
+            int amount = LimitToBalances(requested.Amount, debtRemaining, availableSalary);
+            return new AutomaticDebtDeduction(
+                amount, amount < requested.Amount ? 0 : requested.FractionRemainder);
+        }
+
         public static AutomaticDebtDeduction Calculate(
             int grossDelta,
             int deductionPercent,

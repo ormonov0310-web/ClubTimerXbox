@@ -7,36 +7,54 @@ using ClubTimerXbox.Services;
 
 namespace ClubTimerXbox
 {
-    public class EmployeeSalaryTakenWindow : Window
+    public class EmployeeSalaryTakenWindow : AdaptiveDialogWindow
     {
         private const int CashReserveAmount = 1000;
 
         private readonly string _employeeName;
         private readonly DateTime _monthStart;
         private readonly Action? _onChanged;
+        private readonly EmployeeSalaryAccessSession? _accessSession;
+        private readonly string _operationId;
+        private bool _isPaying;
+        private readonly Func<(int Salary, int DebtCredit)>? _availabilityProvider;
+        private readonly Func<int?>? _cashBalanceProvider;
         private readonly TextBlock _remainingText = new TextBlock();
+        private readonly TextBlock _salaryBalanceText = new TextBlock();
+        private readonly TextBlock _debtCreditText = new TextBlock();
         private readonly TextBlock _cashLimitText = new TextBlock();
         private readonly TextBox _amountBox = new TextBox();
 
         public EmployeeSalaryTakenWindow(
             string employeeName,
             DateTime monthStart,
-            Action? onChanged = null)
+            Action? onChanged = null,
+            EmployeeSalaryAccessSession? accessSession = null)
+            : this(employeeName, monthStart, onChanged, accessSession, null, null)
+        {
+        }
+
+        internal EmployeeSalaryTakenWindow(
+            string employeeName,
+            DateTime monthStart,
+            Action? onChanged,
+            EmployeeSalaryAccessSession? accessSession,
+            Func<(int Salary, int DebtCredit)>? availabilityProvider,
+            Func<int?>? cashBalanceProvider)
+            : base(430, 360)
         {
             _employeeName = employeeName;
             _monthStart = BusinessCalendarService
                 .GetBusinessMonthByAnchor(monthStart)
                 .StartInclusive;
             _onChanged = onChanged;
+            _accessSession = accessSession;
+            _operationId = accessSession?.PayoutOperationId ?? $"employee-salary:{Guid.NewGuid():N}";
+            _availabilityProvider = availabilityProvider;
+            _cashBalanceProvider = cashBalanceProvider;
 
-            Title = "Взять аванс";
-            Width = 430;
-            Height = 365;
-            WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            ResizeMode = ResizeMode.NoResize;
-            Background = new SolidColorBrush(Color.FromRgb(16, 20, 28));
-
-            Content = CreateContent();
+            Title = accessSession == null ? "Взять аванс" : "Зарплата";
+            SetAdaptiveContent(CreateContent());
             Render();
         }
 
@@ -49,18 +67,41 @@ namespace ClubTimerXbox
 
             panel.Children.Add(new TextBlock
             {
-                Text = $"Аванс: {_employeeName}",
+                Text = $"{(_accessSession == null ? "Аванс" : "Зарплата")}: {_employeeName}",
                 Foreground = Brushes.White,
                 FontSize = 24,
                 FontWeight = FontWeights.Bold,
+                TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 10)
             });
+
+            if (_accessSession != null)
+                panel.Children.Add(new TextBlock
+                {
+                    Text = $"Администратор на смене: {_accessSession.DutyEmployeeName}",
+                    Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+                    FontSize = 15, TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 0, 10)
+                });
 
             _remainingText.Foreground = new SolidColorBrush(Color.FromRgb(96, 165, 250));
             _remainingText.FontSize = 18;
             _remainingText.FontWeight = FontWeights.Bold;
+            _remainingText.TextWrapping = TextWrapping.Wrap;
             _remainingText.Margin = new Thickness(0, 0, 0, 10);
             panel.Children.Add(_remainingText);
+
+            _salaryBalanceText.FontSize = 16;
+            _salaryBalanceText.TextWrapping = TextWrapping.Wrap;
+            _salaryBalanceText.Margin = new Thickness(0, 0, 0, 6);
+            panel.Children.Add(_salaryBalanceText);
+
+            _debtCreditText.Foreground = new SolidColorBrush(Color.FromRgb(74, 222, 128));
+            _debtCreditText.FontSize = 16;
+            _debtCreditText.FontWeight = FontWeights.SemiBold;
+            _debtCreditText.TextWrapping = TextWrapping.Wrap;
+            _debtCreditText.Margin = new Thickness(0, 0, 0, 10);
+            panel.Children.Add(_debtCreditText);
 
             _cashLimitText.Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225));
             _cashLimitText.FontSize = 15;
@@ -80,6 +121,7 @@ namespace ClubTimerXbox
             _amountBox.FontSize = 18;
             _amountBox.Padding = new Thickness(10, 4, 10, 4);
             _amountBox.Margin = new Thickness(0, 0, 0, 14);
+            _amountBox.Text = "0";
             panel.Children.Add(_amountBox);
 
             var buttons = new StackPanel
@@ -106,7 +148,27 @@ namespace ClubTimerXbox
                 Foreground = Brushes.White,
                 FontWeight = FontWeights.SemiBold
             };
-            okButton.Click += (_, _) => TakeAdvance();
+            okButton.Click += (_, _) =>
+            {
+                if (_isPaying)
+                    return;
+                _isPaying = true;
+                okButton.IsEnabled = false;
+                try
+                {
+                    TakeAdvance();
+                }
+                catch (Exception error)
+                {
+                    MessageBox.Show(error.Message, "Выплата зарплаты",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                finally
+                {
+                    _isPaying = false;
+                    okButton.IsEnabled = true;
+                }
+            };
 
             buttons.Children.Add(cancelButton);
             buttons.Children.Add(okButton);
@@ -118,10 +180,26 @@ namespace ClubTimerXbox
         private void Render()
         {
             var availability = GetAvailability();
-            int remaining = availability.Salary + availability.DebtCredit;
-            _remainingText.Text =
-                $"Доступно: {remaining} сом\n" +
-                $"Зарплата: {availability.Salary} сом, возврат долга: {availability.DebtCredit} сом";
+            int remaining = Math.Max(0, availability.Salary) + availability.DebtCredit;
+            bool hasDebtCredit = availability.DebtCredit > 0;
+            int displayedTotal = hasDebtCredit ? remaining : availability.Salary;
+            _remainingText.Text = $"Доступно: {displayedTotal} сом";
+            _remainingText.Foreground = new SolidColorBrush(displayedTotal < 0
+                ? Color.FromRgb(248, 113, 113)
+                : displayedTotal > 0
+                    ? Color.FromRgb(74, 222, 128)
+                    : Color.FromRgb(229, 231, 235));
+            _salaryBalanceText.Visibility = hasDebtCredit ? Visibility.Visible : Visibility.Collapsed;
+            _salaryBalanceText.Text = hasDebtCredit ? $"ЗП остаток: {availability.Salary} сом" : "";
+            _salaryBalanceText.Foreground = new SolidColorBrush(availability.Salary < 0
+                ? Color.FromRgb(248, 113, 113)
+                : Color.FromRgb(203, 213, 225));
+            _debtCreditText.Visibility = hasDebtCredit
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            _debtCreditText.Text = hasDebtCredit
+                ? $"Из долгов: {availability.DebtCredit} сом"
+                : "";
 
             int? currentCash = GetCurrentActualCashBalance();
 
@@ -140,7 +218,7 @@ namespace ClubTimerXbox
                 $"Наличные для аванса: " +
                 $"{EmployeeCashPrivacyService.GetAvailableCashBand(currentCash.Value, CashReserveAmount)}\n" +
                 (maxAdvance >= remaining && remaining > 0
-                    ? "Можно получить всю оставшуюся зарплату."
+                    ? "Можно получить всю доступную сумму."
                     : maxAdvance > 0
                         ? "Сейчас доступна частичная выдача."
                         : "Сейчас аванс наличными недоступен.");
@@ -153,19 +231,23 @@ namespace ClubTimerXbox
         private int GetRemainingAmount()
         {
             var availability = GetAvailability();
-            return availability.Salary + availability.DebtCredit;
+            return Math.Max(0, availability.Salary) + availability.DebtCredit;
         }
 
         private (int Salary, int DebtCredit) GetAvailability()
         {
-            var employee = EmployeeService.FindByName(_employeeName);
+            if (_availabilityProvider != null)
+                return _availabilityProvider();
+            var employee = _accessSession == null
+                ? EmployeeService.FindByName(_employeeName)
+                : EmployeeService.FindById(_accessSession.EmployeeId);
             var employeeSalary = AutoSalaryService
                 .BuildReport(_monthStart)
                 .Employees
-                .FirstOrDefault(item => item.EmployeeName == _employeeName);
+                .FirstOrDefault(item => employee != null && item.EmployeeId == employee.EmployeeId);
 
             return (
-                Math.Max(0, employeeSalary?.RemainingAmount ?? 0),
+                employeeSalary?.RemainingAmount ?? 0,
                 employee == null || !BusinessCalendarService.GetBusinessMonth(_monthStart).Key.Equals(
                     BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow).Key,
                     StringComparison.OrdinalIgnoreCase)
@@ -175,6 +257,8 @@ namespace ClubTimerXbox
 
         private int? GetCurrentActualCashBalance()
         {
+            if (_cashBalanceProvider != null)
+                return _cashBalanceProvider();
             DateTime nextMonthStart = _monthStart.AddMonths(1);
             return CashBalanceSummaryService.CalculateActualCashBalanceByPeriod(
                 _monthStart,
@@ -188,6 +272,14 @@ namespace ClubTimerXbox
 
         private void TakeAdvance()
         {
+            if (_accessSession != null)
+                EmployeeSalaryAccessService.Validate(
+                    _accessSession,
+                    EmployeeService.FindById(_accessSession.EmployeeId),
+                    EmployeeService.CurrentEmployee,
+                    ActionLogService.CurrentShift);
+            if (ShiftAcceptanceService.IsAcceptanceRequired())
+                throw new InvalidOperationException("Сначала завершите приёмку смены.");
             int remaining = GetRemainingAmount();
 
             if (remaining <= 0)
@@ -262,26 +354,33 @@ namespace ClubTimerXbox
                 return;
             }
 
-            string operationId = $"employee-salary:{Guid.NewGuid():N}";
-            var employee = EmployeeService.FindByName(_employeeName)
+            var employee = (_accessSession == null
+                ? EmployeeService.FindByName(_employeeName)
+                : EmployeeService.FindById(_accessSession.EmployeeId))
                            ?? throw new InvalidOperationException("Сотрудник не найден.");
-            EmployeePayoutService.Pay(
-                actorName: _employeeName,
+            EmployeePayoutResult payout = EmployeePayoutService.Pay(
+                actorName: employee.Name,
                 employeeId: employee.EmployeeId,
                 amount: amount,
                 paymentMethod: "Наличные",
-                description: "Аванс наличными из кассы сотрудником",
+                description: _accessSession == null
+                    ? "Аванс наличными из кассы сотрудником"
+                    : EmployeeSalaryAccessService.Describe(_accessSession),
                 throughMonthKey: _monthStart.ToString("yyyy-MM"),
-                operationId: operationId
+                operationId: _operationId
             );
 
+            EmployeeCashPayoutNotice.ShowAfterPayment(this, employee.Name, payout.TotalAmount);
+
+            // Finish the paid form even if a later refresh/notification fails.
+            Close();
+
             _ = FirebaseEventService.PublishSalaryTakenCashAsync(
-                operationId,
-                _employeeName,
-                amount);
+                _operationId,
+                employee.Name,
+                payout.TotalAmount);
 
             _onChanged?.Invoke();
-            Close();
         }
     }
 }
