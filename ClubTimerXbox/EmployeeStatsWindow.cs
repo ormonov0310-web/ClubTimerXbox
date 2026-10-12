@@ -408,7 +408,12 @@ namespace ClubTimerXbox
 
             _monthText.Text = GetMonthTitle(_monthStart);
             _grossValueText.Text = $"{autoSalary?.GrossAmount ?? 0} сом";
-            _salaryValueText.Text = $"{autoSalary?.PaidAmount ?? 0} сом";
+            int returnedDebtTaken = CashService.GetEmployeePayoutRecordsByPeriod(
+                _monthStart, _monthStart.AddMonths(1), _employeeName)
+                .Where(record => record.ExpenseCategory == "Возврат долга")
+                .Sum(record => record.Amount);
+            int taken = (autoSalary?.PaidAmount ?? 0) + returnedDebtTaken;
+            _salaryValueText.Text = $"{taken} сом";
             _timeValueText.Text = $"{(autoSalary?.ProductBonusAmount ?? 0) + (autoSalary?.BonusAmount ?? 0)} сом";
             int overallRating = autoSalary?.OverallRatingPercent ?? 100;
             _currentOverallRating = overallRating;
@@ -498,7 +503,7 @@ namespace ClubTimerXbox
             EmployeeDebtEmployeeSnapshot debt)
         {
             if (_section == StatsSection.TakenHistory)
-                return "История авансов и выдач зарплаты за выбранный месяц.";
+                return "История выдач зарплаты и возвращённых долгов за выбранный месяц.";
 
             if (_section == StatsSection.Salary)
                 return "Итоги начислений по каждому рабочему дню выбранного месяца.";
@@ -1273,18 +1278,13 @@ namespace ClubTimerXbox
         {
             DateTime nextMonthStart = _monthStart.AddMonths(1);
             var records = CashService
-                .GetSalaryRecordsByPeriod(_monthStart, nextMonthStart)
-                .Where(record => record.RelatedEmployeeName.Equals(
-                    _employeeName,
-                    StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(record => record.CreatedAt)
-                .ToList();
+                .GetEmployeePayoutRecordsByPeriod(_monthStart, nextMonthStart, _employeeName);
 
-            _contentPanel.Children.Add(CreateBigLine("История авансов"));
+            _contentPanel.Children.Add(CreateBigLine("История выдач"));
 
             if (records.Count == 0)
             {
-                _contentPanel.Children.Add(CreateMutedText("За выбранный месяц авансов и выдач пока нет."));
+                _contentPanel.Children.Add(CreateMutedText("За выбранный месяц выдач пока нет."));
                 return;
             }
 
@@ -1304,6 +1304,9 @@ namespace ClubTimerXbox
                     }
                 };
 
+                string debtSource = EmployeeDebtService.GetWithdrawalSourceDescription(record);
+                if (!string.IsNullOrWhiteSpace(debtSource))
+                    panel.Children.Add(CreateDescription(debtSource));
                 if (!string.IsNullOrWhiteSpace(record.Description))
                     panel.Children.Add(CreateDescription(record.Description));
 

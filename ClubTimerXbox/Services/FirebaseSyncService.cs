@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -20,6 +21,10 @@ namespace ClubTimerXbox.Services
             Timeout = TimeSpan.FromSeconds(8)
         };
         private static DateTime _lastOwnerEmployeesPush = DateTime.MinValue;
+        private static readonly HttpClient _snapshotHttpClient = new()
+        {
+            Timeout = Timeout.InfiniteTimeSpan
+        };
 
         private static string ClubRootPath => $"clubs/{PcIdentityService.Current.ClubId}";
 
@@ -37,7 +42,19 @@ namespace ClubTimerXbox.Services
 
         private static IReadOnlyList<ClubPlace> _lastKnownPlaces = Array.Empty<ClubPlace>();
         private static long _lastLiveStateRevision;
-        private static int _pendingCurrentStatePublish;
+        private static readonly SemaphoreSlim CurrentPublishGate = new(1, 1);
+        private static readonly CancellationTokenSource NormalPublishLifetime = new();
+        private static bool _closing;
+        private static readonly FirebaseSnapshotDelivery CurrentDelivery = new(
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "ClubTimerXbox", "firebase_snapshot_delivery.json"));
+
+        public static void RequestCurrentStatePublish(bool urgent = false)
+        {
+            var identity = PcIdentityService.Current;
+            CurrentDelivery.Request(identity.ClubId + ":" + identity.InstallationId,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), urgent);
+        }
 
         public static async Task<bool> PushOverviewStateAsync(List<ClubPlace> places)
         {
@@ -184,6 +201,9 @@ namespace ClubTimerXbox.Services
         }
 
         public static async Task<bool> PushClosedStateAsync(string employeeName)
+            => await PushClosedStateAsync(employeeName, CancellationToken.None);
+
+        private static async Task<bool> PushClosedStateAsync(string employeeName, CancellationToken token)
         {
             if (!FirebaseConnectionService.CanSync)
                 return false;
@@ -206,7 +226,7 @@ namespace ClubTimerXbox.Services
                         isOpen: false,
                         connectionState: "closed",
                         employeeName: employeeName
-                    )
+                    ), token, duringClose: true
                 );
                 await PatchAsync(
                     ClubOverviewPath,
@@ -218,8 +238,12 @@ namespace ClubTimerXbox.Services
                         ["revision"] = revision,
                         ["isOpen"] = false,
                         ["connectionState"] = "closed",
+                        ["busyPlaces"] = 0,
+                        ["freePlaces"] = snapshot.Places.Count,
+                        ["places"] = snapshot.Places.Select(place => new
+                            { name = place.Name, type = place.Type.ToString(), isBusy = false }).ToArray(),
                         ["currentEmployeeName"] = ""
-                    }
+                    }, cancellationToken: token, duringClose: true
                 );
                 return true;
             }
@@ -242,6 +266,10 @@ namespace ClubTimerXbox.Services
                 PaymentService.Records.Count,
                 latestPayment?.Id.ToString() ?? "",
                 latestPayment?.TotalAmount ?? 0,
+                CashService.Records.Count,
+                CashService.Records.LastOrDefault()?.Id,
+                CashlessService.Records.LastOrDefault()?.UpdatedAt.Ticks,
+                BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow),
                 BuildCashAcceptanceSignature(latestCashAcceptance),
                 string.Join(
                     ";",
@@ -250,6 +278,47 @@ namespace ClubTimerXbox.Services
                         .Select(place => $"{place.Name}:{place.IsBusy}")
                 )
             );
+        }
+
+        public static async Task<bool> PublishFinalClosedStateAsync(List<ClubPlace> places,
+            string employeeName, CancellationToken token)
+        {
+            _closing = true;
+            NormalPublishLifetime.Cancel();
+            RequestCurrentStatePublish(urgent: true);
+            if (!FirebaseConnectionService.CanSync) return false;
+            bool entered = false;
+            try
+            {
+                await CurrentPublishGate.WaitAsync(token);
+                entered = true;
+                bool snapshot = await CurrentDelivery.PublishAsync(() =>
+                    BuildClosedSnapshot((JsonObject)JsonSerializer.SerializeToNode(BuildCurrentState(places))!),
+                    patch => PatchAsync(ClubCurrentPath, patch, TimeSpan.FromSeconds(5), token, true),
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                bool presence = await PushClosedStateAsync(employeeName, token);
+                return snapshot && presence;
+            }
+            catch (OperationCanceledException) { return false; }
+            finally { if (entered) CurrentPublishGate.Release(); }
+        }
+
+        internal static JsonObject BuildClosedSnapshot(JsonObject source)
+        {
+            var data = (JsonObject)source.DeepClone();
+            data["isOpen"] = false;
+            data["connectionState"] = "closed";
+            data["currentEmployeeName"] = "";
+            if (data["places"] is JsonArray rows)
+                foreach (JsonObject row in rows.OfType<JsonObject>())
+                {
+                    foreach (string name in new[] { "isBusy", "isCalculating", "isOpenMode",
+                        "isTimeExpiredAwaitingAcknowledgement", "hasAttachedItems" }) row[name] = false;
+                    foreach (string name in new[] { "remainingSeconds", "paidAmount", "currentGameAmount",
+                        "productsAndServicesAmount" }) row[name] = 0;
+                    row["saleLines"] = new JsonArray();
+                }
+            return data;
         }
 
         internal static string BuildCashAcceptanceSignature(CashAcceptanceItem? item)
@@ -496,8 +565,8 @@ namespace ClubTimerXbox.Services
                 ["isOpen"] = isOpen,
                 ["connectionState"] = connectionState,
                 ["employeeName"] = employeeName ?? snapshot.EmployeeName,
-                ["busyPlaces"] = snapshot.BusyPlaces,
-                ["freePlaces"] = snapshot.FreePlaces,
+                ["busyPlaces"] = isOpen ? snapshot.BusyPlaces : 0,
+                ["freePlaces"] = isOpen ? snapshot.FreePlaces : snapshot.Places.Count,
                 ["gamesToday"] = snapshot.GamesToday,
                 ["financialPacePercent"] = snapshot.FinancialPace?.Percent ?? 0,
                 ["financialPaceAvailable"] = snapshot.FinancialPace?.HasExpenseBaseline == true,
@@ -527,11 +596,42 @@ namespace ClubTimerXbox.Services
 
         public static async Task<bool> PushCurrentStateAsync(List<ClubPlace> places)
         {
-            if (!FirebaseConnectionService.CanSync)
-                return false;
+            _lastKnownPlaces = places.ToList();
+            RequestCurrentStatePublish(urgent: true);
+            return await PublishPendingCurrentStateAsync(places);
+        }
 
+        private static async Task<bool> PublishPendingCurrentStateAsync(List<ClubPlace> places)
+        {
+            if (!FirebaseConnectionService.CanSync || places.Count == 0 ||
+                !CurrentDelivery.CanAttempt(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) ||
+                !await CurrentPublishGate.WaitAsync(0))
+                return false;
             try
             {
+                long previousRevision = CurrentDelivery.Revision;
+                bool published = await CurrentDelivery.PublishAsync(
+                    () => (JsonObject)JsonSerializer.SerializeToNode(BuildCurrentState(places))!,
+                    patch => PatchAsync(ClubCurrentPath, patch, TimeSpan.FromSeconds(30)),
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                if (!published) return false;
+                if (CurrentDelivery.Revision == previousRevision) return true;
+                try
+                {
+                    await PatchAsync(ClubMetaPath, BuildClubMeta(PcIdentityService.Current));
+                    await PatchAsync(OwnerClubMetaPath, BuildClubMeta(PcIdentityService.Current));
+                    await PushOwnerEmployeesIfNeededAsync(
+                        EmployeeService.GetAllEmployees(), PcIdentityService.Current);
+                }
+                catch { /* The current snapshot has already been acknowledged. */ }
+                return true;
+            }
+            finally { CurrentPublishGate.Release(); }
+        }
+
+        private static object BuildCurrentState(List<ClubPlace> places)
+        {
+                EmployeeDebtService.RecoverClubLoanMovements();
                 _lastKnownPlaces = places.ToList();
                 var pcIdentity = PcIdentityService.Current;
                 var businessDay = BusinessCalendarService.GetBusinessDay(
@@ -980,6 +1080,8 @@ namespace ClubTimerXbox.Services
                 {
                     updatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                     updatedAtUnixMs = DateTimeOffset.Now.ToUnixTimeMilliseconds(),
+                    isOpen = !_closing,
+                    connectionState = _closing ? "closed" : "online",
                     app = AppVersionService.BuildPayload(),
                     club = new
                     {
@@ -992,6 +1094,7 @@ namespace ClubTimerXbox.Services
                         appVersion = AppVersionService.Version,
                         updateChannel = AppVersionService.UpdateChannel
                     },
+                    supportsClubLoans = true,
                     currentEmployeeName = EmployeeService.CurrentEmployee?.Name ?? "",
                     settings = BuildClubSettingsPayload(AppSettingsService.Current),
                     acceptance = new
@@ -1380,17 +1483,7 @@ namespace ClubTimerXbox.Services
                         .ToList()
                 };
 
-                await PutAsync(ClubCurrentPath, data);
-                await PatchAsync(ClubMetaPath, BuildClubMeta(pcIdentity));
-                await PatchAsync(OwnerClubMetaPath, BuildClubMeta(pcIdentity));
-                await PushOwnerEmployeesIfNeededAsync(employees, pcIdentity);
-                return true;
-            }
-            catch
-            {
-                // Если интернет пропал, программа должна продолжать работать.
-                return false;
-            }
+                return data;
         }
 
         public static async Task CheckCommandsAsync(IReadOnlyList<ClubPlace>? places = null)
@@ -1415,7 +1508,7 @@ namespace ClubTimerXbox.Services
         {
             if (_lastKnownPlaces.Count == 0)
             {
-                Interlocked.Exchange(ref _pendingCurrentStatePublish, 1);
+                RequestCurrentStatePublish(urgent: true);
                 return Task.FromResult(false);
             }
 
@@ -1425,14 +1518,28 @@ namespace ClubTimerXbox.Services
         private static async Task FlushPendingCurrentStateAsync(
             IReadOnlyList<ClubPlace> places)
         {
-            if (places.Count == 0 ||
-                Interlocked.Exchange(ref _pendingCurrentStatePublish, 0) == 0)
+            if (places.Count == 0 || !CurrentDelivery.Pending)
             {
                 return;
             }
 
-            if (!await PushCurrentStateAsync(places.ToList()).ConfigureAwait(false))
-                Interlocked.Exchange(ref _pendingCurrentStatePublish, 1);
+            await PublishPendingCurrentStateAsync(places.ToList());
+            if (CurrentDelivery.Pending) return;
+            string scope = PcIdentityService.Current.ClubId + ":" + PcIdentityService.Current.InstallationId;
+            foreach (var applied in FirebaseCommandLedgerService.PendingSnapshots(scope))
+            {
+                try
+                {
+                    await PatchAsync($"{ClubCommandsPath}/{applied.CommandId}", new
+                    {
+                        snapshotStatus = "published",
+                        snapshotRevision = CurrentDelivery.Revision,
+                        resultMessage = applied.ResultMessage
+                    });
+                    FirebaseCommandLedgerService.MarkSnapshotPublished(applied.CommandId);
+                }
+                catch { break; } // Retry at the next meaningful/periodic snapshot check.
+            }
         }
 
         private static async Task CheckCommandsAsync(
@@ -1680,7 +1787,8 @@ namespace ClubTimerXbox.Services
                     record.PaymentMethod == "Наличные")
                 .Sum(record => record.Amount);
 
-            int balance = checkpointAmount + incomeAfterCheckpoint - expensesAfterCheckpoint;
+            int balance = checkpointAmount + incomeAfterCheckpoint - expensesAfterCheckpoint -
+                ClubLoanCashPolicy.NetOut(CashService.Records, "Наличные", checkpointTime, toExclusive);
 
             return Math.Max(0, balance);
         }
@@ -1704,7 +1812,8 @@ namespace ClubTimerXbox.Services
                     !CashService.IsPriorMonthExpense(record, fromInclusive))
                 .Sum(record => record.Amount);
 
-            return Math.Max(0, income - expenses);
+            return Math.Max(0, income - expenses -
+                ClubLoanCashPolicy.NetOut(CashService.Records, "Наличные", fromInclusive, toExclusive, true));
         }
 
         private static int? CalculateActualCashlessBalanceByPeriod(
@@ -1754,7 +1863,8 @@ namespace ClubTimerXbox.Services
                     record.PaymentMethod == "Безнал")
                 .Sum(record => record.Amount);
 
-            int balance = checkpointAmount + incomeAfterCheckpoint - expensesAfterCheckpoint;
+            int balance = checkpointAmount + incomeAfterCheckpoint - expensesAfterCheckpoint -
+                ClubLoanCashPolicy.NetOut(CashService.Records, "Безнал", checkpointTime, toExclusive);
 
             return Math.Max(0, balance);
         }
@@ -1778,7 +1888,8 @@ namespace ClubTimerXbox.Services
                     !CashService.IsPriorMonthExpense(record, fromInclusive))
                 .Sum(record => record.Amount);
 
-            return Math.Max(0, income - expenses);
+            return Math.Max(0, income - expenses -
+                ClubLoanCashPolicy.NetOut(CashService.Records, "Безнал", fromInclusive, toExclusive, true));
         }
 
         private static CashReportSummary GetPaymentSummary(
@@ -3058,12 +3169,7 @@ namespace ClubTimerXbox.Services
             string employeeName)
         {
             return CashService
-                .GetSalaryRecordsByPeriod(monthStart, nextMonthStart)
-                .Where(record => string.Equals(
-                    record.RelatedEmployeeName,
-                    employeeName,
-                    StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(record => record.CreatedAt)
+                .GetEmployeePayoutRecordsByPeriod(monthStart, nextMonthStart, employeeName)
                 .Take(150)
                 .Select(record =>
                 {
@@ -3090,6 +3196,8 @@ namespace ClubTimerXbox.Services
                         addedBy = record.EmployeeName,
                         employeeName = record.RelatedEmployeeName,
                         salaryMonthKey = record.SalaryMonthKey,
+                        payoutKind = record.ExpenseCategory == "Возврат долга" ? "DebtReturn" : "Salary",
+                        sourceDescription = EmployeeDebtService.GetWithdrawalSourceDescription(record),
                         description = record.Description
                     };
                 })
@@ -3124,6 +3232,8 @@ namespace ClubTimerXbox.Services
                     debtorEmployeeId = contract.DebtorEmployeeId,
                     debtorName = contract.DebtorName,
                     creditorEmployeeId = contract.CreditorEmployeeId,
+                    creditorType = contract.CreditorType.ToString(),
+                    fundingMethod = contract.FundingMethod,
                     creditorName = contract.CreditorName,
                     createdAt = contract.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                     principalAmount = contract.PrincipalAmount,
@@ -5220,7 +5330,9 @@ namespace ClubTimerXbox.Services
                     "Владелец",
                     operationId,
                     baseline,
-                    command.Description);
+                    command.Description,
+                    clubCreditor: command.CreditorType == "Club",
+                    fundingMethod: command.PaymentMethod);
                 return $"Долг создан: {created.DebtorNameSnapshot} → " +
                        $"{created.CreditorNameSnapshot}, {command.Amount} сом, " +
                        $"удержание {created.DeductionPercent}%.";
@@ -5236,7 +5348,8 @@ namespace ClubTimerXbox.Services
                     command.ExpectedDebtRevision,
                     "Владелец",
                     operationId,
-                    command.Description);
+                    command.Description,
+                    command.PaymentMethod);
                 return $"Долг увеличен на {command.Amount} сом.";
             }
 
@@ -5315,7 +5428,8 @@ namespace ClubTimerXbox.Services
                     true,
                     command.ExpectedDebtRevision,
                     operationId,
-                    command.Description);
+                    command.Description,
+                    command.PaymentMethod);
                 return $"Личная передача {command.Amount} сом подтверждена.";
             }
 
@@ -5783,20 +5897,24 @@ namespace ClubTimerXbox.Services
             string resultMessage,
             bool pushCurrentState = true)
         {
-            FirebaseCommandLedgerService.MarkApplied(
-                commandId,
-                command.Type,
-                resultMessage
-            );
+            if (!FirebaseCommandLedgerService.TryGet(commandId, out _))
+                FirebaseCommandLedgerService.MarkApplied(commandId, command.Type, resultMessage,
+                    pushCurrentState ? PcIdentityService.Current.ClubId + ":" +
+                        PcIdentityService.Current.InstallationId : "");
 
-            if (pushCurrentState)
-                await PushCurrentStateAsync(_lastKnownPlaces.ToList());
+            bool published = !pushCurrentState ||
+                (await PushCurrentStateAsync(_lastKnownPlaces.ToList()) && !CurrentDelivery.Pending);
 
             command.Status = "applied";
             command.AppliedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             command.ResultMessage = resultMessage;
+            command.SnapshotStatus = published ? "published" : "pending";
+            command.SnapshotRevision = published ? CurrentDelivery.Revision : 0;
+            if (!published)
+                command.ResultMessage += "\nПК сохранил изменение. Отправка снимка ожидает связи; повторять команду не нужно.";
 
             await PutAsync($"{GetCommandPath(command)}/{commandId}", command);
+            if (published) FirebaseCommandLedgerService.MarkSnapshotPublished(commandId);
         }
 
         private static async Task MarkCommandError(
@@ -5842,12 +5960,17 @@ namespace ClubTimerXbox.Services
             );
         }
 
-        private static async Task PutAsync(string path, object data)
+        private static async Task PutAsync(string path, object data,
+            CancellationToken cancellationToken = default, bool duringClose = false)
         {
+            if (_closing && !duringClose) throw new OperationCanceledException();
             string url = await FirebaseAuthService.BuildDatabaseUrlAsync(path);
             url = AppendQuery(url, "print=silent");
 
-            string json = JsonSerializer.Serialize(data);
+            string json = data is FirebaseCommand
+                ? JsonSerializer.Serialize(data, new JsonSerializerOptions
+                    { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
+                : JsonSerializer.Serialize(data);
 
             using var content = new StringContent(
                 json,
@@ -5855,12 +5978,17 @@ namespace ClubTimerXbox.Services
                 "application/json"
             );
 
-            using var response = await _httpClient.PutAsync(url, content);
+            using var linked = duringClose
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, NormalPublishLifetime.Token);
+            using var response = await _httpClient.PutAsync(url, content, linked.Token);
             response.EnsureSuccessStatusCode();
         }
 
-        private static async Task PatchAsync(string path, object data)
+        private static async Task PatchAsync(string path, object data, TimeSpan? timeout = null,
+            CancellationToken cancellationToken = default, bool duringClose = false)
         {
+            if (_closing && !duringClose) throw new OperationCanceledException();
             string url = await FirebaseAuthService.BuildDatabaseUrlAsync(path);
             url = AppendQuery(url, "print=silent");
             string json = JsonSerializer.Serialize(data);
@@ -5877,7 +6005,12 @@ namespace ClubTimerXbox.Services
                 )
             };
 
-            using var response = await _httpClient.SendAsync(request);
+            using var cancellation = duringClose
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, NormalPublishLifetime.Token);
+            cancellation.CancelAfter(timeout ?? TimeSpan.FromSeconds(8));
+            using var response = await (timeout.HasValue ? _snapshotHttpClient : _httpClient)
+                .SendAsync(request, cancellation.Token);
             response.EnsureSuccessStatusCode();
         }
 
@@ -5902,6 +6035,8 @@ namespace ClubTimerXbox.Services
 
         private class FirebaseCommand
         {
+            public string SnapshotStatus { get; set; } = "";
+            public long SnapshotRevision { get; set; }
             [JsonIgnore]
             public string FirebasePath { get; set; } = "";
 
@@ -5964,6 +6099,7 @@ namespace ClubTimerXbox.Services
             public string DebtContractId { get; set; } = "";
             public string DebtorEmployeeId { get; set; } = "";
             public string CreditorEmployeeId { get; set; } = "";
+            public string CreditorType { get; set; } = "Employee";
             public int DebtPercent { get; set; } = 30;
             public long ExpectedDebtRevision { get; set; } = -1;
             public int DebtFreezeDurationDays { get; set; } = 1;

@@ -146,7 +146,8 @@ namespace ClubTimerXbox.Services
 
             return checkpointAmount +
                    cashlessIncomeAfterCheckpoint -
-                   cashlessExpensesAfterCheckpoint;
+                   cashlessExpensesAfterCheckpoint -
+                   ClubLoanCashPolicy.NetOut(CashService.Records, "Безнал", checkpoint, toExclusive);
         }
 
         public static int CalculateExpectedCashlessBalanceByPeriod(
@@ -195,7 +196,8 @@ namespace ClubTimerXbox.Services
                     record.PaymentMethod == "Наличные")
                 .Sum(record => record.Amount);
 
-            return Math.Max(0, checkpointAmount + incomeAfterCheckpoint - expensesAfterCheckpoint);
+            return Math.Max(0, checkpointAmount + incomeAfterCheckpoint - expensesAfterCheckpoint -
+                ClubLoanCashPolicy.NetOut(CashService.Records, "Наличные", checkpointTime, toExclusive));
         }
 
         private static int CalculateContinuousExpectedCashBalance(DateTime toExclusive)
@@ -277,7 +279,8 @@ namespace ClubTimerXbox.Services
                     !CashService.IsPriorMonthExpense(record, fromInclusive))
                 .Sum(record => record.Amount);
 
-            return Math.Max(0, income - expenses);
+            return Math.Max(0, income - expenses -
+                ClubLoanCashPolicy.NetOut(CashService.Records, "Наличные", fromInclusive, toExclusive, true));
         }
 
         private static int CalculateCashlessBalanceAfterCheckpoint(
@@ -300,7 +303,8 @@ namespace ClubTimerXbox.Services
                     record.PaymentMethod == "Безнал")
                 .Sum(record => record.Amount);
 
-            return Math.Max(0, checkpointAmount + incomeAfterCheckpoint - expensesAfterCheckpoint);
+            return Math.Max(0, checkpointAmount + incomeAfterCheckpoint - expensesAfterCheckpoint -
+                ClubLoanCashPolicy.NetOut(CashService.Records, "Безнал", checkpointTime, toExclusive));
         }
 
         private static int CalculateCashlessBalanceFromMonthStart(
@@ -322,7 +326,8 @@ namespace ClubTimerXbox.Services
                     !CashService.IsPriorMonthExpense(record, fromInclusive))
                 .Sum(record => record.Amount);
 
-            return Math.Max(0, income - expenses);
+            return Math.Max(0, income - expenses -
+                ClubLoanCashPolicy.NetOut(CashService.Records, "Безнал", fromInclusive, toExclusive, true));
         }
     }
 }

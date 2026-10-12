@@ -3,6 +3,7 @@ using System.Collections.Generic;
 
 namespace ClubTimerXbox.Models
 {
+    public enum EmployeeDebtCreditorType { Employee = 0, Club = 1 }
     public enum EmployeeDebtStatus
     {
         Active = 0,
@@ -30,6 +31,8 @@ namespace ClubTimerXbox.Models
 
     public sealed class EmployeeDebtContract
     {
+        public EmployeeDebtCreditorType CreditorType { get; set; }
+        public string FundingMethod { get; set; } = "";
         public string Id { get; set; } = "";
 
         public string DebtorEmployeeId { get; set; } = "";
@@ -69,6 +72,7 @@ namespace ClubTimerXbox.Models
 
     public sealed class EmployeeDebtEvent
     {
+        public bool CashMovementPosted { get; set; }
         public string Id { get; set; } = "";
 
         public string OperationId { get; set; } = "";
@@ -159,6 +163,8 @@ namespace ClubTimerXbox.Models
 
     public sealed class EmployeeDebtContractSnapshot
     {
+        public EmployeeDebtCreditorType CreditorType { get; set; }
+        public string FundingMethod { get; set; } = "";
         public string Id { get; set; } = "";
 
         public string DebtorEmployeeId { get; set; } = "";

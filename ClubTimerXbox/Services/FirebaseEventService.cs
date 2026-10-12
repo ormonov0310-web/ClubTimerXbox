@@ -84,6 +84,25 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        public static Task<bool> PublishClubClosedAsync(string sessionId, string employeeName)
+        {
+            var identity = PcIdentityService.Current;
+            if (!CanPublish(identity)) return Task.FromResult(false);
+            var record = CreateBaseRecord($"closed_{CleanId(sessionId)}", "club_closed",
+                $"{identity.ClubName}: клуб закрыт",
+                $"Программа клуба закрыта в {DateTime.Now:HH:mm}. Сотрудник: {CleanEmployeeName(employeeName)}.",
+                "info");
+            record.EmployeeName = CleanEmployeeName(employeeName);
+            AddToOutbox(record);
+            return FlushClosedEventAsync(record.Id);
+        }
+
+        private static async Task<bool> FlushClosedEventAsync(string eventId)
+        {
+            await FlushPendingAsync().ConfigureAwait(false);
+            lock (FileLock) return !LoadOutboxUnsafe().Any(item => item.Id == eventId);
+        }
+
         public static Task PublishEmployeeChangedAsync(
             string previousEmployeeName,
             string currentEmployeeName)

@@ -110,6 +110,9 @@ namespace ClubTimerXbox.Services
                     record.PaymentMethod.Equals("Наличные", StringComparison.Ordinal))
                 .Sum(record => record.Amount);
 
+            cashExpenses += ClubLoanCashPolicy.NetOut(cashRecords, "Наличные",
+                observedAt, toExclusive, includeLowerBound);
+
             return new CashPhysicalBalanceCalculation
             {
                 Source = source,

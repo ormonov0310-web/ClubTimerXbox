@@ -45,6 +45,7 @@ namespace ClubTimerXbox
         public MainWindow()
         {
             InitializeComponent();
+            EmployeeDebtService.RecoverClubLoanMovements();
             AppUpdateRuntimeGuard.MarkRunning();
             VisualThemeService.ThemeChanged += VisualThemeService_ThemeChanged;
             AppUpdateService.StateChanged += AppUpdateService_StateChanged;
@@ -110,6 +111,7 @@ namespace ClubTimerXbox
             };
 
             Closing += MainWindow_UpdateClosing;
+            Closing += MainWindow_FinalClosing;
             Closing += (_, e) =>
             {
                 if (!e.Cancel)

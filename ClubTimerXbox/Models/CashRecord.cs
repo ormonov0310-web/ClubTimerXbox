@@ -8,7 +8,9 @@ namespace ClubTimerXbox.Models
         ProductOrService,
         Shortage,
         Correction,
-        Expense
+        Expense,
+        ClubLoanIssued,
+        ClubLoanReturned
     }
 
     public class CashRecord

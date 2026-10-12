@@ -86,6 +86,19 @@ namespace ClubTimerXbox.Services
             Save();
         }
 
+        internal static void EnsureClubLoanMovement(CashRecord record)
+        {
+            CashRecord? old = _records.FirstOrDefault(item => item.Id == record.Id);
+            if (old == null) AddRecord(record);
+            else
+            {
+                if (old.Type != record.Type || old.Amount != record.Amount ||
+                    old.PaymentMethod != record.PaymentMethod)
+                    throw new InvalidOperationException("Конфликт проводки займа клуба.");
+                Save(); // Also persists an in-memory record after a failed previous save.
+            }
+        }
+
         private static void Save()
         {
             CashStorageService.Save(_records);
@@ -482,7 +495,8 @@ namespace ClubTimerXbox.Services
                     IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.Category == "Расходы" &&
                     record.PaymentMethod == "Наличные")
-                .Sum(record => record.Amount);
+                .Sum(record => record.Amount) +
+                ClubLoanCashPolicy.NetOut(_records, "Наличные", fromInclusive, toExclusive, true);
         }
 
         public static int GetClubCashExpenseTotalByPeriod(DateTime fromInclusive, DateTime toExclusive)
@@ -502,7 +516,8 @@ namespace ClubTimerXbox.Services
                     IsInBusinessPeriod(record, fromInclusive, toExclusive) &&
                     record.Category == "Расходы" &&
                     record.PaymentMethod == "Безнал")
-                .Sum(record => record.Amount);
+                .Sum(record => record.Amount) +
+                ClubLoanCashPolicy.NetOut(_records, "Безнал", fromInclusive, toExclusive, true);
         }
 
         public static int GetClubCashlessExpenseTotalByPeriod(DateTime fromInclusive, DateTime toExclusive)
@@ -553,6 +568,31 @@ namespace ClubTimerXbox.Services
             return _records
                 .Where(record => IsSalaryRecord(record) &&
                                  IsSalaryRecordInPeriod(record, fromInclusive, toExclusive))
+                .OrderByDescending(record => record.CreatedAt)
+                .ToList();
+        }
+
+        public static List<CashRecord> GetEmployeePayoutRecordsByPeriod(
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string employeeName)
+        {
+            return GetEmployeePayoutRecordsByPeriod(_records, fromInclusive, toExclusive, employeeName);
+        }
+
+        internal static List<CashRecord> GetEmployeePayoutRecordsByPeriod(
+            IEnumerable<CashRecord> records,
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            string employeeName)
+        {
+            return records.Where(record =>
+                    record.RelatedEmployeeName.Equals(employeeName.Trim(), StringComparison.OrdinalIgnoreCase) &&
+                    (IsSalaryRecord(record) && IsSalaryRecordInPeriod(record, fromInclusive, toExclusive) ||
+                     record.Type == CashRecordType.Expense && record.Category == "Расходы" &&
+                     record.ExpenseCategory == "Возврат долга" &&
+                     record.CreatedAt >= fromInclusive && record.CreatedAt < toExclusive))
+                .DistinctBy(record => record.Id)
                 .OrderByDescending(record => record.CreatedAt)
                 .ToList();
         }
@@ -877,6 +917,8 @@ namespace ClubTimerXbox.Services
                 return false;
             }
 
+            if (ClubLoanCashPolicy.IsMovement(record))
+                throw new InvalidOperationException("Проводку займа нельзя удалить отдельно от договора.");
             _records.Remove(record);
             Save();
 

@@ -28,6 +28,8 @@ namespace ClubTimerXbox
                 new($"Создан: {contract.CreatedAt:dd.MM.yyyy HH:mm}")
             };
             AddPositive(lines, "Сумма долга", contract.PrincipalAmount);
+            if (contract.CreditorType == EmployeeDebtCreditorType.Club)
+                lines.Add(new EmployeeDebtStatsLine($"Выдано из: {contract.FundingMethod}"));
             AddPositive(lines, "Погашено", contract.RepaidAmount);
             AddPositive(lines, "Прощено", contract.ForgivenAmount);
             if (contract.RemainingAmount > 0)

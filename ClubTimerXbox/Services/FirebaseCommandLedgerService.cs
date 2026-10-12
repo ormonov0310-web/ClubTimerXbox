@@ -15,6 +15,8 @@ namespace ClubTimerXbox.Services
         public string ResultMessage { get; set; } = "";
 
         public DateTime AppliedAt { get; set; } = DateTime.Now;
+        public bool SnapshotPending { get; set; }
+        public string SnapshotScope { get; set; } = "";
     }
 
     public static class FirebaseCommandLedgerService
@@ -56,7 +58,8 @@ namespace ClubTimerXbox.Services
         public static void MarkApplied(
             string commandId,
             string commandType,
-            string resultMessage)
+            string resultMessage,
+            string snapshotScope = "")
         {
             commandId = commandId.Trim();
             if (string.IsNullOrWhiteSpace(commandId))
@@ -69,11 +72,14 @@ namespace ClubTimerXbox.Services
                     CommandId = commandId,
                     CommandType = commandType.Trim(),
                     ResultMessage = resultMessage,
+                    SnapshotPending = !string.IsNullOrWhiteSpace(snapshotScope),
+                    SnapshotScope = snapshotScope,
                     AppliedAt = DateTime.Now
                 };
 
                 foreach (string oldId in Entries.Values
                     .OrderByDescending(item => item.AppliedAt)
+                    .Where(item => !item.SnapshotPending)
                     .Skip(MaximumEntries)
                     .Select(item => item.CommandId)
                     .ToList())
@@ -81,6 +87,23 @@ namespace ClubTimerXbox.Services
                     Entries.Remove(oldId);
                 }
 
+                Save();
+            }
+        }
+
+        public static List<FirebaseAppliedCommand> PendingSnapshots(string scope)
+        {
+            lock (Gate)
+                return Entries.Values.Where(item => item.SnapshotPending &&
+                    item.SnapshotScope == scope).ToList();
+        }
+
+        public static void MarkSnapshotPublished(string commandId)
+        {
+            lock (Gate)
+            {
+                if (!Entries.TryGetValue(commandId, out var item)) return;
+                item.SnapshotPending = false;
                 Save();
             }
         }

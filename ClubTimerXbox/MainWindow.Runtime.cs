@@ -17,9 +17,11 @@ namespace ClubTimerXbox
         private readonly DispatcherTimer _firebaseOverviewMonitorTimer = new DispatcherTimer();
         private bool _isFirebaseStatePushRunning;
         private bool _isFirebaseCommandCheckRunning;
+        private bool _firebaseSnapshotSyncWasAllowed;
         private string _lastFirebaseOverviewSignature = "";
         private string _pendingFirebaseOverviewSignature = "";
         private DateTime _pendingFirebaseOverviewChangedAt = DateTime.MinValue;
+        private DateTime _lastFirebaseDetailCheckAt = DateTime.MinValue;
 
         private void CheckRuntimeShiftAfterStart()
         {
@@ -102,6 +104,7 @@ namespace ClubTimerXbox
             _firebaseStatePushTimer.Start();
             _firebaseOverviewMonitorTimer.Start();
 
+            FirebaseSyncService.RequestCurrentStatePublish(urgent: true);
             _ = RunFirebaseCommandCheckAsync();
             string initialSignature = FirebaseSyncService.BuildOverviewSignature(_places);
             _pendingFirebaseOverviewSignature = initialSignature;
@@ -111,6 +114,8 @@ namespace ClubTimerXbox
 
         private async Task RunFirebaseCommandCheckAsync()
         {
+            if (!FirebaseConnectionService.CanConnect)
+                _firebaseSnapshotSyncWasAllowed = false;
             if (!FirebaseConnectionService.CanConnect || _isFirebaseCommandCheckRunning)
                 return;
 
@@ -119,7 +124,16 @@ namespace ClubTimerXbox
             try
             {
                 if (!await FirebaseChannelBindingService.EnsureCurrentBindingAsync())
+                {
+                    _firebaseSnapshotSyncWasAllowed = false;
                     return;
+                }
+
+                if (!_firebaseSnapshotSyncWasAllowed)
+                {
+                    FirebaseSyncService.RequestCurrentStatePublish(urgent: true);
+                    _firebaseSnapshotSyncWasAllowed = true;
+                }
 
                 await FirebaseSyncService.CheckCommandsAsync(_places.ToList());
             }
@@ -142,6 +156,11 @@ namespace ClubTimerXbox
                     return;
 
                 var places = _places.ToList();
+                if (DateTime.UtcNow - _lastFirebaseDetailCheckAt >= TimeSpan.FromMinutes(2))
+                {
+                    FirebaseSyncService.RequestCurrentStatePublish();
+                    _lastFirebaseDetailCheckAt = DateTime.UtcNow;
+                }
                 await FirebaseEventService.FlushPendingAsync();
                 await FirebaseSyncService.PushHeartbeatAsync(places);
                 await AppUpdateService.CheckAndReportAsync(places);
@@ -206,6 +225,7 @@ namespace ClubTimerXbox
                     return;
 
                 _lastFirebaseOverviewSignature = signature;
+                FirebaseSyncService.RequestCurrentStatePublish();
                 _pendingFirebaseOverviewSignature = "";
                 _pendingFirebaseOverviewChangedAt = DateTime.MinValue;
 

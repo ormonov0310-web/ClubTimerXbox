@@ -10,6 +10,18 @@ if (args.Length >= 2 && args[0] == "--salary-ui")
     return;
 }
 
+if (args.Contains("--sync-idle", StringComparer.OrdinalIgnoreCase))
+{
+    new FirebaseSnapshotDeliveryTests().MeasureIdle();
+    return;
+}
+
+if (args.Length >= 2 && args[0] == "--closing-ui")
+{
+    ClubCloseTests.Render(Path.GetFullPath(args[1]));
+    return;
+}
+
 if (args.Contains("--photos", StringComparer.OrdinalIgnoreCase))
 {
     new ProductPhotoTestSuite().Run();
@@ -41,6 +53,10 @@ new FinancialPaceTestSuite().Run();
 new ProductPhotoTestSuite().Run();
 new OverNormPortionTests().Run();
 new EmployeeDebtTestSuite().Run();
+new EmployeePayoutHistoryTests().Run();
+new FirebaseSnapshotDeliveryTests().Run();
+new ClubLoanTests().Run();
+ClubCloseTests.Run();
 
 internal sealed class EmployeeDebtTestSuite
 {

@@ -87,8 +87,10 @@ namespace ClubTimerXbox.Services
                 GameRevenue = CashService.GetTotalByPeriodAndCategory(from, to, "Игры"),
                 ProductsAndServicesRevenue = ProductServiceRevenueService.GetTotal(from, to),
                 Expenses = CashService.GetExpenseTotalByPeriod(from, to),
-                CashMovement = cashIncome - cashExpenses,
-                CashlessMovement = cashlessIncome - cashlessExpenses
+                CashMovement = cashIncome - cashExpenses -
+                    ClubLoanCashPolicy.NetOut(CashService.Records, "Наличные", from, to, true),
+                CashlessMovement = cashlessIncome - cashlessExpenses -
+                    ClubLoanCashPolicy.NetOut(CashService.Records, "Безнал", from, to, true)
             };
             Save();
         }

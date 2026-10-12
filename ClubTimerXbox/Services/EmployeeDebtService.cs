@@ -17,6 +17,7 @@ namespace ClubTimerXbox.Services
             "employee_debts.json");
         private static readonly object Gate = new();
         private static EmployeeDebtState State = Load();
+        private static string LastDurableState = JsonSerializer.Serialize(State);
 
         public static bool HasOutstandingContracts
         {
@@ -45,31 +46,37 @@ namespace ClubTimerXbox.Services
             string actorName,
             string operationId,
             IReadOnlyDictionary<DateTime, int>? currentDailyGross = null,
-            string note = "")
+            string note = "",
+            bool clubCreditor = false,
+            string fundingMethod = "")
         {
             debtorEmployeeId = debtorEmployeeId.Trim();
             creditorEmployeeId = creditorEmployeeId.Trim();
             ValidateAmount(amount);
             ValidatePercent(deductionPercent);
             Employee debtor = RequireEmployee(debtorEmployeeId, "должник");
-            Employee creditor = RequireEmployee(creditorEmployeeId, "кредитор");
-            if (debtor.EmployeeId.Equals(creditor.EmployeeId, StringComparison.OrdinalIgnoreCase))
+            Employee? creditor = clubCreditor ? null : RequireEmployee(creditorEmployeeId, "кредитор");
+            if (creditor != null && debtor.EmployeeId.Equals(creditor.EmployeeId, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Должник и кредитор не могут быть одним сотрудником.");
 
             lock (Gate)
             {
+                RecoverClubLoanMovementsLocked();
                 EmployeeDebtContract? replay = FindOperationContractLocked(operationId);
                 if (replay != null)
                     return Clone(replay);
 
                 DateTime now = ClubClock.Current.LocalNow;
+                if (clubCreditor) ValidateClubFunding(fundingMethod, amount);
                 var contract = new EmployeeDebtContract
                 {
                     Id = Guid.NewGuid().ToString("N"),
                     DebtorEmployeeId = debtor.EmployeeId,
                     DebtorNameSnapshot = debtor.Name,
-                    CreditorEmployeeId = creditor.EmployeeId,
-                    CreditorNameSnapshot = creditor.Name,
+                    CreditorType = clubCreditor ? EmployeeDebtCreditorType.Club : EmployeeDebtCreditorType.Employee,
+                    FundingMethod = clubCreditor ? fundingMethod : "",
+                    CreditorEmployeeId = creditor?.EmployeeId ?? ClubLoanCashPolicy.CreditorId,
+                    CreditorNameSnapshot = creditor?.Name ?? "Касса клуба",
                     CreatedAt = now,
                     UpdatedAt = now,
                     DeductionPercent = deductionPercent,
@@ -85,9 +92,11 @@ namespace ClubTimerXbox.Services
                     actorName,
                     operationId,
                     note,
-                    newPercent: deductionPercent);
+                    newPercent: deductionPercent,
+                    paymentMethod: clubCreditor ? fundingMethod : "");
                 CaptureBaselinesLocked(debtor.EmployeeId, currentDailyGross);
                 SaveLocked();
+                ClubLoanCashPolicy.TryRecoverCommitted(State, CashService.EnsureClubLoanMovement, SaveLocked);
                 return Clone(contract);
             }
         }
@@ -98,16 +107,23 @@ namespace ClubTimerXbox.Services
             long expectedRevision,
             string actorName,
             string operationId,
-            string note = "")
+            string note = "",
+            string fundingMethod = "")
         {
             ValidateAmount(amount);
             lock (Gate)
             {
+                RecoverClubLoanMovementsLocked();
                 EmployeeDebtContract contract = RequireContractLocked(contractId);
                 if (FindOperationEventLocked(operationId) != null)
                     return Clone(contract);
                 EnsureOpenLocked(contract);
                 CheckRevision(contract, expectedRevision);
+                if (contract.CreditorType == EmployeeDebtCreditorType.Club)
+                {
+                    if (string.IsNullOrWhiteSpace(fundingMethod)) fundingMethod = contract.FundingMethod;
+                    ValidateClubFunding(fundingMethod, amount);
+                }
                 AddEventLocked(
                     contract,
                     EmployeeDebtEventKind.Increased,
@@ -115,9 +131,11 @@ namespace ClubTimerXbox.Services
                     "",
                     actorName,
                     operationId,
-                    note);
+                    note,
+                    paymentMethod: contract.CreditorType == EmployeeDebtCreditorType.Club ? fundingMethod : "");
                 TouchLocked(contract);
                 SaveLocked();
+                ClubLoanCashPolicy.TryRecoverCommitted(State, CashService.EnsureClubLoanMovement, SaveLocked);
                 return Clone(contract);
             }
         }
@@ -514,17 +532,21 @@ namespace ClubTimerXbox.Services
             bool isOwner,
             long expectedRevision,
             string operationId,
-            string note = "")
+            string note = "",
+            string paymentMethod = "")
         {
             ValidateAmount(amount);
             lock (Gate)
             {
+                RecoverClubLoanMovementsLocked();
                 EmployeeDebtContract contract = RequireContractLocked(contractId);
                 if (FindOperationEventLocked(operationId) != null)
                     return Clone(contract);
                 EnsureOpenLocked(contract);
                 CheckRevision(contract, expectedRevision);
                 EnsureCreditorOrOwner(contract, actorEmployeeId, isOwner);
+                if (contract.CreditorType == EmployeeDebtCreditorType.Club)
+                    ClubLoanCashPolicy.ValidateMethod(paymentMethod);
                 if (amount > GetRemainingLocked(contract.Id, DateTime.MaxValue))
                     throw new InvalidOperationException("Сумма больше остатка долга.");
 
@@ -535,10 +557,12 @@ namespace ClubTimerXbox.Services
                     actorEmployeeId,
                     ResolveActorName(actorEmployeeId, isOwner),
                     operationId,
-                    note);
+                    note,
+                    paymentMethod: contract.CreditorType == EmployeeDebtCreditorType.Club ? paymentMethod : "");
                 CloseIfSettledLocked(contract);
                 TouchLocked(contract);
                 SaveLocked();
+                ClubLoanCashPolicy.TryRecoverCommitted(State, CashService.EnsureClubLoanMovement, SaveLocked);
                 return Clone(contract);
             }
         }
@@ -657,6 +681,32 @@ namespace ClubTimerXbox.Services
             }
 
             return postedAmount;
+        }
+
+        public static string GetWithdrawalSourceDescription(CashRecord record)
+        {
+            lock (Gate)
+                return BuildWithdrawalSourceDescription(State, record);
+        }
+
+        internal static string BuildWithdrawalSourceDescription(EmployeeDebtState state, CashRecord record)
+        {
+            if (record.ExpenseCategory != "Возврат долга")
+                return "";
+
+            var contracts = state.Contracts.ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
+            var portions = state.Events
+                .Where(item => item.Kind == EmployeeDebtEventKind.CreditWithdrawal &&
+                               !string.IsNullOrWhiteSpace(item.OperationId) &&
+                               record.Description.Contains(
+                                   $"[debt-credit-withdrawal:{item.OperationId}]", StringComparison.Ordinal) &&
+                               contracts.ContainsKey(item.ContractId))
+                .GroupBy(item => contracts[item.ContractId].DebtorNameSnapshot)
+                .Select(group => $"{group.Key}: {group.Sum(item => item.Amount)} сом")
+                .ToList();
+            return portions.Count == 0
+                ? "Из возвращённых долгов"
+                : "Из возвращённых долгов — " + string.Join("; ", portions);
         }
 
         public static int GetWithdrawalOperationAmount(string operationId)
@@ -957,6 +1007,8 @@ namespace ClubTimerXbox.Services
 
         private static int GetContractCreditLocked(string contractId, DateTime beforeExclusive)
         {
+            if (FindContractLocked(contractId)?.CreditorType == EmployeeDebtCreditorType.Club)
+                return 0;
             int received = State.Events
                 .Where(item => item.ContractId.Equals(contractId, StringComparison.OrdinalIgnoreCase) &&
                                item.CreatedAt < beforeExclusive &&
@@ -1113,6 +1165,8 @@ namespace ClubTimerXbox.Services
         {
             if (isOwner)
                 return;
+            if (contract.CreditorType == EmployeeDebtCreditorType.Club)
+                throw new InvalidOperationException("Договором с кассой клуба управляет владелец с телефона.");
             EnsureActor(
                 contract.CreditorEmployeeId,
                 actorEmployeeId,
@@ -1193,14 +1247,43 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        public static void RecoverClubLoanMovements()
+        {
+            lock (Gate) RecoverClubLoanMovementsLocked();
+        }
+
+        private static void RecoverClubLoanMovementsLocked()
+        {
+            ClubLoanCashPolicy.Recover(State, CashService.EnsureClubLoanMovement, SaveLocked);
+        }
+
+        private static void ValidateClubFunding(string method, int amount)
+        {
+            ClubLoanCashPolicy.ValidateMethod(method);
+            DateTime now = ClubClock.Current.LocalNow;
+            int available = method == "Наличные"
+                ? CashBalanceSummaryService.CalculateExpectedCashBalanceByPeriod(DateTime.MinValue, now.AddTicks(1))
+                : CashBalanceSummaryService.CalculateExpectedCashlessBalanceByPeriod(DateTime.MinValue, now.AddTicks(1));
+            if (amount > available)
+                throw new InvalidOperationException($"В кассе клуба недостаточно денег: {available} сом.");
+        }
+
         private static void SaveLocked()
         {
-            Directory.CreateDirectory(FolderPath);
-            AtomicFileStorageService.WriteAllText(
-                FilePath,
-                JsonSerializer.Serialize(
-                    State,
-                    new JsonSerializerOptions { WriteIndented = true }));
+            string json = JsonSerializer.Serialize(State,
+                new JsonSerializerOptions { WriteIndented = true });
+            try
+            {
+                Directory.CreateDirectory(FolderPath);
+                AtomicFileStorageService.WriteAllText(FilePath, json);
+                LastDurableState = json;
+            }
+            catch
+            {
+                State = JsonSerializer.Deserialize<EmployeeDebtState>(LastDurableState)!;
+                State.EarningCursors = new(State.EarningCursors, StringComparer.OrdinalIgnoreCase);
+                throw;
+            }
         }
     }
 
@@ -1441,6 +1524,8 @@ namespace ClubTimerXbox.Services
                         contract.DebtorEmployeeId,
                         contract.DebtorNameSnapshot),
                     CreditorEmployeeId = contract.CreditorEmployeeId,
+                    CreditorType = contract.CreditorType,
+                    FundingMethod = contract.FundingMethod,
                     CreditorName = resolveEmployeeName(
                         contract.CreditorEmployeeId,
                         contract.CreditorNameSnapshot),
@@ -1515,6 +1600,8 @@ namespace ClubTimerXbox.Services
             string contractId,
             DateTime beforeExclusive)
         {
+            if (state.Contracts.FirstOrDefault(item => item.Id == contractId)?.CreditorType == EmployeeDebtCreditorType.Club)
+                return 0;
             int received = state.Events
                 .Where(item => item.ContractId.Equals(contractId, StringComparison.OrdinalIgnoreCase) &&
                                item.CreatedAt < beforeExclusive &&
@@ -1609,7 +1696,8 @@ namespace ClubTimerXbox.Services
 
         private static bool IsCreditor(EmployeeDebtContract contract, string employeeId)
         {
-            return contract.CreditorEmployeeId.Equals(employeeId, StringComparison.OrdinalIgnoreCase);
+            return contract.CreditorType == EmployeeDebtCreditorType.Employee &&
+                contract.CreditorEmployeeId.Equals(employeeId, StringComparison.OrdinalIgnoreCase);
         }
     }
 }
