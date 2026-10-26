@@ -27,6 +27,16 @@ longest realistic text at the minimum supported window and display scale. Treat
 clipped text, hidden buttons and content that fits only on the developer's screen
 as a failed implementation, not a cosmetic follow-up.
 
+## Numeric entry and keyboard rule
+
+Follow `docs/numeric-input-policy.md` for new or changed numeric inputs. Use
+`NumericInputHint.Apply` for a default-zero hint over empty editing text; never
+seed a real zero or clear a saved value on focus. Use `DialogKeyboard.Configure`
+for immediate initial focus and a validated default confirmation in single-action
+entry dialogs. In flexible time, focus the amount rather than minutes. Enter must
+use the existing button's validation, not a second payment or payout path. Run the
+numeric UI regression scenarios with real control typing/paste and focus checks.
+
 ## Start-of-work idea review
 
 At the first user request of a new local calendar day, at a greeting/restart of

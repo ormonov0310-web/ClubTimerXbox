@@ -434,6 +434,7 @@ namespace ClubTimerXbox
             _displayedCashResponsibilityClosedAt = ShiftAcceptanceService.Current.CashResponsibilityClosedAt;
 
             _actualCashBox.Text = "";
+            NumericInputHint.Apply(_actualCashBox, "Фактическая наличка");
             _actualCashBox.Width = 180;
             _actualCashBox.Height = 44;
             _actualCashBox.FontSize = 18;

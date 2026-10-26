@@ -43,13 +43,16 @@ public partial class MainWindow
             ActionLogService.CloseCurrentShift();
             AppRuntimeStateStorageService.SaveClosedNow();
             _runtimeCloseSaved = true;
-            Task<bool> notification = FirebaseEventService.PublishClubClosedAsync(_notificationSessionId, employeeName);
-            localPrepared = true;
+            FirebaseSyncService.RequestCurrentStatePublish(urgent: true);
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            Task<bool> snapshot = FirebaseSyncService.PublishFinalClosedStateAsync(
-                _places.ToList(), employeeName, deadline.Token);
-            await Task.WhenAll(snapshot, notification).WaitAsync(deadline.Token);
-            delivered = await snapshot && await notification;
+            Task<bool> notification = FirebaseEventService.PublishClubClosedAsync(
+                _notificationSessionId, employeeName,
+                FirebaseSyncService.CreateClosedPresenceUpdate(employeeName, _places), deadline.Token,
+                () => FirebaseSyncService.BeginClosing(_places.ToList()));
+            localPrepared = true;
+            delivered = await ClubClosedState.DeliverAsync(notification,
+                presencePublished => FirebaseSyncService.PublishFinalClosedStateAsync(
+                    _places.ToList(), employeeName, deadline.Token, presencePublished), deadline.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception)

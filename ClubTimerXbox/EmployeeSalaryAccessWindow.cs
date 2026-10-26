@@ -28,7 +28,6 @@ namespace ClubTimerXbox
             _pin.FontSize = 24;
             _pin.MinHeight = 44;
             _pin.Padding = new Thickness(10, 5, 10, 5);
-            _pin.KeyDown += (_, e) => { if (e.Key == Key.Enter) Confirm(); };
             panel.Children.Add(_pin);
             _error.Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113));
             _error.TextWrapping = TextWrapping.Wrap;
@@ -48,7 +47,7 @@ namespace ClubTimerXbox
             buttons.Children.Add(open);
             panel.Children.Add(buttons);
             SetAdaptiveContent(panel);
-            Loaded += (_, _) => _pin.Focus();
+            DialogKeyboard.Configure(this, _pin, open);
         }
 
         private void Confirm()

@@ -121,7 +121,7 @@ namespace ClubTimerXbox
             _amountBox.FontSize = 18;
             _amountBox.Padding = new Thickness(10, 4, 10, 4);
             _amountBox.Margin = new Thickness(0, 0, 0, 14);
-            _amountBox.Text = "0";
+            NumericInputHint.Apply(_amountBox, "Сколько хотите взять?");
             panel.Children.Add(_amountBox);
 
             var buttons = new StackPanel
@@ -173,6 +173,7 @@ namespace ClubTimerXbox
             buttons.Children.Add(cancelButton);
             buttons.Children.Add(okButton);
             panel.Children.Add(buttons);
+            DialogKeyboard.Configure(this, _amountBox, okButton);
 
             return panel;
         }

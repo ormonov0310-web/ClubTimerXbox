@@ -28,6 +28,7 @@ namespace ClubTimerXbox
         private readonly List<CheckoutItem> _items;
         private readonly DispatcherTimer _selectedModeBlinkTimer = new DispatcherTimer();
         private bool _isUpdatingFields;
+        private bool _hasInvalidPaymentInput;
         private bool _blinkStrong = true;
         private CashCheckoutPaymentMode _paymentMode = CashCheckoutPaymentMode.MBank;
 
@@ -53,6 +54,10 @@ namespace ClubTimerXbox
             bool allowTransferToPlace = false)
         {
             InitializeComponent();
+            NumericInputHint.Apply(CashTextBox, "Наличные");
+            NumericInputHint.Apply(MBankTextBox, "М Банк");
+            DataObject.AddPastingHandler(CashTextBox, AmountTextBox_Pasting);
+            DataObject.AddPastingHandler(MBankTextBox, AmountTextBox_Pasting);
 
             EmployeeName = employeeName;
             OperationTitle = operationTitle;
@@ -73,6 +78,7 @@ namespace ClubTimerXbox
 
             Render();
             SetFullMBank();
+            DialogKeyboard.Configure(this, CashTextBox, ConfirmPaymentButton);
         }
 
         private void Render()
@@ -123,7 +129,7 @@ namespace ClubTimerXbox
             );
         }
 
-        private void SetAmounts(int cashAmount, int mBankAmount, CashCheckoutPaymentMode mode)
+        private void SetAmounts(int cashAmount, int mBankAmount, CashCheckoutPaymentMode mode, TextBox? editedBox = null)
         {
             if (cashAmount < 0)
                 cashAmount = 0;
@@ -136,9 +142,19 @@ namespace ClubTimerXbox
             CashAmount = cashAmount;
             MBankAmount = mBankAmount;
             _paymentMode = mode;
+            _hasInvalidPaymentInput = false;
 
-            CashTextBox.Text = CashAmount.ToString();
-            MBankTextBox.Text = MBankAmount.ToString();
+            // Keep the active editor's text/caret; update only its calculated counterpart.
+            if (editedBox != CashTextBox || !TryParseAmount(CashTextBox.Text, out int typedCash) || typedCash != CashAmount)
+            {
+                CashTextBox.Text = CashAmount == 0 ? "" : CashAmount.ToString();
+                if (editedBox == CashTextBox) CashTextBox.CaretIndex = CashTextBox.Text.Length;
+            }
+            if (editedBox != MBankTextBox || !TryParseAmount(MBankTextBox.Text, out int typedBank) || typedBank != MBankAmount)
+            {
+                MBankTextBox.Text = MBankAmount == 0 ? "" : MBankAmount.ToString();
+                if (editedBox == MBankTextBox) MBankTextBox.CaretIndex = MBankTextBox.Text.Length;
+            }
 
             _isUpdatingFields = false;
 
@@ -146,17 +162,17 @@ namespace ClubTimerXbox
             UpdatePaymentModeVisuals();
         }
 
-        private int ParseAmount(string text)
+        private static bool TryParseAmount(string text, out int value)
         {
-            if (int.TryParse(text, out int value))
-            {
-                if (value < 0)
-                    return 0;
+            value = 0;
+            // Either payment leg may be empty: its explicit business meaning is zero.
+            return string.IsNullOrWhiteSpace(text) || int.TryParse(text.Trim(), out value) && value >= 0;
+        }
 
-                return value;
-            }
-
-            return 0;
+        private void ShowInvalidPaymentInput()
+        {
+            _hasInvalidPaymentInput = true;
+            PaymentCheckText.Text = "Введите целую неотрицательную сумму.";
         }
 
         private void CashTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -164,14 +180,18 @@ namespace ClubTimerXbox
             if (_isUpdatingFields)
                 return;
 
-            int cash = ParseAmount(CashTextBox.Text);
+            if (!TryParseAmount(CashTextBox.Text, out int cash))
+            {
+                ShowInvalidPaymentInput();
+                return;
+            }
 
             if (cash > TotalAmount)
                 cash = TotalAmount;
 
             int mBank = TotalAmount - cash;
 
-            SetAmounts(cash, mBank, CashCheckoutPaymentMode.Partial);
+            SetAmounts(cash, mBank, CashCheckoutPaymentMode.Partial, CashTextBox);
         }
 
         private void MBankTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -179,14 +199,18 @@ namespace ClubTimerXbox
             if (_isUpdatingFields)
                 return;
 
-            int mBank = ParseAmount(MBankTextBox.Text);
+            if (!TryParseAmount(MBankTextBox.Text, out int mBank))
+            {
+                ShowInvalidPaymentInput();
+                return;
+            }
 
             if (mBank > TotalAmount)
                 mBank = TotalAmount;
 
             int cash = TotalAmount - mBank;
 
-            SetAmounts(cash, mBank, CashCheckoutPaymentMode.Partial);
+            SetAmounts(cash, mBank, CashCheckoutPaymentMode.Partial, MBankTextBox);
         }
 
         private void AmountTextBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
@@ -209,14 +233,28 @@ namespace ClubTimerXbox
 
         private void AmountTextBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
         {
-            foreach (char ch in e.Text)
+            foreach (char character in e.Text)
             {
-                if (!char.IsDigit(ch))
+                if (!char.IsDigit(character))
                 {
                     e.Handled = true;
                     return;
                 }
             }
+            if (sender is TextBox input)
+                e.Handled = !TryParseAmount(TextAfterInsertion(input, e.Text), out _);
+        }
+
+        private static string TextAfterInsertion(TextBox input, string text) =>
+            input.Text.Remove(input.SelectionStart, input.SelectionLength).Insert(input.SelectionStart, text);
+
+        private static void AmountTextBox_Pasting(object sender, DataObjectPastingEventArgs e)
+        {
+            if (sender is not TextBox input ||
+                !e.SourceDataObject.GetDataPresent(DataFormats.UnicodeText) ||
+                e.SourceDataObject.GetData(DataFormats.UnicodeText) is not string text ||
+                !TryParseAmount(TextAfterInsertion(input, text), out _))
+                e.CancelCommand();
         }
 
         private void UpdatePaymentCheckText()
@@ -332,6 +370,15 @@ namespace ClubTimerXbox
 
         private void ConfirmButton_Click(object sender, RoutedEventArgs e)
         {
+            if (_hasInvalidPaymentInput ||
+                !TryParseAmount(CashTextBox.Text, out int enteredCash) ||
+                !TryParseAmount(MBankTextBox.Text, out int enteredBank) ||
+                enteredCash != CashAmount || enteredBank != MBankAmount)
+            {
+                MessageBox.Show("Проверьте введённые суммы наличных и М Банк.", "Касса");
+                return;
+            }
+
             if (TotalAmount <= 0)
             {
                 MessageBox.Show("Сумма оплаты должна быть больше 0.", "Касса");

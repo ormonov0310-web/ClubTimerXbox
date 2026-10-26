@@ -165,7 +165,8 @@
                     </StackPanel>
                 </Border>
 
-                <Button Content="Подтвердить оплату"
+                <Button x:Name="ConfirmPaymentButton"
+                        Content="Подтвердить оплату"
                         Height="52"
                         FontSize="18"
                         FontWeight="Bold"

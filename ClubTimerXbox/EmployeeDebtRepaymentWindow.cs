@@ -54,7 +54,7 @@ namespace ClubTimerXbox
                 FontSize = 15,
                 Margin = new Thickness(0, 0, 0, 6)
             });
-            _amountBox.Text = "0";
+            NumericInputHint.Apply(_amountBox, "Сумма погашения");
             _amountBox.Height = 42;
             _amountBox.FontSize = 20;
             _amountBox.Padding = new Thickness(10, 5, 10, 5);
@@ -102,9 +102,8 @@ namespace ClubTimerXbox
             Loaded += (_, _) =>
             {
                 RefreshQuote();
-                _amountBox.Focus();
-                _amountBox.SelectAll();
             };
+            DialogKeyboard.Configure(this, _amountBox, _okButton);
         }
 
         private static void ConfigureInfoText(TextBlock text)

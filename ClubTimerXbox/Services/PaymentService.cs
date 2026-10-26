@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using ClubTimerXbox.Models;
 
 namespace ClubTimerXbox.Services
@@ -10,6 +11,8 @@ namespace ClubTimerXbox.Services
         private static readonly List<PaymentRecord> _records = PaymentStorageService.Load();
 
         public static IReadOnlyList<PaymentRecord> Records => _records;
+        private static long _revision;
+        public static long Revision => Interlocked.Read(ref _revision);
 
         public static int RenameEmployeeReferences(
             string oldEmployeeName,
@@ -85,6 +88,7 @@ namespace ClubTimerXbox.Services
 
         private static void Save()
         {
+            Interlocked.Increment(ref _revision);
             PaymentStorageService.Save(_records);
         }
 
@@ -127,6 +131,7 @@ namespace ClubTimerXbox.Services
 
         public static void Clear()
         {
+            Interlocked.Increment(ref _revision);
             _records.Clear();
             PaymentStorageService.Clear();
         }

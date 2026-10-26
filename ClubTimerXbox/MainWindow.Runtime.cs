@@ -244,16 +244,20 @@ namespace ClubTimerXbox
         private void SaveRuntimeClosedNow(bool publishNormalEvent = true)
         {
             AppRuntimeStateStorageService.SaveClosedNow();
+            FirebaseSyncService.BeginClosing(_places.ToList());
 
-            try
+            if (!publishNormalEvent)
             {
-                FirebaseSyncService.PushClosedStateAsync(
-                    EmployeeService.CurrentEmployee?.Name ?? "Не выбран"
-                ).Wait(TimeSpan.FromSeconds(3));
-            }
-            catch
-            {
-                // Явное закрытие повторно подтвердит обычное событие клуба.
+                try
+                {
+                    FirebaseSyncService.PushClosedStateAsync(
+                        EmployeeService.CurrentEmployee?.Name ?? "Не выбран"
+                    ).Wait(TimeSpan.FromSeconds(3));
+                }
+                catch
+                {
+                    // The local close is saved even if the network deadline expires.
+                }
             }
 
             if (publishNormalEvent)
@@ -261,7 +265,9 @@ namespace ClubTimerXbox
                 FirebaseEventService.PublishClubClosedAndWait(
                     _notificationSessionId,
                     EmployeeService.CurrentEmployee?.Name ?? "Не выбран",
-                    TimeSpan.FromSeconds(3)
+                    TimeSpan.FromSeconds(3),
+                    FirebaseSyncService.CreateClosedPresenceUpdate(
+                        EmployeeService.CurrentEmployee?.Name ?? "Не выбран")
                 );
             }
 

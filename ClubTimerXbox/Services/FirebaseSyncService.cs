@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -203,6 +204,21 @@ namespace ClubTimerXbox.Services
         public static async Task<bool> PushClosedStateAsync(string employeeName)
             => await PushClosedStateAsync(employeeName, CancellationToken.None);
 
+        internal static void BeginClosing(List<ClubPlace> places)
+        {
+            _lastKnownPlaces = places.ToList();
+            _closing = true;
+            NormalPublishLifetime.Cancel();
+        }
+
+        internal static Dictionary<string, object?> CreateClosedPresenceUpdate(string employeeName,
+            IReadOnlyList<ClubPlace>? places = null)
+        {
+            long nowUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            return ClubClosedState.BuildPatch(PcIdentityService.Current, places ?? _lastKnownPlaces,
+                employeeName, nowUnixMs, NextLiveStateRevision(nowUnixMs));
+        }
+
         private static async Task<bool> PushClosedStateAsync(string employeeName, CancellationToken token)
         {
             if (!FirebaseConnectionService.CanSync)
@@ -210,41 +226,8 @@ namespace ClubTimerXbox.Services
 
             try
             {
-                var pcIdentity = PcIdentityService.Current;
-                var snapshot = BuildOverviewSnapshot(_lastKnownPlaces);
-                long nowUnixMs = DateTimeOffset.Now.ToUnixTimeMilliseconds();
-                long revision = NextLiveStateRevision(nowUnixMs);
-
-                await PutAsync(
-                    ClubLiveStatePath,
-                    BuildLiveStatePayload(
-                        pcIdentity,
-                        snapshot,
-                        nowUnixMs,
-                        revision,
-                        signalType: "club_closed",
-                        isOpen: false,
-                        connectionState: "closed",
-                        employeeName: employeeName
-                    ), token, duringClose: true
-                );
-                await PatchAsync(
-                    ClubOverviewPath,
-                    new Dictionary<string, object?>
-                    {
-                        ["updatedAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                        ["updatedAtUnixMs"] = nowUnixMs,
-                        ["lastHeartbeatAtUnixMs"] = nowUnixMs,
-                        ["revision"] = revision,
-                        ["isOpen"] = false,
-                        ["connectionState"] = "closed",
-                        ["busyPlaces"] = 0,
-                        ["freePlaces"] = snapshot.Places.Count,
-                        ["places"] = snapshot.Places.Select(place => new
-                            { name = place.Name, type = place.Type.ToString(), isBusy = false }).ToArray(),
-                        ["currentEmployeeName"] = ""
-                    }, cancellationToken: token, duringClose: true
-                );
+                await PatchAsync(ClubRootPath, CreateClosedPresenceUpdate(employeeName),
+                    cancellationToken: token, duringClose: true);
                 return true;
             }
             catch
@@ -281,10 +264,9 @@ namespace ClubTimerXbox.Services
         }
 
         public static async Task<bool> PublishFinalClosedStateAsync(List<ClubPlace> places,
-            string employeeName, CancellationToken token)
+            string employeeName, CancellationToken token, bool presenceAlreadyPublished = false)
         {
-            _closing = true;
-            NormalPublishLifetime.Cancel();
+            BeginClosing(places);
             RequestCurrentStatePublish(urgent: true);
             if (!FirebaseConnectionService.CanSync) return false;
             bool entered = false;
@@ -292,11 +274,12 @@ namespace ClubTimerXbox.Services
             {
                 await CurrentPublishGate.WaitAsync(token);
                 entered = true;
-                bool snapshot = await CurrentDelivery.PublishAsync(() =>
-                    BuildClosedSnapshot((JsonObject)JsonSerializer.SerializeToNode(BuildCurrentState(places))!),
-                    patch => PatchAsync(ClubCurrentPath, patch, TimeSpan.FromSeconds(5), token, true),
-                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                bool presence = await PushClosedStateAsync(employeeName, token);
+                string currentPath = ClubCurrentPath;
+                bool snapshot = await CurrentDelivery.PublishPreparedAsync(
+                    () => BuildSnapshotDocument(places, closed: true),
+                    patch => PatchPreparedAsync(currentPath, patch, TimeSpan.FromSeconds(5), token, true),
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), token);
+                bool presence = presenceAlreadyPublished || await PushClosedStateAsync(employeeName, token);
                 return snapshot && presence;
             }
             catch (OperationCanceledException) { return false; }
@@ -464,33 +447,45 @@ namespace ClubTimerXbox.Services
         private static OverviewSnapshot BuildOverviewSnapshot(
             IEnumerable<ClubPlace> places)
         {
-            var placeList = places.ToList();
-            DateTime todayStart = BusinessCalendarService.GetBusinessDate(
-                ClubClock.Current.LocalNow);
-            int gamesToday = GetPaymentTotal(
-                CashReportSection.Games,
-                CashReportPeriodMode.Day,
-                todayStart
-            );
-            FinancialPaceMonthSnapshot financialMonth =
-                FinancialPaceService.BuildCurrentMonth();
-            FinancialPaceDaySnapshot? financialToday = financialMonth.Days
-                .FirstOrDefault(day => day.BusinessDateKey ==
-                    BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow)
-                        .ToString("yyyy-MM-dd"));
-
-            return new OverviewSnapshot
+            var watch = Stopwatch.StartNew();
+            using var measurements = SnapshotBuildMeasurements.Begin();
+            try
             {
-                EmployeeName = EmployeeService.CurrentEmployee?.Name ?? "",
-                AcceptanceRequired = ShiftAcceptanceService.Current.IsRequired,
-                AcceptanceCompleted = ShiftAcceptanceService.Current.IsCompleted,
-                GamesToday = gamesToday,
-                FinancialPace = financialToday,
-                LatestCashAcceptance = GetLatestCashAcceptanceForCurrentBusinessMonth(),
-                BusyPlaces = placeList.Count(place => place.IsBusy),
-                FreePlaces = placeList.Count(place => !place.IsBusy),
-                Places = placeList
-            };
+                var placeList = places.ToList();
+                DateTime todayStart = BusinessCalendarService.GetBusinessDate(
+                    ClubClock.Current.LocalNow);
+                int gamesToday = GetPaymentTotal(
+                    CashReportSection.Games,
+                    CashReportPeriodMode.Day,
+                    todayStart
+                );
+                FinancialPaceMonthSnapshot financialMonth =
+                    FinancialPaceService.BuildCurrentMonth();
+                FinancialPaceDaySnapshot? financialToday = financialMonth.Days
+                    .FirstOrDefault(day => day.BusinessDateKey ==
+                        BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow)
+                            .ToString("yyyy-MM-dd"));
+
+                return new OverviewSnapshot
+                {
+                    EmployeeName = EmployeeService.CurrentEmployee?.Name ?? "",
+                    AcceptanceRequired = ShiftAcceptanceService.Current.IsRequired,
+                    AcceptanceCompleted = ShiftAcceptanceService.Current.IsCompleted,
+                    GamesToday = gamesToday,
+                    FinancialPace = financialToday,
+                    LatestCashAcceptance = GetLatestCashAcceptanceForCurrentBusinessMonth(),
+                    BusyPlaces = placeList.Count(place => place.IsBusy),
+                    FreePlaces = placeList.Count(place => !place.IsBusy),
+                    Places = placeList
+                };
+            }
+            finally
+            {
+                CurrentDelivery.RecordOverviewBuild(new FirebaseSnapshotDelivery.BuildProfile(
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Math.Round(watch.Elapsed.TotalMilliseconds, 3), Application.Current?.Dispatcher.CheckAccess(),
+                    measurements.Export()));
+            }
         }
 
         private static Dictionary<string, object?> BuildOverviewPayload(
@@ -610,10 +605,11 @@ namespace ClubTimerXbox.Services
             try
             {
                 long previousRevision = CurrentDelivery.Revision;
-                bool published = await CurrentDelivery.PublishAsync(
-                    () => (JsonObject)JsonSerializer.SerializeToNode(BuildCurrentState(places))!,
-                    patch => PatchAsync(ClubCurrentPath, patch, TimeSpan.FromSeconds(30)),
-                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                string currentPath = ClubCurrentPath;
+                bool published = await CurrentDelivery.PublishPreparedAsync(
+                    () => BuildSnapshotDocument(places, closed: false),
+                    patch => PatchPreparedAsync(currentPath, patch, TimeSpan.FromSeconds(30)),
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), NormalPublishLifetime.Token);
                 if (!published) return false;
                 if (CurrentDelivery.Revision == previousRevision) return true;
                 try
@@ -629,8 +625,17 @@ namespace ClubTimerXbox.Services
             finally { CurrentPublishGate.Release(); }
         }
 
+        private static JsonObject BuildSnapshotDocument(List<ClubPlace> places, bool closed)
+        {
+            object state = BuildCurrentState(places);
+            using var measurement = SnapshotBuildMeasurements.Measure("snapshot.serialize-node");
+            var document = (JsonObject)JsonSerializer.SerializeToNode(state)!;
+            return closed ? BuildClosedSnapshot(document) : document;
+        }
+
         private static object BuildCurrentState(List<ClubPlace> places)
         {
+                using var measurement = SnapshotBuildMeasurements.Measure("snapshot.build-state");
                 EmployeeDebtService.RecoverClubLoanMovements();
                 _lastKnownPlaces = places.ToList();
                 var pcIdentity = PcIdentityService.Current;
@@ -1711,9 +1716,7 @@ namespace ClubTimerXbox.Services
                     CashReportService.GetPeriodEndExclusive(filter));
             }
 
-            var report = CashReportService.BuildReport(filter);
-
-            return report.Summary.TotalAmount;
+            return CashReportService.BuildSummary(filter).TotalAmount;
         }
 
         private static CashReportSummary GetCombinedPaymentSummary(
@@ -1907,11 +1910,12 @@ namespace ClubTimerXbox.Services
                 SelectedMonth = selectedDate.Month
             };
 
-            return CashReportService.BuildReport(filter).Summary;
+            return CashReportService.BuildSummary(filter);
         }
 
         private static Dictionary<string, object> BuildReportsByMonth()
         {
+            using var measurement = SnapshotBuildMeasurements.Measure("snapshot.history");
             var monthStarts = new HashSet<DateTime>();
 
             void AddMonth(DateTime date)
@@ -5985,24 +5989,34 @@ namespace ClubTimerXbox.Services
             response.EnsureSuccessStatusCode();
         }
 
-        private static async Task PatchAsync(string path, object data, TimeSpan? timeout = null,
+        private static Task PatchAsync(string path, object data, TimeSpan? timeout = null,
             CancellationToken cancellationToken = default, bool duringClose = false)
+            => SendPatchAsync(path, () => new StringContent(JsonSerializer.Serialize(data),
+                Encoding.UTF8, "application/json"), timeout, cancellationToken, duringClose);
+
+        private static Task PatchPreparedAsync(string path, FirebaseSnapshotDelivery.PreparedPatch data,
+            TimeSpan? timeout = null, CancellationToken cancellationToken = default, bool duringClose = false)
+            => SendPatchAsync(path, () =>
+            {
+                var content = new ByteArrayContent(data.Utf8);
+                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json")
+                    { CharSet = "utf-8" };
+                return content;
+            }, timeout, cancellationToken, duringClose);
+
+        private static async Task SendPatchAsync(string path, Func<HttpContent> contentFactory,
+            TimeSpan? timeout, CancellationToken cancellationToken, bool duringClose)
         {
             if (_closing && !duringClose) throw new OperationCanceledException();
             string url = await FirebaseAuthService.BuildDatabaseUrlAsync(path);
             url = AppendQuery(url, "print=silent");
-            string json = JsonSerializer.Serialize(data);
 
             using var request = new HttpRequestMessage(
                 new HttpMethod("PATCH"),
                 url
             )
             {
-                Content = new StringContent(
-                    json,
-                    Encoding.UTF8,
-                    "application/json"
-                )
+                Content = contentFactory()
             };
 
             using var cancellation = duringClose

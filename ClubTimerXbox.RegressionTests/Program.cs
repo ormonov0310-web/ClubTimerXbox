@@ -4,6 +4,43 @@ using ClubTimerXbox.Services;
 using ClubTimerUpdater;
 using System.Text.Json;
 
+if (args.Contains("--snapshot-ui-idle", StringComparer.OrdinalIgnoreCase))
+{
+    SnapshotPipelinePerformanceTests.MeasureUiIdle();
+    return;
+}
+
+if (args.Contains("--snapshot-performance", StringComparer.OrdinalIgnoreCase))
+{
+    SnapshotPipelinePerformanceTests.Run(benchmark: true);
+    return;
+}
+
+if (args.Contains("--snapshot-baseline", StringComparer.OrdinalIgnoreCase))
+{
+    SnapshotPipelinePerformanceTests.RunBaseline();
+    return;
+}
+
+if (args.Contains("--cash-performance", StringComparer.OrdinalIgnoreCase))
+{
+    CashReportPerformanceTests.Run(benchmark: true);
+    return;
+}
+
+if (args.Contains("--close-delivery", StringComparer.OrdinalIgnoreCase))
+{
+    ClubClosedDeliveryTests.Run();
+    return;
+}
+
+if (args.Contains("--numeric-input", StringComparer.OrdinalIgnoreCase))
+{
+    int option = Array.FindIndex(args, item => string.Equals(item, "--numeric-input", StringComparison.OrdinalIgnoreCase));
+    NumericInputTests.Run(option + 1 < args.Length ? Path.GetFullPath(args[option + 1]) : null);
+    return;
+}
+
 if (args.Length >= 2 && args[0] == "--salary-ui")
 {
     SalaryDialogVisualChecks.Run(Path.GetFullPath(args[1]));
@@ -57,6 +94,10 @@ new EmployeePayoutHistoryTests().Run();
 new FirebaseSnapshotDeliveryTests().Run();
 new ClubLoanTests().Run();
 ClubCloseTests.Run();
+NumericInputTests.Run();
+CashReportPerformanceTests.Run();
+ClubClosedDeliveryTests.Run();
+SnapshotPipelinePerformanceTests.Run();
 
 internal sealed class EmployeeDebtTestSuite
 {

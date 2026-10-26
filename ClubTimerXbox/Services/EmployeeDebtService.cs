@@ -755,6 +755,7 @@ namespace ClubTimerXbox.Services
             AutoSalaryReport report,
             IReadOnlyDictionary<string, List<AutoSalaryDayEarning>> dailyEarningsByEmployee)
         {
+            using var measurement = SnapshotBuildMeasurements.Measure("debt.auto");
             if (report == null || dailyEarningsByEmployee == null)
                 return false;
 

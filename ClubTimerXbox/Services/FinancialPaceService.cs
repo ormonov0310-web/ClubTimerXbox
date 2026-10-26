@@ -49,6 +49,7 @@ namespace ClubTimerXbox.Services
             AutoSalaryReport salaryReport,
             IReadOnlyDictionary<string, List<AutoSalaryDayEarning>>? dailyEarningsByEmployee = null)
         {
+            using var measurement = SnapshotBuildMeasurements.Measure("pace.month");
             lock (Gate)
             {
                 var month = BusinessCalendarService.GetBusinessMonthByAnchor(monthAnchor);
@@ -346,6 +347,7 @@ namespace ClubTimerXbox.Services
 
         private static void Save()
         {
+            using var measurement = SnapshotBuildMeasurements.Measure("pace.save");
             FinancialPaceStorageService.Save(_state);
         }
     }

@@ -25,6 +25,7 @@ namespace ClubTimerXbox.Services
 
         private static readonly object FileLock = new object();
         private static readonly SemaphoreSlim FlushLock = new SemaphoreSlim(1, 1);
+        private static string? _priorityClosingEventId;
         private static readonly HttpClient HttpClient = new HttpClient
         {
             Timeout = TimeSpan.FromSeconds(5)
@@ -58,25 +59,13 @@ namespace ClubTimerXbox.Services
         public static void PublishClubClosedAndWait(
             string sessionId,
             string employeeName,
-            TimeSpan timeout)
+            TimeSpan timeout,
+            IReadOnlyDictionary<string, object?>? closedState = null)
         {
-            var identity = PcIdentityService.Current;
-            if (!CanPublish(identity))
-                return;
-
-            string employee = CleanEmployeeName(employeeName);
-            var record = CreateBaseRecord(
-                id: $"closed_{CleanId(sessionId)}",
-                type: "club_closed",
-                title: $"{identity.ClubName}: клуб закрыт",
-                body: $"Программа клуба закрыта в {DateTime.Now:HH:mm}. Сотрудник: {employee}.",
-                severity: "info"
-            );
-            record.EmployeeName = employee;
-
             try
             {
-                QueueAndFlushAsync(record).Wait(timeout);
+                using var deadline = new CancellationTokenSource(timeout);
+                PublishClubClosedAsync(sessionId, employeeName, closedState, deadline.Token).Wait(timeout);
             }
             catch
             {
@@ -84,7 +73,9 @@ namespace ClubTimerXbox.Services
             }
         }
 
-        public static Task<bool> PublishClubClosedAsync(string sessionId, string employeeName)
+        public static Task<bool> PublishClubClosedAsync(string sessionId, string employeeName,
+            IReadOnlyDictionary<string, object?>? closedState = null, CancellationToken token = default,
+            Action? beforeSend = null)
         {
             var identity = PcIdentityService.Current;
             if (!CanPublish(identity)) return Task.FromResult(false);
@@ -93,14 +84,23 @@ namespace ClubTimerXbox.Services
                 $"Программа клуба закрыта в {DateTime.Now:HH:mm}. Сотрудник: {CleanEmployeeName(employeeName)}.",
                 "info");
             record.EmployeeName = CleanEmployeeName(employeeName);
+            Volatile.Write(ref _priorityClosingEventId, record.Id);
             AddToOutbox(record);
-            return FlushClosedEventAsync(record.Id);
+            beforeSend?.Invoke();
+            return FlushClosedEventAsync(record, closedState, token);
         }
 
-        private static async Task<bool> FlushClosedEventAsync(string eventId)
+        private static async Task<bool> FlushClosedEventAsync(ClubEventRecord record,
+            IReadOnlyDictionary<string, object?>? closedState, CancellationToken token)
         {
-            await FlushPendingAsync().ConfigureAwait(false);
-            lock (FileLock) return !LoadOutboxUnsafe().Any(item => item.Id == eventId);
+            if (!FirebaseConnectionService.CanSync) return false;
+            try
+            {
+                await PutEventAsync(record, closedState, token).ConfigureAwait(false);
+                RemoveFromOutbox(record.Id);
+                return true;
+            }
+            catch { return false; } // Durable outbox retries the event, not old presence, on next startup.
         }
 
         public static Task PublishEmployeeChangedAsync(
@@ -318,6 +318,7 @@ namespace ClubTimerXbox.Services
             {
                 foreach (var record in LoadOutbox().OrderBy(item => item.CreatedAt).Take(50))
                 {
+                    if (record.Id == Volatile.Read(ref _priorityClosingEventId)) continue;
                     try
                     {
                         await PutEventAsync(record).ConfigureAwait(false);
@@ -374,20 +375,33 @@ namespace ClubTimerXbox.Services
             };
         }
 
-        private static async Task PutEventAsync(ClubEventRecord record)
+        internal static (HttpMethod Method, string Path, object Data) BuildEventWrite(
+            string clubId, string eventId, object record, IReadOnlyDictionary<string, object?>? closedState)
         {
-            string path = $"clubs/{record.ClubId}/events/{record.Id}";
-            string url = await FirebaseAuthService
-                .BuildDatabaseUrlAsync(path)
-                .ConfigureAwait(false);
-            string json = JsonSerializer.Serialize(record, JsonOptions);
+            if (closedState == null)
+                return (HttpMethod.Put, $"clubs/{clubId}/events/{eventId}", record);
+            var patch = closedState.ToDictionary(pair => pair.Key, pair => pair.Value);
+            patch[$"events/{eventId}"] = record;
+            return (HttpMethod.Patch, $"clubs/{clubId}", patch);
+        }
 
-            using var request = new HttpRequestMessage(HttpMethod.Put, url)
+        private static async Task PutEventAsync(ClubEventRecord record,
+            IReadOnlyDictionary<string, object?>? closedState = null, CancellationToken token = default)
+        {
+            var write = BuildEventWrite(record.ClubId, record.Id, record, closedState);
+            string url = await FirebaseAuthService
+                .BuildDatabaseUrlAsync(write.Path)
+                .ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            url += (url.Contains('?') ? "&" : "?") + "print=silent";
+            string json = JsonSerializer.Serialize(write.Data, JsonOptions);
+
+            using var request = new HttpRequestMessage(write.Method, url)
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
             };
             using var response = await HttpClient
-                .SendAsync(request)
+                .SendAsync(request, token)
                 .ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
         }

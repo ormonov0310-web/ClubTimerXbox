@@ -35,17 +35,24 @@ namespace ClubTimerXbox.Services
 
         public static CashReportResult BuildReport(CashReportFilter filter)
         {
+            if (filter.Section == CashReportSection.Expenses)
+                return BuildExpenseReport(filter, GetDateRange(filter));
+
+            return BuildReport(filter, PaymentService.Records,
+                CreateSessionLookup(() => ActionLogService.GetAllGameSessions()));
+        }
+
+        internal static CashReportResult BuildReport(CashReportFilter filter,
+            IReadOnlyList<PaymentRecord> payments, Func<Guid, GameSessionLogItem?> findSession)
+        {
             var range = GetDateRange(filter);
 
-            if (filter.Section == CashReportSection.Expenses)
-                return BuildExpenseReport(filter, range);
-
-            var records = PaymentService.Records
+            var records = payments
                 .OrderByDescending(record => record.CreatedAt)
                 .ToList();
 
             var lines = records
-                .SelectMany(record => BuildAllocatedLines(record))
+                .SelectMany(record => BuildAllocatedLines(record, findSession))
                 .Where(line =>
                     line.CreatedAt >= range.FromInclusive &&
                     line.CreatedAt < range.ToExclusive)
@@ -61,6 +68,62 @@ namespace ClubTimerXbox.Services
             result.Rows = BuildRows(lines, filter);
 
             return result;
+        }
+
+        public static CashReportSummary BuildSummary(CashReportFilter filter)
+        {
+            if (filter.Section == CashReportSection.Expenses)
+                return BuildExpenseReport(filter, GetDateRange(filter)).Summary;
+
+            return BuildPaymentSummary(filter, PaymentService.Records,
+                CreateSessionLookup(() => ActionLogService.GetAllGameSessions()));
+        }
+
+        internal static CashReportSummary BuildPaymentSummary(CashReportFilter filter,
+            IReadOnlyList<PaymentRecord> payments, Func<Guid, GameSessionLogItem?> findSession,
+            bool includeAllRevenue = false)
+        {
+            var range = GetDateRange(filter);
+            var result = new CashReportSummary { Title = $"Итог за {range.Title}" };
+            foreach (var payment in payments)
+            foreach (var line in BuildAllocatedLines(payment, findSession))
+            {
+                if (line.CreatedAt < range.FromInclusive || line.CreatedAt >= range.ToExclusive)
+                    continue;
+                bool included = includeAllRevenue
+                    ? IsLineInSection(line, CashReportSection.Games) ||
+                      IsLineInSection(line, CashReportSection.ProductsAndServices)
+                    : IsLineInSection(line, filter.Section);
+                if (!included) continue;
+                checked
+                {
+                    result.TotalAmount += line.TotalAmount;
+                    result.CashAmount += line.CashAmount;
+                    result.MBankAmount += line.MBankAmount;
+                    result.RecordsCount++;
+                }
+            }
+            return result;
+        }
+
+        public static int GetDayRevenueTotal(DateTime businessDate) => BuildPaymentSummary(
+            new CashReportFilter { PeriodMode = CashReportPeriodMode.Day, SelectedDay = businessDate },
+            PaymentService.Records, CreateSessionLookup(() => ActionLogService.GetAllGameSessions()),
+            includeAllRevenue: true).TotalAmount;
+
+        internal static Func<Guid, GameSessionLogItem?> CreateSessionLookup(
+            Func<IReadOnlyList<GameSessionLogItem>> loadSessions)
+        {
+            Dictionary<Guid, GameSessionLogItem>? sessions = null;
+            return id =>
+            {
+                if (sessions == null)
+                {
+                    sessions = new Dictionary<Guid, GameSessionLogItem>();
+                    foreach (var session in loadSessions()) sessions.TryAdd(session.Id, session);
+                }
+                return sessions.GetValueOrDefault(id);
+            };
         }
 
         private static CashReportResult BuildExpenseReport(
@@ -296,7 +359,8 @@ namespace ClubTimerXbox.Services
             };
         }
 
-        private static List<AllocatedReportLine> BuildAllocatedLines(PaymentRecord record)
+        private static List<AllocatedReportLine> BuildAllocatedLines(PaymentRecord record,
+            Func<Guid, GameSessionLogItem?> findSession)
         {
             var result = new List<AllocatedReportLine>();
 
@@ -318,7 +382,8 @@ namespace ClubTimerXbox.Services
                         record,
                         item,
                         record.CashAmount,
-                        record.MBankAmount
+                        record.MBankAmount,
+                        findSession
                     ));
                 }
 
@@ -343,7 +408,8 @@ namespace ClubTimerXbox.Services
                     record,
                     item,
                     allocation.CashAmount,
-                    allocation.MBankAmount
+                    allocation.MBankAmount,
+                    findSession
                 ));
             }
 
@@ -360,7 +426,8 @@ namespace ClubTimerXbox.Services
                     record,
                     item,
                     allocation.CashAmount,
-                    allocation.MBankAmount
+                    allocation.MBankAmount,
+                    findSession
                 ));
             }
 
@@ -471,11 +538,12 @@ namespace ClubTimerXbox.Services
             PaymentRecord record,
             CheckoutItem item,
             int cashAmount,
-            int mBankAmount)
+            int mBankAmount,
+            Func<Guid, GameSessionLogItem?> findSession)
         {
             return new AllocatedReportLine
             {
-                CreatedAt = ResolveLineOccurredAt(record, item),
+                CreatedAt = ResolveLineOccurredAt(record, item, findSession),
                 OperationTitle = record.OperationTitle,
                 ItemName = item.Name,
                 Quantity = item.Quantity,
@@ -491,7 +559,8 @@ namespace ClubTimerXbox.Services
 
         private static DateTime ResolveLineOccurredAt(
             PaymentRecord record,
-            CheckoutItem item)
+            CheckoutItem item,
+            Func<Guid, GameSessionLogItem?> findSession)
         {
             if (item.SourceSaleLineId.HasValue)
                 return record.CreatedAt;
@@ -499,8 +568,7 @@ namespace ClubTimerXbox.Services
             if (record.GameSessionId == null || IsGameItem(item))
                 return record.CreatedAt;
 
-            var session = ActionLogService.GetAllGameSessions()
-                .FirstOrDefault(candidate => candidate.Id == record.GameSessionId.Value);
+            var session = findSession(record.GameSessionId.Value);
             var sale = session?.SaleLines
                 .Where(line =>
                     line.ItemName.Equals(item.Name, StringComparison.OrdinalIgnoreCase) &&

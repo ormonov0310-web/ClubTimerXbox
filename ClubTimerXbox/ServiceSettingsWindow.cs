@@ -138,7 +138,8 @@ namespace ClubTimerXbox
             _priceBox.FontSize = 17;
             _priceBox.Padding = new Thickness(10, 5, 10, 5);
             _priceBox.Margin = new Thickness(0, 0, 0, 12);
-            _priceBox.Text = "0";
+            _priceBox.Clear();
+            NumericInputHint.Apply(_priceBox, "Цена продажи");
 
             panel.Children.Add(_priceBox);
 
@@ -196,7 +197,7 @@ namespace ClubTimerXbox
             );
 
             _nameBox.Text = "";
-            _priceBox.Text = "0";
+            _priceBox.Clear();
 
             LoadServices();
         }

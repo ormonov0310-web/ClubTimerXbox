@@ -68,11 +68,6 @@ namespace ClubTimerXbox
             _pinBox.Height = 48;
             _pinBox.Padding = new Thickness(10, 5, 10, 5);
             _pinBox.PasswordChar = '●';
-            _pinBox.KeyDown += (_, e) =>
-            {
-                if (e.Key == System.Windows.Input.Key.Enter)
-                    TryConfirm();
-            };
 
             root.Children.Add(_pinBox);
 
@@ -121,7 +116,7 @@ namespace ClubTimerXbox
 
             root.Children.Add(buttonsPanel);
 
-            Loaded += (_, _) => _pinBox.Focus();
+            DialogKeyboard.Configure(this, _pinBox, okButton);
 
             return root;
         }

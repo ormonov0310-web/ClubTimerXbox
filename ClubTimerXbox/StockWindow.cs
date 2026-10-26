@@ -208,13 +208,15 @@ namespace ClubTimerXbox
             _newProductNameBox.Padding = new Thickness(10, 5, 10, 5);
             _newProductNameBox.Margin = new Thickness(0, 0, 0, 8);
 
-            _newProductQuantityBox.Text = "0";
+            _newProductQuantityBox.Clear();
+            NumericInputHint.Apply(_newProductQuantityBox, "Начальный остаток, шт");
             _newProductQuantityBox.Height = 38;
             _newProductQuantityBox.FontSize = 16;
             _newProductQuantityBox.Padding = new Thickness(10, 5, 10, 5);
             _newProductQuantityBox.Margin = new Thickness(0, 0, 0, 8);
 
-            _newProductPurchasePriceBox.Text = "0";
+            _newProductPurchasePriceBox.Clear();
+            NumericInputHint.Apply(_newProductPurchasePriceBox, "Цена прихода / закупки");
             _newProductPurchasePriceBox.Height = 38;
             _newProductPurchasePriceBox.FontSize = 16;
             _newProductPurchasePriceBox.Padding = new Thickness(10, 5, 10, 5);
@@ -341,8 +343,8 @@ namespace ClubTimerXbox
             );
 
             _newProductNameBox.Text = "";
-            _newProductQuantityBox.Text = "0";
-            _newProductPurchasePriceBox.Text = "0";
+            _newProductQuantityBox.Clear();
+            _newProductPurchasePriceBox.Clear();
             _newProductPaymentMethodBox.SelectedIndex = 0;
 
             LoadStockItems();
@@ -460,11 +462,13 @@ namespace ClubTimerXbox
                 Margin = new Thickness(0, 0, 0, 10)
             });
 
-            var addQuantityBox = CreateNumberBox("0");
+            var addQuantityBox = CreateNumberBox("");
+            NumericInputHint.Apply(addQuantityBox, "Добавить товар, шт");
             var purchasePriceBox = CreateNumberBox(item.PurchasePrice.ToString());
             var paymentMethodBox = CreatePaymentMethodBox();
             string initialPrice = purchasePriceBox.Text;
-            hasDraft = () => addQuantityBox.Text.Trim() != "0" || purchasePriceBox.Text != initialPrice;
+            hasDraft = () => (!string.IsNullOrWhiteSpace(addQuantityBox.Text) && addQuantityBox.Text.Trim() != "0") ||
+                             purchasePriceBox.Text != initialPrice;
 
             panel.Children.Add(CreateFieldLabel("Добавить товар, шт"));
             panel.Children.Add(addQuantityBox);

@@ -52,6 +52,7 @@ namespace ClubTimerXbox.Services
 
         public static AutoSalaryReport BuildReport(DateTime monthStart)
         {
+            using var measurement = SnapshotBuildMeasurements.Measure("salary.month");
             var period = BusinessCalendarService.GetBusinessMonthByAnchor(monthStart);
             monthStart = period.StartInclusive;
             DateTime nextMonthStart = period.EndExclusive;
@@ -421,6 +422,7 @@ namespace ClubTimerXbox.Services
                 DateTime monthStart,
                 AutoSalaryReport preparedReport)
         {
+            using var measurement = SnapshotBuildMeasurements.Measure("salary.daily");
             return preparedReport.Employees.ToDictionary(
                 employee => employee.EmployeeName,
                 employee => BuildDailyEarnings(
@@ -454,6 +456,7 @@ namespace ClubTimerXbox.Services
             DateTime monthStart,
             DateTime nextMonthStart)
         {
+            using var measurement = SnapshotBuildMeasurements.Measure("salary.inputs");
             var result = EmployeeService
                 .GetAllEmployees()
                 .Where(employee => employee.IsActive)

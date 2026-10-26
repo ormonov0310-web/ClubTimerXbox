@@ -1,10 +1,13 @@
 using System;
 using System.IO;
+using System.Diagnostics;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace ClubTimerXbox.Services;
 
@@ -31,6 +34,29 @@ internal sealed class FirebaseSnapshotDelivery
         public long Revision { get; set; }
         public int PayloadBytes { get; set; }
         public string ErrorKind { get; set; } = "";
+        public double BuildMilliseconds { get; set; }
+        public double PrepareMilliseconds { get; set; }
+        public double SendMilliseconds { get; set; }
+        public bool? BuildOnUiThread { get; set; }
+        public int BuildThreadId { get; set; }
+        public int PrepareThreadId { get; set; }
+        public Dictionary<string, SnapshotBuildMeasurements.Stage> BuildStages { get; set; } = new();
+        public long LastSlowBuildAtUnixMs { get; set; }
+        public double LastSlowBuildMilliseconds { get; set; }
+        public Dictionary<string, SnapshotBuildMeasurements.Stage> LastSlowBuildStages { get; set; } = new();
+        public BuildProfile? OverviewBuild { get; set; }
+        public BuildProfile? LastSlowOverviewBuild { get; set; }
+        public double CheckpointMilliseconds { get; set; }
+        public long LastSlowCheckpointAtUnixMs { get; set; }
+        public double LastSlowCheckpointMilliseconds { get; set; }
+    }
+
+    internal sealed record BuildProfile(long AtUnixMs, double Milliseconds, bool? OnUiThread,
+        Dictionary<string, SnapshotBuildMeasurements.Stage> Stages);
+
+    internal sealed record PreparedPatch(JsonObject Patch, byte[] Utf8, long Revision, int ThreadId)
+    {
+        public bool HasChanges => Patch.Count > 0;
     }
 
     public FirebaseSnapshotDelivery(string path, Func<long>? clock = null)
@@ -46,6 +72,16 @@ internal sealed class FirebaseSnapshotDelivery
 
     public long Revision { get { lock (_gate) return _state.Revision; } }
     public bool Pending { get { lock (_gate) return _state.Pending; } }
+
+    public void RecordOverviewBuild(BuildProfile profile)
+    {
+        lock (_gate)
+        {
+            _state.OverviewBuild = profile;
+            if (profile.Milliseconds >= 250) _state.LastSlowOverviewBuild = profile;
+            // Persist with the next existing delivery checkpoint, not an extra diagnostic write.
+        }
+    }
 
     public void Request(string scope, long now, bool urgent)
     {
@@ -77,39 +113,87 @@ internal sealed class FirebaseSnapshotDelivery
             return _state.Pending && !_state.Blocked && now >= _state.NextAttemptAt;
     }
 
-    public async System.Threading.Tasks.Task<bool> PublishAsync(
-        Func<JsonObject> build, Func<JsonObject, System.Threading.Tasks.Task> send,
-        long now)
+    public Task<bool> PublishAsync(Func<JsonObject> build, Func<JsonObject, Task> send, long now)
+        => PublishPreparedAsync(build, prepared => send(prepared.Patch), now);
+
+    public async Task<bool> PublishPreparedAsync(Func<JsonObject> build,
+        Func<PreparedPatch, Task> send, long now, CancellationToken token = default)
     {
         long generation;
         string scope;
+        long previousRevision;
+        JsonObject? previous;
         JsonObject? snapshot = null;
         lock (_gate)
         {
             if (!CanAttempt(now)) return false;
             generation = _generation;
             scope = _state.Scope;
+            previousRevision = _state.Revision;
+            previous = _published;
             _state.LastAttemptAt = now;
+            _state.BuildMilliseconds = 0;
+            _state.PrepareMilliseconds = 0;
+            _state.SendMilliseconds = 0;
+            _state.BuildStages = new();
+            _state.BuildOnUiThread = System.Windows.Application.Current?.Dispatcher.CheckAccess();
+            _state.BuildThreadId = Environment.CurrentManagedThreadId;
+            _state.PrepareThreadId = 0;
             Save();
         }
         try
         {
-            snapshot = build();
-            JsonObject patch = BuildPatch(_published, snapshot);
-            // A generated clock is not a business change.
-            bool changed = patch.Count > 0;
-            long revision = changed ? Math.Max(now, Revision + 1) : Revision;
+            token.ThrowIfCancellationRequested();
+            var buildWatch = Stopwatch.StartNew();
+            using (var measurements = SnapshotBuildMeasurements.Begin())
+            {
+                try { snapshot = build(); }
+                finally
+                {
+                    lock (_gate)
+                    {
+                        if (_state.Scope == scope)
+                        {
+                            _state.BuildMilliseconds = Math.Round(buildWatch.Elapsed.TotalMilliseconds, 3);
+                            _state.BuildStages = measurements.Export();
+                            if (_state.BuildMilliseconds >= 250)
+                            {
+                                _state.LastSlowBuildAtUnixMs = now;
+                                _state.LastSlowBuildMilliseconds = _state.BuildMilliseconds;
+                                _state.LastSlowBuildStages = measurements.Export();
+                            }
+                        }
+                    }
+                }
+            }
+            var prepareWatch = Stopwatch.StartNew();
+            // Only detached JSON is processed here; financial services stay on their caller's thread.
+            PreparedPatch prepared = await Task.Run(
+                () => PreparePatch(previous, snapshot, now, previousRevision), token);
+            lock (_gate)
+            {
+                if (_state.Scope != scope) return false;
+                _state.PrepareMilliseconds = Math.Round(prepareWatch.Elapsed.TotalMilliseconds, 3);
+                _state.PrepareThreadId = prepared.ThreadId;
+            }
+            bool changed = prepared.HasChanges;
+            long revision = prepared.Revision;
             if (changed)
             {
-                patch["updatedAtUnixMs"] = revision;
-                patch["updatedAt"] = DateTimeOffset.FromUnixTimeMilliseconds(now)
-                    .ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
                 lock (_gate)
                 {
-                    _state.PayloadBytes = Encoding.UTF8.GetByteCount(patch.ToJsonString());
+                    _state.PayloadBytes = prepared.Utf8.Length;
                     Save();
                 }
-                await send(patch);
+                token.ThrowIfCancellationRequested();
+                var sendWatch = Stopwatch.StartNew();
+                try { await send(prepared); }
+                finally
+                {
+                    lock (_gate)
+                        if (_state.Scope == scope)
+                            _state.SendMilliseconds = Math.Round(sendWatch.Elapsed.TotalMilliseconds, 3);
+                }
             }
             lock (_gate)
             {
@@ -145,6 +229,20 @@ internal sealed class FirebaseSnapshotDelivery
         }
     }
 
+    internal static PreparedPatch PreparePatch(JsonObject? previous, JsonObject next,
+        long now, long previousRevision)
+    {
+        JsonObject patch = BuildPatch(previous, next);
+        if (patch.Count == 0) return new PreparedPatch(patch, Array.Empty<byte>(), previousRevision,
+            Environment.CurrentManagedThreadId);
+        long revision = Math.Max(now, previousRevision + 1);
+        patch["updatedAtUnixMs"] = revision;
+        patch["updatedAt"] = DateTimeOffset.FromUnixTimeMilliseconds(now)
+            .ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+        return new PreparedPatch(patch, JsonSerializer.SerializeToUtf8Bytes(patch), revision,
+            Environment.CurrentManagedThreadId);
+    }
+
     private static string ErrorKind(Exception ex) => ex switch
     {
         HttpRequestException { StatusCode: { } status } => "http_" + (int)status,
@@ -153,8 +251,21 @@ internal sealed class FirebaseSnapshotDelivery
         _ => ex.GetType().Name
     };
 
-    private void Save() => AtomicFileStorageService.WriteAllText(
-        _path, JsonSerializer.Serialize(_state));
+    private void Save()
+    {
+        var watch = Stopwatch.StartNew();
+        try { AtomicFileStorageService.WriteAllText(_path, JsonSerializer.Serialize(_state)); }
+        finally
+        {
+            // This completed duration is persisted by the next ordinary checkpoint.
+            _state.CheckpointMilliseconds = Math.Round(watch.Elapsed.TotalMilliseconds, 3);
+            if (_state.CheckpointMilliseconds >= 250)
+            {
+                _state.LastSlowCheckpointAtUnixMs = _clock();
+                _state.LastSlowCheckpointMilliseconds = _state.CheckpointMilliseconds;
+            }
+        }
+    }
 
     internal static JsonObject BuildPatch(JsonObject? previous, JsonObject next)
     {

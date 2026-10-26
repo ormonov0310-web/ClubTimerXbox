@@ -282,6 +282,7 @@ namespace ClubTimerXbox
         {
             var titleBox = new TextBox();
             var amountBox = new TextBox();
+            NumericInputHint.Apply(amountBox, "Сумма расхода");
             var descriptionBox = new TextBox();
 
             var panel = new StackPanel();

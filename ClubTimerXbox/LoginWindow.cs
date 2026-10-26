@@ -57,11 +57,6 @@ namespace ClubTimerXbox
             _pinBox.Height = 46;
             _pinBox.Padding = new Thickness(10, 4, 10, 4);
             _pinBox.PasswordChar = '●';
-            _pinBox.KeyDown += (_, e) =>
-            {
-                if (e.Key == System.Windows.Input.Key.Enter)
-                    TryLogin();
-            };
 
             panel.Children.Add(_pinBox);
 
@@ -93,7 +88,7 @@ namespace ClubTimerXbox
                 Margin = new Thickness(0, 18, 0, 0)
             });
 
-            Loaded += (_, _) => _pinBox.Focus();
+            DialogKeyboard.Configure(this, _pinBox, loginButton);
 
             var card = new Border
             {

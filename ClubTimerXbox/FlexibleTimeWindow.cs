@@ -8,7 +8,7 @@ using ClubTimerXbox.Services;
 
 namespace ClubTimerXbox
 {
-    public sealed class FlexibleTimeWindow : Window
+    public sealed class FlexibleTimeWindow : AdaptiveDialogWindow
     {
         private readonly ClubPlace _place;
         private readonly TariffSettings _tariff;
@@ -28,25 +28,14 @@ namespace ClubTimerXbox
             ClubPlace place,
             TariffSettings tariff,
             bool isAddTime)
+            : base(560, 500)
         {
             _place = place;
             _tariff = tariff;
             _isAddTime = isAddTime;
 
             Title = isAddTime ? "Добавить время" : "Любое время";
-            Width = 560;
-            Height = 620;
-            MinWidth = 500;
-            MinHeight = 520;
-            WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            Background = new SolidColorBrush(Color.FromRgb(16, 20, 28));
-            Content = new ScrollViewer
-            {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Content = CreateContent()
-            };
-
-            _minutesBox.Text = "30";
+            SetAdaptiveContent(CreateContent());
             UpdateFromMinutes();
         }
 
@@ -61,6 +50,7 @@ namespace ClubTimerXbox
                 Foreground = Brushes.White,
                 FontSize = 26,
                 FontWeight = FontWeights.Bold,
+                TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 10)
             });
             root.Children.Add(new TextBlock
@@ -84,6 +74,8 @@ namespace ClubTimerXbox
 
             ConfigureInput(_minutesBox);
             ConfigureInput(_amountBox);
+            NumericInputHint.Apply(_minutesBox, "Минуты");
+            NumericInputHint.Apply(_amountBox, "Сумма");
             _minutesBox.TextChanged += (_, _) => UpdateFromMinutes();
             _amountBox.TextChanged += (_, _) => UpdateFromAmount();
             _minutesBox.PreviewMouseWheel += (_, e) =>
@@ -143,6 +135,7 @@ namespace ClubTimerXbox
             buttons.Children.Add(cancel);
             buttons.Children.Add(confirm);
             root.Children.Add(buttons);
+            DialogKeyboard.Configure(this, _amountBox, confirm);
             return root;
         }
 
@@ -219,7 +212,7 @@ namespace ClubTimerXbox
 
             if (!TryReadMinutes(_minutesBox.Text, out double minutes) || minutes <= 0)
             {
-                SetInvalidResult();
+                SetInvalidResult(_amountBox);
                 return;
             }
 
@@ -238,7 +231,7 @@ namespace ClubTimerXbox
 
             if (!int.TryParse(_amountBox.Text.Trim(), out int amount) || amount <= 0)
             {
-                SetInvalidResult();
+                SetInvalidResult(_minutesBox);
                 return;
             }
 
@@ -272,10 +265,16 @@ namespace ClubTimerXbox
             _resultText.Text = result;
         }
 
-        private void SetInvalidResult()
+        private void SetInvalidResult(TextBox? calculatedInput = null)
         {
             _calculatedSeconds = 0;
             _calculatedAmount = 0;
+            if (calculatedInput != null)
+            {
+                _isUpdating = true;
+                calculatedInput.Clear();
+                _isUpdating = false;
+            }
             _resultText.Text = "Введите положительные минуты или сумму.";
         }
 

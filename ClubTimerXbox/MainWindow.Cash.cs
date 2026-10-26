@@ -9,6 +9,7 @@ namespace ClubTimerXbox
     public partial class MainWindow
     {
         private readonly DispatcherTimer _cashTextTimer = new DispatcherTimer();
+        private readonly CashDayRevenueCache _cashDayRevenueCache = new();
         private bool _runtimeCloseSaved = false;
 
         protected override void OnContentRendered(EventArgs e)
@@ -52,28 +53,9 @@ namespace ClubTimerXbox
 
         private int GetNewCashTotalForToday()
         {
-            var gamesFilter = new CashReportFilter
-            {
-                Section = CashReportSection.Games,
-                PeriodMode = CashReportPeriodMode.Day,
-                ViewMode = CashReportViewMode.Records,
-                SelectedDay = BusinessCalendarService.GetBusinessDate(
-                    ClubClock.Current.LocalNow)
-            };
-
-            var productsFilter = new CashReportFilter
-            {
-                Section = CashReportSection.ProductsAndServices,
-                PeriodMode = CashReportPeriodMode.Day,
-                ViewMode = CashReportViewMode.Records,
-                SelectedDay = BusinessCalendarService.GetBusinessDate(
-                    ClubClock.Current.LocalNow)
-            };
-
-            var gamesReport = CashReportService.BuildReport(gamesFilter);
-            var productsReport = CashReportService.BuildReport(productsFilter);
-
-            return gamesReport.Summary.TotalAmount + productsReport.Summary.TotalAmount;
+            DateTime day = BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow);
+            return _cashDayRevenueCache.Get(day, PaymentService.Revision, ActionLogService.Revision,
+                () => CashReportService.GetDayRevenueTotal(day));
         }
 
         private void MainCashText_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using ClubTimerXbox.Models;
 
 namespace ClubTimerXbox.Services
@@ -19,6 +20,8 @@ namespace ClubTimerXbox.Services
 
         // Умный журнал игровых сессий.
         public static List<GameSessionLogItem> GameSessions { get; private set; }
+        private static long _revision;
+        public static long Revision => Interlocked.Read(ref _revision);
 
         static ActionLogService()
         {
@@ -50,6 +53,7 @@ namespace ClubTimerXbox.Services
 
         private static void SaveLogs()
         {
+            Interlocked.Increment(ref _revision);
             LogStorageService.Save(Shifts, GameSessions);
         }
 
