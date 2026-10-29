@@ -300,6 +300,18 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        internal static EmployeeRatingCalculation CaptureCalculation(string employeeName)
+        {
+            EnsureActivated();
+            lock (Gate)
+            {
+                var employee = EmployeeService.FindByName(employeeName);
+                string id = employee?.EmployeeId ?? "name:" + employeeName.Trim().ToLowerInvariant();
+                var profile = GetOrCreateProfileUnsafe(id, employeeName);
+                return new EmployeeRatingCalculation(profile, State.Events, employeeName);
+            }
+        }
+
         public static int GetPercent(
             string employeeName,
             EmployeeRatingBranch branch,
@@ -881,6 +893,7 @@ namespace ClubTimerXbox.Services
 
         private static void Save()
         {
+            FinancialInputRevision.Changed();
             Directory.CreateDirectory(FolderPath);
             Normalize();
             AtomicFileStorageService.WriteAllText(

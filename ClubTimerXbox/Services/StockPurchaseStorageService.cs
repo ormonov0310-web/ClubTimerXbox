@@ -48,6 +48,7 @@ namespace ClubTimerXbox.Services
 
         public static void Save(List<StockPurchase> purchases)
         {
+            FinancialInputRevision.Changed();
             try
             {
                 if (!Directory.Exists(FolderPath))
@@ -73,6 +74,7 @@ namespace ClubTimerXbox.Services
 
         public static void Clear()
         {
+            FinancialInputRevision.Changed();
             try
             {
                 if (File.Exists(FilePath))

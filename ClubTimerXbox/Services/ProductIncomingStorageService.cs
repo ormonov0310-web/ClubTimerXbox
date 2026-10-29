@@ -41,6 +41,7 @@ namespace ClubTimerXbox.Services
 
         public static void Save(List<ProductIncomingItem> items)
         {
+            FinancialInputRevision.Changed();
             Directory.CreateDirectory(IncomingFolderPath);
 
             var options = new JsonSerializerOptions
@@ -55,6 +56,7 @@ namespace ClubTimerXbox.Services
 
         public static void Clear()
         {
+            FinancialInputRevision.Changed();
             try
             {
                 if (File.Exists(IncomingFilePath))

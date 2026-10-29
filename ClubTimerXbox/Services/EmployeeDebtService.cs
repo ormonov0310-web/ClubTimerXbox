@@ -918,6 +918,7 @@ namespace ClubTimerXbox.Services
 
         public static void Clear()
         {
+            FinancialInputRevision.Changed();
             lock (Gate)
             {
                 State = new EmployeeDebtState();
@@ -1271,6 +1272,7 @@ namespace ClubTimerXbox.Services
 
         private static void SaveLocked()
         {
+            FinancialInputRevision.Changed();
             string json = JsonSerializer.Serialize(State,
                 new JsonSerializerOptions { WriteIndented = true });
             try

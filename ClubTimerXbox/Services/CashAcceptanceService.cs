@@ -335,6 +335,7 @@ namespace ClubTimerXbox.Services
 
         public static void Clear()
         {
+            FinancialInputRevision.Changed();
             Items.Clear();
 
             try
@@ -382,6 +383,7 @@ namespace ClubTimerXbox.Services
 
         private static void Save()
         {
+            FinancialInputRevision.Changed();
             Directory.CreateDirectory(FolderPath);
 
             var options = new JsonSerializerOptions

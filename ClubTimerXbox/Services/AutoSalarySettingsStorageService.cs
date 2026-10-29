@@ -36,6 +36,7 @@ namespace ClubTimerXbox.Services
 
         public static void Save(AutoSalarySettings settings)
         {
+            FinancialInputRevision.Changed();
             Directory.CreateDirectory(FolderPath);
 
             var options = new JsonSerializerOptions

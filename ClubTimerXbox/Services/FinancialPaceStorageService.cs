@@ -32,6 +32,7 @@ namespace ClubTimerXbox.Services
 
         public static void Save(FinancialPaceState state)
         {
+            FinancialInputRevision.Changed();
             Directory.CreateDirectory(FolderPath);
             string temporaryPath = FilePath + ".tmp";
             File.WriteAllText(

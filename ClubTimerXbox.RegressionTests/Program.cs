@@ -4,6 +4,66 @@ using ClubTimerXbox.Services;
 using ClubTimerUpdater;
 using System.Text.Json;
 
+if (args.Contains("--financial-background-idle", StringComparer.OrdinalIgnoreCase))
+{
+    FinancialBackgroundTests.MeasureIdle();
+    return;
+}
+
+if (args.Contains("--financial-background", StringComparer.OrdinalIgnoreCase))
+{
+    FinancialBackgroundTests.Run();
+    return;
+}
+
+if (args.Contains("--salary-pace-idle", StringComparer.OrdinalIgnoreCase))
+{
+    SalaryAccrualTests.MeasureIdle();
+    return;
+}
+
+if (args.Contains("--salary-pace", StringComparer.OrdinalIgnoreCase))
+{
+    bool benchmark = args.Contains("--benchmark", StringComparer.OrdinalIgnoreCase);
+    SalaryAccrualTests.Run(benchmark);
+    PortionReadBatchTests.Run(benchmark);
+    PaceDayCalculationTests.Run();
+    return;
+}
+
+if (args.Contains("--sync-background-idle", StringComparer.OrdinalIgnoreCase))
+{
+    BackgroundSnapshotTests.MeasureIdle();
+    return;
+}
+
+if (args.Contains("--sync-background-performance", StringComparer.OrdinalIgnoreCase))
+{
+    DetachedEmployeeJournalTests.Run(benchmark: true);
+    return;
+}
+
+if (args.Contains("--sync-background", StringComparer.OrdinalIgnoreCase))
+{
+    DetachedEmployeeJournalTests.Run();
+    BackgroundSnapshotTests.Run();
+    new FirebaseSnapshotDeliveryTests().Run();
+    SnapshotPipelinePerformanceTests.RunHeadless();
+    return;
+}
+
+if (args.Contains("--finance-headless", StringComparer.OrdinalIgnoreCase))
+{
+    new BusinessCalendarTestSuite().Run();
+    new EmployeeSalaryRuleTestSuite().Run();
+    new FinancialPaceTestSuite().Run();
+    new OverNormPortionTests().Run();
+    new EmployeeDebtTestSuite().Run();
+    new EmployeePayoutHistoryTests().Run();
+    new ClubLoanTests().Run();
+    return;
+}
+
 if (args.Contains("--journal-performance", StringComparer.OrdinalIgnoreCase))
 {
     EmployeeJournalPerformanceTests.Run(benchmark: true);
@@ -103,6 +163,12 @@ ClubCloseTests.Run();
 NumericInputTests.Run();
 CashReportPerformanceTests.Run();
 EmployeeJournalPerformanceTests.Run();
+SalaryAccrualTests.Run();
+PortionReadBatchTests.Run();
+PaceDayCalculationTests.Run();
+DetachedEmployeeJournalTests.Run();
+BackgroundSnapshotTests.Run();
+FinancialBackgroundTests.Run();
 ClubClosedDeliveryTests.Run();
 SnapshotPipelinePerformanceTests.Run();
 

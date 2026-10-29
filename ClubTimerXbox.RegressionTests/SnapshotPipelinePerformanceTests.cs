@@ -9,6 +9,13 @@ using ClubTimerXbox.Services;
 
 internal static class SnapshotPipelinePerformanceTests
 {
+    public static void RunHeadless()
+    {
+        DeliveryChecks().GetAwaiter().GetResult();
+        MeasurementChecks();
+        Console.WriteLine("Snapshot pipeline headless: exact UTF8, dedup, cancellation, scopes and private bounded metrics passed; WPF dispatcher/UI checks omitted.");
+    }
+
     public static void MeasureUiIdle()
     {
         var source = JsonSerializer.SerializeToNode(BuildFixture())!.AsObject();

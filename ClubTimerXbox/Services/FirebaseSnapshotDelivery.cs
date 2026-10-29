@@ -17,8 +17,10 @@ internal sealed class FirebaseSnapshotDelivery
 {
     private readonly string _path;
     private readonly object _gate = new();
+    private readonly SemaphoreSlim _publishGate = new(1, 1);
     private JsonObject? _published;
     private long _generation;
+    private long _scopeEpoch;
     private State _state;
     private readonly Func<long> _clock;
 
@@ -35,7 +37,12 @@ internal sealed class FirebaseSnapshotDelivery
         public int PayloadBytes { get; set; }
         public string ErrorKind { get; set; } = "";
         public double BuildMilliseconds { get; set; }
+        public double CaptureWorkflowMilliseconds { get; set; }
+        public BackgroundFinancialCalculation.Profile? FinancialBuild { get; set; }
+        public BackgroundFinancialCalculation.Profile? LastSlowFinancialBuild { get; set; }
         public double PrepareMilliseconds { get; set; }
+        public double BackgroundBuildMilliseconds { get; set; }
+        public int BackgroundBuildThreadId { get; set; }
         public double SendMilliseconds { get; set; }
         public bool? BuildOnUiThread { get; set; }
         public int BuildThreadId { get; set; }
@@ -59,6 +66,9 @@ internal sealed class FirebaseSnapshotDelivery
         public bool HasChanges => Patch.Count > 0;
     }
 
+    internal sealed record CapturedSnapshot(JsonObject Document, Action<CancellationToken>? Complete = null,
+        Func<CancellationToken, JsonObject>? BuildDocument = null, double? OwnerBuildMilliseconds = null);
+
     public FirebaseSnapshotDelivery(string path, Func<long>? clock = null)
     {
         _path = path;
@@ -72,6 +82,16 @@ internal sealed class FirebaseSnapshotDelivery
 
     public long Revision { get { lock (_gate) return _state.Revision; } }
     public bool Pending { get { lock (_gate) return _state.Pending; } }
+
+    public void RecordFinancialBuild(BackgroundFinancialCalculation.Profile profile)
+    {
+        lock (_gate)
+        {
+            _state.FinancialBuild = profile;
+            if (profile.CaptureMilliseconds + profile.ApplyMilliseconds >= 250 || profile.SynchronousFallback)
+                _state.LastSlowFinancialBuild = profile;
+        }
+    }
 
     public void RecordOverviewBuild(BuildProfile profile)
     {
@@ -89,6 +109,7 @@ internal sealed class FirebaseSnapshotDelivery
         {
             if (_state.Scope != scope)
             {
+                _scopeEpoch++;
                 _state = new State { Scope = scope };
                 _published = null;
             }
@@ -116,11 +137,27 @@ internal sealed class FirebaseSnapshotDelivery
     public Task<bool> PublishAsync(Func<JsonObject> build, Func<JsonObject, Task> send, long now)
         => PublishPreparedAsync(build, prepared => send(prepared.Patch), now);
 
-    public async Task<bool> PublishPreparedAsync(Func<JsonObject> build,
+    public Task<bool> PublishPreparedAsync(Func<JsonObject> build,
+        Func<PreparedPatch, Task> send, long now, CancellationToken token = default)
+        => PublishCapturedAsync(() => new CapturedSnapshot(build()), send, now, token);
+
+    public async Task<bool> PublishCapturedAsync(Func<CapturedSnapshot> capture,
+        Func<PreparedPatch, Task> send, long now, CancellationToken token = default)
+        => await PublishCapturedAsync(() => Task.FromResult(capture()), send, now, token);
+
+    public async Task<bool> PublishCapturedAsync(Func<Task<CapturedSnapshot>> capture,
         Func<PreparedPatch, Task> send, long now, CancellationToken token = default)
     {
+        if (!await _publishGate.WaitAsync(0)) return false;
+        try { return await PublishCapturedCoreAsync(capture, send, now, token); }
+        finally { _publishGate.Release(); }
+    }
+
+    private async Task<bool> PublishCapturedCoreAsync(Func<Task<CapturedSnapshot>> capture,
+        Func<PreparedPatch, Task> send, long now, CancellationToken token)
+    {
         long generation;
-        string scope;
+        long scopeEpoch;
         long previousRevision;
         JsonObject? previous;
         JsonObject? snapshot = null;
@@ -128,12 +165,14 @@ internal sealed class FirebaseSnapshotDelivery
         {
             if (!CanAttempt(now)) return false;
             generation = _generation;
-            scope = _state.Scope;
+            scopeEpoch = _scopeEpoch;
             previousRevision = _state.Revision;
             previous = _published;
             _state.LastAttemptAt = now;
             _state.BuildMilliseconds = 0;
             _state.PrepareMilliseconds = 0;
+            _state.BackgroundBuildMilliseconds = 0;
+            _state.BackgroundBuildThreadId = 0;
             _state.SendMilliseconds = 0;
             _state.BuildStages = new();
             _state.BuildOnUiThread = System.Windows.Application.Current?.Dispatcher.CheckAccess();
@@ -144,17 +183,19 @@ internal sealed class FirebaseSnapshotDelivery
         try
         {
             token.ThrowIfCancellationRequested();
+            CapturedSnapshot? captured = null;
             var buildWatch = Stopwatch.StartNew();
             using (var measurements = SnapshotBuildMeasurements.Begin())
             {
-                try { snapshot = build(); }
+                try { captured = await capture(); snapshot = captured.Document; }
                 finally
                 {
                     lock (_gate)
                     {
-                        if (_state.Scope == scope)
+                        if (_scopeEpoch == scopeEpoch)
                         {
-                            _state.BuildMilliseconds = Math.Round(buildWatch.Elapsed.TotalMilliseconds, 3);
+                            _state.CaptureWorkflowMilliseconds = Math.Round(buildWatch.Elapsed.TotalMilliseconds, 3);
+                            _state.BuildMilliseconds = captured?.OwnerBuildMilliseconds ?? _state.CaptureWorkflowMilliseconds;
                             _state.BuildStages = measurements.Export();
                             if (_state.BuildMilliseconds >= 250)
                             {
@@ -166,13 +207,26 @@ internal sealed class FirebaseSnapshotDelivery
                     }
                 }
             }
+            double backgroundMilliseconds = 0;
+            int backgroundThreadId = 0;
             var prepareWatch = Stopwatch.StartNew();
-            // Only detached JSON is processed here; financial services stay on their caller's thread.
+            // Completion owns its inputs; accounting services remain on the capture thread.
             PreparedPatch prepared = await Task.Run(
-                () => PreparePatch(previous, snapshot, now, previousRevision), token);
+                () =>
+                {
+                    backgroundThreadId = Environment.CurrentManagedThreadId;
+                    var watch = Stopwatch.StartNew();
+                    snapshot = captured.BuildDocument?.Invoke(token) ?? snapshot;
+                    captured.Complete?.Invoke(token);
+                    backgroundMilliseconds = Math.Round(watch.Elapsed.TotalMilliseconds, 3);
+                    token.ThrowIfCancellationRequested();
+                    return PreparePatch(previous, snapshot, now, previousRevision);
+                }, token);
             lock (_gate)
             {
-                if (_state.Scope != scope) return false;
+                if (_scopeEpoch != scopeEpoch) return false;
+                _state.BackgroundBuildMilliseconds = backgroundMilliseconds;
+                _state.BackgroundBuildThreadId = backgroundThreadId;
                 _state.PrepareMilliseconds = Math.Round(prepareWatch.Elapsed.TotalMilliseconds, 3);
                 _state.PrepareThreadId = prepared.ThreadId;
             }
@@ -191,13 +245,13 @@ internal sealed class FirebaseSnapshotDelivery
                 finally
                 {
                     lock (_gate)
-                        if (_state.Scope == scope)
+                        if (_scopeEpoch == scopeEpoch)
                             _state.SendMilliseconds = Math.Round(sendWatch.Elapsed.TotalMilliseconds, 3);
                 }
             }
             lock (_gate)
             {
-                if (_state.Scope != scope) return false;
+                if (_scopeEpoch != scopeEpoch) return false;
                 _published = snapshot;
                 _state.Revision = revision;
                 long completedAt = Math.Max(now, _clock());
@@ -214,7 +268,7 @@ internal sealed class FirebaseSnapshotDelivery
         {
             lock (_gate)
             {
-                if (_state.Scope != scope) return false;
+                if (_scopeEpoch != scopeEpoch) return false;
                 _state.Pending = true;
                 _state.Failures++;
                 _state.ErrorKind = ErrorKind(ex);
@@ -283,6 +337,8 @@ internal sealed class FirebaseSnapshotDelivery
             string path = prefix + pair.Key;
             JsonNode? before = old?[pair.Key];
             if (JsonNode.DeepEquals(before, pair.Value)) continue;
+            if (before is JsonArray oldDays && pair.Value is JsonArray newDays &&
+                IsPaceDaysPath(path) && PaceDaysEqual(oldDays, newDays)) continue;
             if (before is JsonObject oldObject && pair.Value is JsonObject newObject
                 && newObject.Count > 0)
                 Diff(oldObject, newObject, path + "/", patch);
@@ -292,5 +348,37 @@ internal sealed class FirebaseSnapshotDelivery
         if (old == null) return;
         foreach (var pair in old)
             if (!next.ContainsKey(pair.Key)) patch[prefix + pair.Key] = null;
+    }
+
+    private static bool IsPaceDaysPath(string path)
+    {
+        if (path == "financialPace/days") return true;
+        if (!path.StartsWith("reportsByMonth/", StringComparison.Ordinal) ||
+            !path.EndsWith("/financialPace/days", StringComparison.Ordinal)) return false;
+        string[] parts = path.Split('/');
+        return parts.Length == 4 && BusinessCalendarService.TryParseMonthKey(parts[1], out _);
+    }
+
+    private static bool PaceDaysEqual(JsonArray before, JsonArray after)
+    {
+        if (before.Count != after.Count) return false;
+        for (int index = 0; index < before.Count; index++)
+        {
+            if (before[index] is not JsonObject oldDay || after[index] is not JsonObject newDay)
+            {
+                if (!JsonNode.DeepEquals(before[index], after[index])) return false;
+                continue;
+            }
+            if (oldDay.Count != newDay.Count) return false;
+            foreach (var (key, value) in newDay)
+            {
+                if (!oldDay.TryGetPropertyValue(key, out var oldValue)) return false;
+                // Keep deletions/schema changes meaningful; only a changed as-of string is metadata.
+                if (key == "calculatedAt" && oldValue is JsonValue oldTime && value is JsonValue newTime &&
+                    oldTime.TryGetValue<string>(out _) && newTime.TryGetValue<string>(out _)) continue;
+                if (!JsonNode.DeepEquals(oldValue, value)) return false;
+            }
+        }
+        return true;
     }
 }

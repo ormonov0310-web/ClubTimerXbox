@@ -7,6 +7,35 @@ namespace ClubTimerXbox.Services;
 
 internal static class OverNormPortionService
 {
+    [ThreadStatic] private static CalculationBatch? _calculation;
+
+    internal static IDisposable BeginCalculation()
+    {
+        _calculation ??= new();
+        _calculation.Depth++;
+        return new CalculationLease(Environment.CurrentManagedThreadId);
+    }
+
+    private sealed class CalculationBatch
+    {
+        internal int Depth;
+        internal readonly Dictionary<OverNormPortionStore, IDisposable> Stores = new();
+    }
+
+    private sealed class CalculationLease(int threadId) : IDisposable
+    {
+        private bool _disposed;
+        public void Dispose()
+        {
+            if (_disposed) return;
+            if (Environment.CurrentManagedThreadId != threadId)
+                throw new InvalidOperationException("A portion calculation cannot cross threads or await.");
+            _disposed = true;
+            if (--_calculation!.Depth != 0) return;
+            foreach (var lease in _calculation.Stores.Values) lease.Dispose();
+            _calculation = null;
+        }
+    }
     private static readonly Dictionary<string, OverNormPortionStore> Stores = new();
     private static DispatcherTimer? _timer;
     private static bool _waiting;
@@ -29,6 +58,8 @@ internal static class OverNormPortionService
                         club, ClubClock.Current.LocalNow);
                     Stores.Add(club, store);
                 }
+                if (_calculation != null && !_calculation.Stores.ContainsKey(store))
+                    _calculation.Stores.Add(store, store.BeginReadBatch());
                 return store;
             }
         }

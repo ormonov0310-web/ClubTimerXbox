@@ -69,6 +69,11 @@ namespace ClubTimerXbox.Services
             return GetVersionAt(at).Settings;
         }
 
+        internal static List<SalaryPolicyVersion> CaptureVersions()
+        {
+            lock (Gate) return State.Versions.Select(Clone).ToList();
+        }
+
         public static SalaryPolicyVersion GetVersionAt(DateTime at)
         {
             lock (Gate)
@@ -216,6 +221,7 @@ namespace ClubTimerXbox.Services
 
         private static void Save()
         {
+            FinancialInputRevision.Changed();
             Directory.CreateDirectory(FolderPath);
             Normalize();
             AtomicFileStorageService.WriteAllText(

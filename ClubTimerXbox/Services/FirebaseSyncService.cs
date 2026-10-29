@@ -44,6 +44,7 @@ namespace ClubTimerXbox.Services
         private static IReadOnlyList<ClubPlace> _lastKnownPlaces = Array.Empty<ClubPlace>();
         private static long _lastLiveStateRevision;
         private static readonly SemaphoreSlim CurrentPublishGate = new(1, 1);
+        private static readonly BackgroundFinancialCalculation FinancialCalculation = new();
         private static readonly CancellationTokenSource NormalPublishLifetime = new();
         private static bool _closing;
         private static readonly FirebaseSnapshotDelivery CurrentDelivery = new(
@@ -59,13 +60,16 @@ namespace ClubTimerXbox.Services
 
         public static async Task<bool> PushOverviewStateAsync(List<ClubPlace> places)
         {
+            if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+                return await dispatcher.InvokeAsync(() => PushOverviewStateAsync(places)).Task.Unwrap();
             if (!FirebaseConnectionService.CanSync)
                 return false;
 
             try
             {
+                var financials = await PrepareFinancialReportsAsync(fullHistory: false);
                 var pcIdentity = PcIdentityService.Current;
-                var snapshot = BuildOverviewSnapshot(places);
+                var snapshot = BuildOverviewSnapshot(places, financials.Values.Single().Pace);
                 long nowUnixMs = DateTimeOffset.Now.ToUnixTimeMilliseconds();
                 long revision = NextLiveStateRevision(nowUnixMs);
                 var data = BuildOverviewPayload(
@@ -169,13 +173,16 @@ namespace ClubTimerXbox.Services
 
         public static async Task<bool> PushHeartbeatAsync(List<ClubPlace> places)
         {
+            if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+                return await dispatcher.InvokeAsync(() => PushHeartbeatAsync(places)).Task.Unwrap();
             if (!FirebaseConnectionService.CanSync)
                 return false;
 
             try
             {
+                var financials = await PrepareFinancialReportsAsync(fullHistory: false);
                 var pcIdentity = PcIdentityService.Current;
-                var snapshot = BuildOverviewSnapshot(places);
+                var snapshot = BuildOverviewSnapshot(places, financials.Values.Single().Pace);
                 long nowUnixMs = DateTimeOffset.Now.ToUnixTimeMilliseconds();
                 long revision = NextLiveStateRevision(nowUnixMs);
 
@@ -445,7 +452,7 @@ namespace ClubTimerXbox.Services
         }
 
         private static OverviewSnapshot BuildOverviewSnapshot(
-            IEnumerable<ClubPlace> places)
+            IEnumerable<ClubPlace> places, FinancialPaceMonthSnapshot financialMonth)
         {
             var watch = Stopwatch.StartNew();
             using var measurements = SnapshotBuildMeasurements.Begin();
@@ -459,8 +466,6 @@ namespace ClubTimerXbox.Services
                     CashReportPeriodMode.Day,
                     todayStart
                 );
-                FinancialPaceMonthSnapshot financialMonth =
-                    FinancialPaceService.BuildCurrentMonth();
                 FinancialPaceDaySnapshot? financialToday = financialMonth.Days
                     .FirstOrDefault(day => day.BusinessDateKey ==
                         BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow)
@@ -591,6 +596,8 @@ namespace ClubTimerXbox.Services
 
         public static async Task<bool> PushCurrentStateAsync(List<ClubPlace> places)
         {
+            if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+                return await dispatcher.InvokeAsync(() => PushCurrentStateAsync(places)).Task.Unwrap();
             _lastKnownPlaces = places.ToList();
             RequestCurrentStatePublish(urgent: true);
             return await PublishPendingCurrentStateAsync(places);
@@ -598,6 +605,8 @@ namespace ClubTimerXbox.Services
 
         private static async Task<bool> PublishPendingCurrentStateAsync(List<ClubPlace> places)
         {
+            if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+                return await dispatcher.InvokeAsync(() => PublishPendingCurrentStateAsync(places)).Task.Unwrap();
             if (!FirebaseConnectionService.CanSync || places.Count == 0 ||
                 !CurrentDelivery.CanAttempt(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) ||
                 !await CurrentPublishGate.WaitAsync(0))
@@ -606,8 +615,9 @@ namespace ClubTimerXbox.Services
             {
                 long previousRevision = CurrentDelivery.Revision;
                 string currentPath = ClubCurrentPath;
-                bool published = await CurrentDelivery.PublishPreparedAsync(
-                    () => BuildSnapshotDocument(places, closed: false),
+                bool published = await CurrentDelivery.PublishCapturedAsync(
+                    async () => CaptureSnapshotDocument(places,
+                        await PrepareFinancialReportsAsync(fullHistory: true)),
                     patch => PatchPreparedAsync(currentPath, patch, TimeSpan.FromSeconds(30)),
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), NormalPublishLifetime.Token);
                 if (!published) return false;
@@ -633,10 +643,22 @@ namespace ClubTimerXbox.Services
             return closed ? BuildClosedSnapshot(document) : document;
         }
 
-        private static object BuildCurrentState(List<ClubPlace> places)
+        private static FirebaseSnapshotDelivery.CapturedSnapshot CaptureSnapshotDocument(List<ClubPlace> places,
+            IReadOnlyDictionary<string, MonthFinancialReports> financials)
+        {
+            var watch = Stopwatch.StartNew();
+            var journals = new DetachedEmployeeJournals();
+            object state = BuildCurrentState(places, journals, financials);
+            using (SnapshotBuildMeasurements.Measure("snapshot.capture-journals"))
+                return journals.FreezeOwnedPayload(state) with { OwnerBuildMilliseconds = watch.Elapsed.TotalMilliseconds };
+        }
+
+        private static object BuildCurrentState(List<ClubPlace> places, DetachedEmployeeJournals? journals = null,
+            IReadOnlyDictionary<string, MonthFinancialReports>? preparedFinancials = null)
         {
                 using var measurement = SnapshotBuildMeasurements.Measure("snapshot.build-state");
-                EmployeeDebtService.RecoverClubLoanMovements();
+                using var portions = OverNormPortionService.BeginCalculation();
+                if (preparedFinancials == null) EmployeeDebtService.RecoverClubLoanMovements();
                 _lastKnownPlaces = places.ToList();
                 var pcIdentity = PcIdentityService.Current;
                 var businessDay = BusinessCalendarService.GetBusinessDay(
@@ -971,18 +993,12 @@ namespace ClubTimerXbox.Services
                     .Concat(serviceItems.Cast<object>())
                     .ToList();
 
-                LateOpeningPenaltyService.EnsureTodayNoOpeningRecommendation();
+                if (preparedFinancials == null) LateOpeningPenaltyService.EnsureTodayNoOpeningRecommendation();
 
-                var reportsByMonth = BuildReportsByMonth();
-                var autoSalaryReport = AutoSalaryService.BuildReport(monthStart);
-                var dailyEarningsByEmployee =
-                    AutoSalaryService.BuildDailyEarningsByEmployee(
-                        monthStart,
-                        autoSalaryReport);
-                var financialPace = FinancialPaceService.BuildMonth(
-                    monthStart,
-                    autoSalaryReport,
-                    dailyEarningsByEmployee);
+                var reportsByMonth = BuildReportsByMonth(monthStart, journals, out var currentFinancials, preparedFinancials);
+                var autoSalaryReport = currentFinancials.Salary;
+                var dailyEarningsByEmployee = currentFinancials.DailyEarnings;
+                var financialPace = currentFinancials.Pace;
                 int salaryGrossMonth = autoSalaryReport.Employees.Sum(employee => employee.GrossAmount);
                 int salaryLossesMonth = autoSalaryReport.Employees.Sum(employee => employee.LossesAmount);
                 int salaryAccruedMonth = autoSalaryReport.Employees.Sum(employee =>
@@ -1305,10 +1321,8 @@ namespace ClubTimerXbox.Services
                             employee.Name
                         );
 
-                        var journal = EmployeeStatsService
-                            .GetJournalForCurrentMonth(employee.Name)
-                            .Take(150)
-                            .ToList();
+                        var journal = journals?.Capture(employee.Name, monthStart) ?? EmployeeStatsService
+                            .GetJournalForMonth(employee.Name, monthStart).Take(150).ToList();
 
                         var allJournal = journal
                             .Select(item => new
@@ -1913,17 +1927,100 @@ namespace ClubTimerXbox.Services
             return CashReportService.BuildSummary(filter);
         }
 
-        private static Dictionary<string, object> BuildReportsByMonth()
+        private sealed record MonthFinancialReports(AutoSalaryReport Salary,
+            IReadOnlyDictionary<string, List<AutoSalaryDayEarning>> DailyEarnings,
+            FinancialPaceMonthSnapshot Pace);
+
+        private sealed record FinancialMonthInput(CapturedSalaryMonth Salary, CapturedPaceMonth Pace);
+        private sealed record FinancialMonthResult(SalaryMonthCalculation Salary, CapturedPaceMonth.Calculation Pace);
+
+        private static async Task<IReadOnlyDictionary<string, MonthFinancialReports>> PrepareFinancialReportsAsync(bool fullHistory)
+        {
+            var identity = PcIdentityService.Current;
+            string scope = identity.ClubId + ":" + identity.InstallationId;
+            DateTime businessDay = BusinessCalendarService.GetBusinessDay(ClubClock.Current.LocalNow).StartInclusive;
+            bool ScopeValid() => !_closing && scope ==
+                PcIdentityService.Current.ClubId + ":" + PcIdentityService.Current.InstallationId &&
+                businessDay == BusinessCalendarService.GetBusinessDay(ClubClock.Current.LocalNow).StartInclusive;
+            var results = await FinancialCalculation.RunAsync<List<FinancialMonthResult>>(() =>
+            {
+                Application.Current?.Dispatcher.VerifyAccess();
+                using var portions = OverNormPortionService.BeginCalculation();
+                EmployeeDebtService.RecoverClubLoanMovements();
+                if (fullHistory) LateOpeningPenaltyService.EnsureTodayNoOpeningRecommendation();
+                DateTime month = BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow).StartInclusive;
+                var months = fullHistory ? GetReportMonthStarts(month).Append(month).Distinct().ToArray() : new[] { month };
+                var inputs = months.Select(date =>
+                {
+                    var salary = AutoSalaryService.CaptureMonthCalculation(date);
+                    return new FinancialMonthInput(salary, FinancialPaceService.CaptureMonth(date));
+                }).ToArray();
+                return token =>
+                {
+                    var calculated = new List<FinancialMonthResult>();
+                    foreach (var input in inputs)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var salary = input.Salary.Calculate();
+                        calculated.Add(new(salary, input.Pace.Calculate(salary.DailyEarnings)));
+                    }
+                    return calculated;
+                };
+            }, () => (FinancialInputRevision.Value, ActionLogService.Revision, PaymentService.Revision,
+                BusinessCalendarService.GetBusinessDay(ClubClock.Current.LocalNow).StartInclusive),
+                ScopeValid, calculated =>
+                {
+                    Application.Current?.Dispatcher.VerifyAccess();
+                    foreach (var item in calculated)
+                    {
+                        AutoSalaryService.ApplyMonthCalculation(item.Salary);
+                        FinancialPaceService.ApplyMonth(item.Pace);
+                    }
+                }, NormalPublishLifetime.Token, CurrentDelivery.RecordFinancialBuild);
+            return results.ToDictionary(item => item.Salary.Report.MonthKey,
+                item => new MonthFinancialReports(item.Salary.Report, item.Salary.DailyEarnings, item.Pace.Snapshot));
+        }
+
+        private static MonthFinancialReports BuildMonthFinancialReports(DateTime month)
+        {
+            using var portions = OverNormPortionService.BeginCalculation();
+            var calculation = AutoSalaryService.BuildMonthCalculation(month);
+            return new MonthFinancialReports(calculation.Report, calculation.DailyEarnings,
+                FinancialPaceService.BuildMonth(month, calculation.Report, calculation.DailyEarnings));
+        }
+
+        private static Dictionary<string, object> BuildReportsByMonth(
+            DateTime currentMonthStart, DetachedEmployeeJournals? journals,
+            out MonthFinancialReports currentFinancials,
+            IReadOnlyDictionary<string, MonthFinancialReports>? prepared = null)
         {
             using var measurement = SnapshotBuildMeasurements.Measure("snapshot.history");
+            var monthStarts = GetReportMonthStarts(currentMonthStart);
+
+            string currentMonth = currentMonthStart.ToString("yyyy-MM");
+            var reports = new Dictionary<string, object>();
+            MonthFinancialReports? current = null;
+            foreach (DateTime date in monthStarts)
+            {
+                string key = date.ToString("yyyy-MM");
+                reports.Add(key, BuildMonthReport(date, out var financials, journals, prepared));
+                if (key == currentMonth) current = financials;
+            }
+            currentFinancials = current ?? (prepared == null ? BuildMonthFinancialReports(currentMonthStart)
+                : prepared[currentMonth]);
+            return reports;
+        }
+
+        private static DateTime[] GetReportMonthStarts(DateTime currentMonthStart)
+        {
             var monthStarts = new HashSet<DateTime>();
 
             void AddMonth(DateTime date)
             {
-                monthStarts.Add(new DateTime(date.Year, date.Month, 1));
+                monthStarts.Add(BusinessCalendarService.GetBusinessMonthByAnchor(date).StartInclusive);
             }
 
-            AddMonth(BusinessCalendarService.GetBusinessDate(ClubClock.Current.LocalNow));
+            AddMonth(currentMonthStart);
 
             foreach (var record in CashService.Records)
             {
@@ -1944,14 +2041,7 @@ namespace ClubTimerXbox.Services
 
             foreach (var purchase in StockPurchaseService.Purchases)
                 AddMonth(purchase.CreatedAt);
-
-            return monthStarts
-                .OrderByDescending(date => date)
-                .Take(18)
-                .ToDictionary(
-                    date => date.ToString("yyyy-MM"),
-                    date => (object)BuildMonthReport(date)
-                );
+            return monthStarts.OrderByDescending(date => date).Take(18).ToArray();
         }
 
         private static object BuildAutoSalaryPayload(AutoSalaryReport report)
@@ -2706,7 +2796,9 @@ namespace ClubTimerXbox.Services
             public int NetProfit { get; set; }
         }
 
-        private static object BuildMonthReport(DateTime monthStart)
+        private static object BuildMonthReport(DateTime monthStart,
+            out MonthFinancialReports financials, DetachedEmployeeJournals? journals,
+            IReadOnlyDictionary<string, MonthFinancialReports>? prepared = null)
         {
             var businessMonth = BusinessCalendarService.GetBusinessMonthByAnchor(monthStart);
             monthStart = businessMonth.StartInclusive;
@@ -2747,15 +2839,10 @@ namespace ClubTimerXbox.Services
             int salaryCashless = salaryRecords
                 .Where(record => record.PaymentMethod == "Безнал")
                 .Sum(record => record.Amount);
-            var salaryReport = AutoSalaryService.BuildReport(monthStart);
-            var dailyEarningsByEmployee =
-                AutoSalaryService.BuildDailyEarningsByEmployee(
-                    monthStart,
-                    salaryReport);
-            var financialPace = FinancialPaceService.BuildMonth(
-                monthStart,
-                salaryReport,
-                dailyEarningsByEmployee);
+            financials = prepared == null ? BuildMonthFinancialReports(monthStart) : prepared[businessMonth.Key];
+            var salaryReport = financials.Salary;
+            var dailyEarningsByEmployee = financials.DailyEarnings;
+            var financialPace = financials.Pace;
             var productServiceSummary = BuildProductServiceMonthSummary(
                 monthStart,
                 nextMonthStart,
@@ -2979,7 +3066,8 @@ namespace ClubTimerXbox.Services
                     monthStart,
                     nextMonthStart,
                     salaryReport,
-                    dailyEarningsByEmployee),
+                    dailyEarningsByEmployee,
+                    journals),
                 expensesByCategory
             };
         }
@@ -2999,7 +3087,8 @@ namespace ClubTimerXbox.Services
             DateTime monthStart,
             DateTime nextMonthStart,
             AutoSalaryReport salaryReport,
-            IReadOnlyDictionary<string, List<AutoSalaryDayEarning>> dailyEarningsByEmployee)
+            IReadOnlyDictionary<string, List<AutoSalaryDayEarning>> dailyEarningsByEmployee,
+            DetachedEmployeeJournals? journals)
         {
             return EmployeeService
                 .GetAllEmployees()
@@ -3016,10 +3105,8 @@ namespace ClubTimerXbox.Services
                         employee.Name
                     );
 
-                    var journal = EmployeeStatsService
-                        .GetJournalForMonth(employee.Name, monthStart)
-                        .Take(150)
-                        .ToList();
+                    var journal = journals?.Capture(employee.Name, monthStart) ?? EmployeeStatsService
+                        .GetJournalForMonth(employee.Name, monthStart).Take(150).ToList();
 
                     var allJournal = journal
                         .Select(item => new

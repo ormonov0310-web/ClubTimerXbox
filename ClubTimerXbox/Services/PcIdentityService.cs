@@ -86,6 +86,7 @@ namespace ClubTimerXbox.Services
 
         public static void Save(PcIdentity identity)
         {
+            FinancialInputRevision.Changed();
             var nextIdentity = Clone(identity);
             Normalize(nextIdentity);
 

@@ -194,6 +194,7 @@ namespace ClubTimerXbox.Services
 
         public static void Clear()
         {
+            FinancialInputRevision.Changed();
             lock (Sync)
             {
                 Data.Items.Clear();
@@ -317,6 +318,7 @@ namespace ClubTimerXbox.Services
 
         private static void SaveUnsafe()
         {
+            FinancialInputRevision.Changed();
             Directory.CreateDirectory(FolderPath);
             MergeDuplicatesUnsafe();
 

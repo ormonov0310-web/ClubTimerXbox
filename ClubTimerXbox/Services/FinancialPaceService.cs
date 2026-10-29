@@ -8,8 +8,6 @@ namespace ClubTimerXbox.Services
     public static class FinancialPaceService
     {
         private static readonly object Gate = new();
-        private static readonly DateTime FeatureEffectiveFrom =
-            new(2026, 9, 1, BusinessCalendarService.BusinessDayStartHour, 0, 0);
         private static FinancialPaceState _state = Normalize(
             FinancialPaceStorageService.Load());
 
@@ -36,204 +34,91 @@ namespace ClubTimerXbox.Services
 
         public static FinancialPaceMonthSnapshot BuildCurrentMonth()
         {
+            using var portions = OverNormPortionService.BeginCalculation();
             var month = BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow);
-            AutoSalaryReport salaryReport = AutoSalaryService.BuildReport(month.StartInclusive);
-            var dailyEarnings = AutoSalaryService.BuildDailyEarningsByEmployee(
-                month.StartInclusive,
-                salaryReport);
-            return BuildMonth(month.StartInclusive, salaryReport, dailyEarnings);
+            var calculation = AutoSalaryService.BuildMonthCalculation(month.StartInclusive);
+            return BuildMonth(month.StartInclusive, calculation.Report, calculation.DailyEarnings);
         }
 
-        public static FinancialPaceMonthSnapshot BuildMonth(
-            DateTime monthAnchor,
-            AutoSalaryReport salaryReport,
+        public static FinancialPaceMonthSnapshot BuildMonth(DateTime monthAnchor, AutoSalaryReport salaryReport,
             IReadOnlyDictionary<string, List<AutoSalaryDayEarning>>? dailyEarningsByEmployee = null)
         {
-            using var measurement = SnapshotBuildMeasurements.Measure("pace.month");
+            using var portions = OverNormPortionService.BeginCalculation();
+            dailyEarningsByEmployee ??= AutoSalaryService.BuildDailyEarningsByEmployee(monthAnchor, salaryReport);
+            var result = CaptureMonth(monthAnchor).Calculate(dailyEarningsByEmployee);
+            ApplyMonth(result);
+            return result.Snapshot;
+        }
+
+        internal static CapturedPaceMonth CaptureMonth(DateTime monthAnchor)
+        {
+            using var portionsBatch = OverNormPortionService.BeginCalculation();
             lock (Gate)
             {
                 var month = BusinessCalendarService.GetBusinessMonthByAnchor(monthAnchor);
                 DateTime now = ClubClock.Current.LocalNow;
-                DateTime lastIncludedStart = now < month.StartInclusive
-                    ? month.StartInclusive.AddDays(-1)
-                    : Min(
-                        BusinessCalendarService.GetBusinessDay(now).StartInclusive,
-                        month.EndExclusive.AddDays(-1));
-                dailyEarningsByEmployee ??=
-                    AutoSalaryService.BuildDailyEarningsByEmployee(
-                        month.StartInclusive,
-                        salaryReport);
-                var salaryByDay = BuildSalaryByDay(dailyEarningsByEmployee);
-                var days = new List<FinancialPaceDaySnapshot>();
-
-                for (DateTime dayStart = month.StartInclusive;
-                     dayStart <= lastIncludedStart && dayStart < month.EndExclusive;
-                     dayStart = dayStart.AddDays(1))
+                var portions = new Dictionary<string, OverNormPortionDay?>();
+                DateTime last = Min(BusinessCalendarService.GetBusinessDay(now).StartInclusive,
+                    month.EndExclusive.AddDays(-1));
+                for (DateTime day = month.StartInclusive; day <= last; day = day.AddDays(1))
+                    portions[day.ToString("yyyy-MM-dd")] = OverNormPortionService.GetDay(day);
+                var source = CaptureDaySource(month);
+                var state = new FinancialPaceState
                 {
-                    DateTime dayEnd = dayStart.AddDays(1);
-                    string dayKey = dayStart.ToString("yyyy-MM-dd");
-                    bool isClosed = now >= dayEnd;
-                    var portions = OverNormPortionService.GetDay(dayStart);
-                    if (isClosed && _state.ClosedDays.TryGetValue(dayKey, out var stored))
-                    {
-                        if (portions != null && FinancialPacePortionAdjustment.Apply(stored, portions,
-                                salaryByDay.GetValueOrDefault(dayKey), now,
-                                BusinessAccountingService.IsMonthClosed(month.Key)))
-                            Save();
-                        days.Add(Clone(stored));
-                        continue;
-                    }
-
-                    FinancialPaceDaySnapshot calculated = CalculateDay(
-                        dayStart,
-                        dayEnd,
-                        now,
-                        salaryByDay.TryGetValue(dayKey, out int salary) ? salary : 0);
-                    calculated.OverNormPortionCount = portions?.Portions.Count ?? 0;
-                    if (isClosed && dayStart >= FeatureEffectiveFrom)
-                    {
-                        calculated.IsClosed = true;
-                        _state.ClosedDays[dayKey] = Clone(calculated);
-                        _state.OpenDayTimelines.Remove(dayKey);
-                        Save();
-                    }
-                    else if (!isClosed && dayStart <= now)
-                    {
-                        AddTimelinePoint(calculated);
-                    }
-
-                    days.Add(calculated);
-                }
-
-                var result = new FinancialPaceMonthSnapshot
-                {
-                    MonthKey = month.Key,
-                    OwnerWithdrawnAmount = CashService.GetOwnerWithdrawRecordsByPeriod(
-                        month.StartInclusive, month.EndExclusive).Sum(record => record.Amount),
-                    Days = days.OrderByDescending(day => day.StartInclusive).ToList(),
-                    GameRevenue = days.Sum(day => day.GameRevenue),
-                    TotalExpense = days.Sum(day => day.TotalExpense),
-                    ProfitableDays = days.Count(day => day.HasExpenseBaseline && day.Difference > 0),
-                    LossDays = days.Count(day => day.HasExpenseBaseline && day.Difference < 0),
-                    NeutralDays = days.Count(day => day.HasExpenseBaseline && day.Difference == 0)
+                    ManualExpenseVersions = _state.ManualExpenseVersions,
+                    ClosedDays = _state.ClosedDays
+                        .Where(pair => pair.Value.StartInclusive >= month.StartInclusive &&
+                            pair.Value.StartInclusive < month.EndExclusive)
+                        .ToDictionary(pair => pair.Key, pair => pair.Value),
+                    OpenDayTimelines = _state.OpenDayTimelines
+                        .Where(pair => string.CompareOrdinal(pair.Key, month.StartInclusive.ToString("yyyy-MM-dd")) >= 0 &&
+                            string.CompareOrdinal(pair.Key, month.EndExclusive.ToString("yyyy-MM-dd")) < 0)
+                        .ToDictionary(pair => pair.Key, pair => pair.Value)
                 };
-                result.Difference = result.GameRevenue - result.TotalExpense;
-                result.Percent = FinancialPaceCalculator.CalculatePercent(
-                    result.GameRevenue,
-                    result.TotalExpense);
-                result.Forecast = FinancialPaceCalculator.CalculateMonthForecast(
-                    days,
-                    month.StartInclusive,
-                    month.EndExclusive,
-                    now);
-
-                FinancialPaceDaySnapshot? latest = days
-                    .OrderByDescending(day => day.StartInclusive)
-                    .FirstOrDefault();
-                if (latest != null)
-                {
-                    result.HasExpenseBaseline = latest.HasExpenseBaseline;
-                    result.ExpenseSourceType = latest.ExpenseSourceType;
-                    result.ExpenseSourceMonthKey = latest.ExpenseSourceMonthKey;
-                    result.MonthlyFixedExpense = latest.MonthlyFixedExpense;
-                    result.DailyFixedExpense = latest.DailyFixedExpense;
-                }
-
-                FinancialPaceManualExpenseVersion? manual = _state.ManualExpenseVersions
-                    .Where(version => version.EffectiveFrom <= month.EndExclusive)
-                    .OrderByDescending(version => version.EffectiveFrom)
-                    .ThenByDescending(version => version.CreatedAt)
-                    .FirstOrDefault();
-                if (manual != null)
-                {
-                    result.ManualMonthlyExpense = manual.MonthlyExpenseAmount;
-                    result.ManualExpenseEffectiveFrom = manual.EffectiveFrom;
-                }
-
-                return result;
+                return new CapturedPaceMonth(month.StartInclusive, now, state, portions,
+                    new(source.HasActual, source.MonthlyExpense, source.MonthKey, source.GamesByDay),
+                    BusinessAccountingService.IsMonthClosed(month.Key),
+                    CashService.GetOwnerWithdrawRecordsByPeriod(month.StartInclusive, month.EndExclusive)
+                        .Sum(record => record.Amount));
             }
         }
 
-        private static FinancialPaceDaySnapshot CalculateDay(
-            DateTime dayStart,
-            DateTime dayEnd,
-            DateTime now,
-            int salaryAccrued)
+        internal static void ApplyMonth(CapturedPaceMonth.Calculation calculation)
         {
-            DateTime calculationTime = Min(now, dayEnd);
-            var previousMonth = BusinessCalendarService.GetBusinessMonthByAnchor(
-                dayStart.AddMonths(-1));
-            bool hasActualBaseline = CashService.HasClubExpenseRecordsByPeriod(
-                previousMonth.StartInclusive,
-                previousMonth.EndExclusive);
-            int monthlyExpense = 0;
-            string sourceType = "Missing";
-            string sourceMonthKey = "";
-
-            if (hasActualBaseline)
+            lock (Gate)
             {
-                monthlyExpense = CashService.GetClubExpenseTotalByPeriod(
-                    previousMonth.StartInclusive,
-                    previousMonth.EndExclusive);
-                sourceType = "PreviousMonthActual";
-                sourceMonthKey = previousMonth.Key;
-            }
-            else
-            {
-                FinancialPaceManualExpenseVersion? manual = _state.ManualExpenseVersions
-                    .Where(version => version.EffectiveFrom <= dayStart)
-                    .OrderByDescending(version => version.EffectiveFrom)
-                    .ThenByDescending(version => version.CreatedAt)
-                    .FirstOrDefault();
-                if (manual != null)
+                foreach (var change in calculation.Changes)
                 {
-                    monthlyExpense = manual.MonthlyExpenseAmount;
-                    sourceType = "OwnerForecast";
+                    if (change.ClosedDay != null)
+                    {
+                        _state.ClosedDays[change.DayKey] = change.ClosedDay;
+                        _state.OpenDayTimelines.Remove(change.DayKey);
+                    }
+                    else if (change.Timeline != null)
+                        _state.OpenDayTimelines[change.DayKey] = change.Timeline;
+                    Save();
                 }
             }
-
-            bool hasBaseline = monthlyExpense > 0;
-            int dailyExpense = hasBaseline
-                ? (int)Math.Round(monthlyExpense / 30.0)
-                : 0;
-            int fixedAccrued = FinancialPaceCalculator.CalculateFixedExpenseAccrued(
-                dailyExpense,
-                dayStart,
-                calculationTime);
-            int games = CashService.GetTotalByPeriodAndCategory(
-                dayStart,
-                dayEnd,
-                "Игры");
-            int totalExpense = fixedAccrued + Math.Max(0, salaryAccrued);
-            int difference = games - totalExpense;
-            string dayKey = dayStart.ToString("yyyy-MM-dd");
-
-            return new FinancialPaceDaySnapshot
-            {
-                BusinessDateKey = dayKey,
-                BusinessMonthKey = BusinessCalendarService.GetBusinessMonth(dayStart).Key,
-                StartInclusive = dayStart,
-                EndExclusive = dayEnd,
-                CalculatedAt = calculationTime,
-                IsClosed = now >= dayEnd,
-                HasExpenseBaseline = hasBaseline,
-                ExpenseSourceType = sourceType,
-                ExpenseSourceMonthKey = sourceMonthKey,
-                MonthlyFixedExpense = monthlyExpense,
-                DailyFixedExpense = dailyExpense,
-                FixedExpenseAccrued = fixedAccrued,
-                SalaryAccrued = Math.Max(0, salaryAccrued),
-                TotalExpense = totalExpense,
-                GameRevenue = games,
-                Difference = difference,
-                Percent = hasBaseline
-                    ? FinancialPaceCalculator.CalculatePercent(games, totalExpense)
-                    : 0,
-                Timeline = _state.OpenDayTimelines.TryGetValue(dayKey, out var timeline)
-                    ? timeline.Select(Clone).ToList()
-                    : new List<FinancialPacePoint>()
-            };
         }
+
+        private sealed record DaySource(bool HasActual, int MonthlyExpense, string MonthKey,
+            IReadOnlyDictionary<string, int> GamesByDay);
+
+        private static DaySource CaptureDaySource(BusinessPeriodRange month)
+        {
+            var previous = BusinessCalendarService.GetBusinessMonthByAnchor(month.StartInclusive.AddMonths(-1));
+            bool hasActual = CashService.HasClubExpenseRecordsByPeriod(previous.StartInclusive, previous.EndExclusive);
+            int monthlyExpense = hasActual
+                ? CashService.GetClubExpenseTotalByPeriod(previous.StartInclusive, previous.EndExclusive) : 0;
+            var games = CashService.Records.Where(record => record.Category == "Игры" &&
+                    CashService.GetBusinessTime(record) >= month.StartInclusive &&
+                    CashService.GetBusinessTime(record) < month.EndExclusive)
+                .GroupBy(record => BusinessCalendarService.GetBusinessDate(CashService.GetBusinessTime(record))
+                    .ToString("yyyy-MM-dd"))
+                .ToDictionary(group => group.Key, group => group.Sum(record => record.Amount));
+            return new(hasActual, monthlyExpense, previous.Key, games);
+        }
+
 
         internal static Dictionary<string, int> BuildSalaryByDay(
             IReadOnlyDictionary<string, List<AutoSalaryDayEarning>> dailyEarningsByEmployee)
@@ -258,38 +143,6 @@ namespace ClubTimerXbox.Services
             return BusinessCalendarService.GetBusinessDay(now).StartInclusive;
         }
 
-        private static void AddTimelinePoint(FinancialPaceDaySnapshot day)
-        {
-            if (!_state.OpenDayTimelines.TryGetValue(day.BusinessDateKey, out var timeline))
-            {
-                timeline = new List<FinancialPacePoint>();
-                _state.OpenDayTimelines[day.BusinessDateKey] = timeline;
-            }
-
-            FinancialPacePoint? previous = timeline.LastOrDefault();
-            bool valuesChanged = previous == null ||
-                                 previous.GameRevenue != day.GameRevenue ||
-                                 previous.TotalExpense != day.TotalExpense;
-            bool intervalElapsed = previous == null ||
-                                   day.CalculatedAt - previous.CreatedAt >= TimeSpan.FromMinutes(15);
-            if (!valuesChanged && !intervalElapsed)
-                return;
-
-            timeline.Add(new FinancialPacePoint
-            {
-                CreatedAt = day.CalculatedAt,
-                GameRevenue = day.GameRevenue,
-                FixedExpenseAccrued = day.FixedExpenseAccrued,
-                SalaryAccrued = day.SalaryAccrued,
-                TotalExpense = day.TotalExpense,
-                Difference = day.Difference,
-                Percent = day.Percent
-            });
-            if (timeline.Count > 400)
-                timeline.RemoveRange(0, timeline.Count - 400);
-            day.Timeline = timeline.Select(Clone).ToList();
-            Save();
-        }
 
         private static FinancialPaceState Normalize(FinancialPaceState state)
         {
@@ -301,46 +154,6 @@ namespace ClubTimerXbox.Services
             return state;
         }
 
-        private static FinancialPaceDaySnapshot Clone(FinancialPaceDaySnapshot source)
-        {
-            return new FinancialPaceDaySnapshot
-            {
-                BusinessDateKey = source.BusinessDateKey,
-                BusinessMonthKey = source.BusinessMonthKey,
-                StartInclusive = source.StartInclusive,
-                EndExclusive = source.EndExclusive,
-                CalculatedAt = source.CalculatedAt,
-                IsClosed = source.IsClosed,
-                HasExpenseBaseline = source.HasExpenseBaseline,
-                ExpenseSourceType = source.ExpenseSourceType,
-                ExpenseSourceMonthKey = source.ExpenseSourceMonthKey,
-                MonthlyFixedExpense = source.MonthlyFixedExpense,
-                DailyFixedExpense = source.DailyFixedExpense,
-                FixedExpenseAccrued = source.FixedExpenseAccrued,
-                SalaryAccrued = source.SalaryAccrued,
-                TotalExpense = source.TotalExpense,
-                GameRevenue = source.GameRevenue,
-                Difference = source.Difference,
-                Percent = source.Percent,
-                OverNormPortionCount = source.OverNormPortionCount,
-                RecognitionAdjustments = source.RecognitionAdjustments?.ToList() ?? new(),
-                Timeline = source.Timeline?.Select(Clone).ToList() ?? new List<FinancialPacePoint>()
-            };
-        }
-
-        private static FinancialPacePoint Clone(FinancialPacePoint source)
-        {
-            return new FinancialPacePoint
-            {
-                CreatedAt = source.CreatedAt,
-                GameRevenue = source.GameRevenue,
-                FixedExpenseAccrued = source.FixedExpenseAccrued,
-                SalaryAccrued = source.SalaryAccrued,
-                TotalExpense = source.TotalExpense,
-                Difference = source.Difference,
-                Percent = source.Percent
-            };
-        }
 
         private static DateTime Min(DateTime first, DateTime second) =>
             first <= second ? first : second;

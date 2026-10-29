@@ -42,6 +42,7 @@ namespace ClubTimerXbox.Services
 
         public static void Save(List<Employee> employees)
         {
+            FinancialInputRevision.Changed();
             Directory.CreateDirectory(FolderPath);
             Normalize(employees);
 
@@ -57,6 +58,7 @@ namespace ClubTimerXbox.Services
 
         public static void Clear()
         {
+            FinancialInputRevision.Changed();
             try
             {
                 if (File.Exists(FilePath))

@@ -598,6 +598,7 @@ namespace ClubTimerXbox.Services
 
         private static void Save()
         {
+            FinancialInputRevision.Changed();
             Directory.CreateDirectory(FolderPath);
             AtomicFileStorageService.WriteAllText(
                 FilePath,

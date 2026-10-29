@@ -224,6 +224,21 @@ namespace ClubTimerXbox.Services
                 .ToList();
         }
 
+        internal sealed record JournalSeed(List<EmployeeJournalInfo> Shifts,
+            List<EmployeeJournalInfo> Cash, List<EmployeeJournalInfo> Losses);
+
+        internal static JournalSeed CaptureJournalSeed(string employeeName, DateTime monthStart)
+        {
+            var month = BusinessCalendarService.GetBusinessMonthByAnchor(monthStart);
+            var shifts = new List<EmployeeJournalInfo>();
+            var cash = new List<EmployeeJournalInfo>();
+            var losses = new List<EmployeeJournalInfo>();
+            AddShiftJournal(employeeName, month.StartInclusive, month.EndExclusive, shifts);
+            AddCashJournal(employeeName, month.StartInclusive, month.EndExclusive, cash);
+            AddShortageJournal(employeeName, month.StartInclusive, month.EndExclusive, losses);
+            return new JournalSeed(shifts, cash, losses);
+        }
+
         private static void AddShiftJournal(
             string employeeName,
             DateTime fromInclusive,
@@ -291,6 +306,18 @@ namespace ClubTimerXbox.Services
                     paymentAttributedSessionIds.Add(sessionId);
             }
 
+            AddGameSessionJournal(employeeName, fromInclusive, toExclusive, result,
+                sessions, paymentAttributedSessionIds);
+        }
+
+        internal static void AddGameSessionJournal(
+            string employeeName,
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            List<EmployeeJournalInfo> result,
+            IEnumerable<GameSessionLogItem> sessions,
+            IReadOnlySet<Guid> paymentAttributedSessionIds)
+        {
             foreach (var session in sessions)
             {
                 if (session.StartedByEmployeeName == employeeName &&

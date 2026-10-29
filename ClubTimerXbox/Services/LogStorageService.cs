@@ -50,6 +50,7 @@ namespace ClubTimerXbox.Services
             List<ShiftLogItem> shifts,
             List<GameSessionLogItem> gameSessions)
         {
+            FinancialInputRevision.Changed();
             lock (Sync)
             {
                 Directory.CreateDirectory(LogsFolderPath);

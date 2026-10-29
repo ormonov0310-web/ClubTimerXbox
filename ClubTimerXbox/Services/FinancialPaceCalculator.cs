@@ -7,6 +7,36 @@ namespace ClubTimerXbox.Services
 {
     public static class FinancialPaceCalculator
     {
+        internal static FinancialPaceDaySnapshot CalculateDay(
+            DateTime dayStart, DateTime dayEnd, DateTime now, int salaryAccrued, int games,
+            int monthlyExpense, string sourceType, string sourceMonthKey,
+            IEnumerable<FinancialPacePoint> timeline)
+        {
+            DateTime calculationTime = now <= dayEnd ? now : dayEnd;
+            bool hasBaseline = monthlyExpense > 0;
+            int dailyExpense = hasBaseline ? (int)Math.Round(monthlyExpense / 30.0) : 0;
+            int fixedAccrued = CalculateFixedExpenseAccrued(dailyExpense, dayStart, calculationTime);
+            int totalExpense = fixedAccrued + Math.Max(0, salaryAccrued);
+            return new FinancialPaceDaySnapshot
+            {
+                BusinessDateKey = dayStart.ToString("yyyy-MM-dd"),
+                BusinessMonthKey = BusinessCalendarService.GetBusinessMonth(dayStart).Key,
+                StartInclusive = dayStart, EndExclusive = dayEnd, CalculatedAt = calculationTime,
+                IsClosed = now >= dayEnd, HasExpenseBaseline = hasBaseline,
+                ExpenseSourceType = sourceType, ExpenseSourceMonthKey = sourceMonthKey,
+                MonthlyFixedExpense = monthlyExpense, DailyFixedExpense = dailyExpense,
+                FixedExpenseAccrued = fixedAccrued, SalaryAccrued = Math.Max(0, salaryAccrued),
+                TotalExpense = totalExpense, GameRevenue = games, Difference = games - totalExpense,
+                Percent = hasBaseline ? CalculatePercent(games, totalExpense) : 0,
+                Timeline = timeline.Select(point => new FinancialPacePoint
+                {
+                    CreatedAt = point.CreatedAt, GameRevenue = point.GameRevenue,
+                    FixedExpenseAccrued = point.FixedExpenseAccrued, SalaryAccrued = point.SalaryAccrued,
+                    TotalExpense = point.TotalExpense, Difference = point.Difference, Percent = point.Percent
+                }).ToList()
+            };
+        }
+
         public static int CalculateFixedExpenseAccrued(
             int dailyExpense,
             DateTime businessDayStart,

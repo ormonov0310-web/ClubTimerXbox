@@ -40,6 +40,7 @@ namespace ClubTimerXbox.Services
 
         public static void Save(ShiftAcceptanceStatus status)
         {
+            FinancialInputRevision.Changed();
             Directory.CreateDirectory(FolderPath);
 
             var options = new JsonSerializerOptions
@@ -54,6 +55,7 @@ namespace ClubTimerXbox.Services
 
         public static void Clear()
         {
+            FinancialInputRevision.Changed();
             try
             {
                 if (File.Exists(FilePath))

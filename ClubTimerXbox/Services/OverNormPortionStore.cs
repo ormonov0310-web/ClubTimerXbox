@@ -18,6 +18,38 @@ internal sealed class OverNormPortionStore
     private readonly string _clubId;
     private readonly object _gate = new();
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
+    [ThreadStatic] private static Dictionary<OverNormPortionStore, ReadBatch>? _readBatches;
+    internal long DiskReadCount { get; private set; }
+
+    private sealed class ReadBatch
+    {
+        public int Depth;
+        public OverNormPortionState? State;
+        public (long Length, DateTime WriteTime) Stamp;
+    }
+
+    // Synchronous calculation scope only; never inherited by a worker or kept across await.
+    internal IDisposable BeginReadBatch()
+    {
+        _readBatches ??= new();
+        if (!_readBatches.TryGetValue(this, out var batch))
+            _readBatches.Add(this, batch = new());
+        batch.Depth++;
+        return new BatchLease(this, Environment.CurrentManagedThreadId);
+    }
+
+    private sealed class BatchLease(OverNormPortionStore store, int threadId) : IDisposable
+    {
+        private bool _disposed;
+        public void Dispose()
+        {
+            if (_disposed) return;
+            if (Environment.CurrentManagedThreadId != threadId)
+                throw new InvalidOperationException("A portion read batch cannot cross threads or await.");
+            _disposed = true;
+            if (--_readBatches![store].Depth == 0) _readBatches.Remove(store);
+        }
+    }
 
     public OverNormPortionStore(string path, string clubId, DateTime activatedAt)
     {
@@ -37,7 +69,7 @@ internal sealed class OverNormPortionStore
     public List<OverNormPortionDay> ReadDays(DateTime from, DateTime to)
     {
         lock (_gate)
-            return Load().Days.Values.Where(day => day.Start >= from && day.Start < to).ToList();
+            return Load().Days.Values.Where(day => day.Start >= from && day.Start < to).Select(Clone).ToList();
     }
 
     public OverNormPortionDay? GetDay(DateTime start, DateTime now, int norm, int percent,
@@ -45,23 +77,38 @@ internal sealed class OverNormPortionStore
     {
         lock (_gate)
         {
-            var state = Load();
-            if (start < state.EffectiveFrom) return null;
-            string key = OverNormPortionEngine.DayKey(start);
-            state.Days.TryGetValue(key, out var day);
-            if (readOnly || start > now) return day ?? new OverNormPortionDay { Start = start };
-            string before = JsonSerializer.Serialize(day, Json);
-            day ??= new OverNormPortionDay { Start = start, Norm = norm, Percent = percent };
-            OverNormPortionEngine.Accrue(day, now, revenue, work);
-            state.Days[key] = day;
-            if (JsonSerializer.Serialize(day, Json) != before) Save(state);
-            return day;
+            try
+            {
+                var state = Load();
+                if (start < state.EffectiveFrom) return null;
+                string key = OverNormPortionEngine.DayKey(start);
+                state.Days.TryGetValue(key, out var day);
+                if (readOnly || start > now) return day == null ? new() { Start = start } : Clone(day);
+                string before = JsonSerializer.Serialize(day, Json);
+                day ??= new OverNormPortionDay { Start = start, Norm = norm, Percent = percent };
+                OverNormPortionEngine.Accrue(day, now, revenue, work);
+                state.Days[key] = day;
+                if (JsonSerializer.Serialize(day, Json) != before) Save(state);
+                return Clone(day);
+            }
+            catch
+            {
+                // Failed accrual/save must not leave a partially changed in-memory ledger.
+                if (_readBatches?.TryGetValue(this, out var batch) == true) batch.State = null;
+                throw;
+            }
         }
     }
 
     private OverNormPortionState Load()
     {
+        ReadBatch? batch = null;
+        if (_readBatches?.TryGetValue(this, out batch) == true && batch.State != null &&
+            batch.Stamp == Stamp()) return batch.State;
+        using var measurement = SnapshotBuildMeasurements.Measure("portion.load");
+        var beforeRead = Stamp();
         // Financial state corruption must never silently switch back to the old formula.
+        DiskReadCount++;
         var state = JsonSerializer.Deserialize<OverNormPortionState>(File.ReadAllText(_path))
             ?? throw new InvalidDataException("Missing portion bonus ledger.");
         if (state.Schema != 1 || state.ClubId != _clubId || state.Days == null ||
@@ -92,9 +139,46 @@ internal sealed class OverNormPortionStore
                     throw new InvalidDataException("Invalid portion share rounding.");
             }
         }
+        if (beforeRead != Stamp()) throw new IOException("Portion ledger changed while being read.");
+        if (batch != null)
+        {
+            batch.State = state;
+            batch.Stamp = beforeRead;
+        }
         return state;
     }
 
-    private void Save(OverNormPortionState state) =>
+    private (long Length, DateTime WriteTime) Stamp()
+    {
+        var file = new FileInfo(_path);
+        return (file.Length, file.LastWriteTimeUtc);
+    }
+
+    private void Save(OverNormPortionState state)
+    {
+        FinancialInputRevision.Changed();
         AtomicFileStorageService.WriteAllText(_path, JsonSerializer.Serialize(state, Json));
+        if (_readBatches?.TryGetValue(this, out var batch) == true)
+        {
+            batch.State = state;
+            batch.Stamp = Stamp();
+        }
+    }
+
+    internal static OverNormPortionDay Clone(OverNormPortionDay day) => new()
+    {
+        Start = day.Start, Norm = day.Norm, Percent = day.Percent, Revenue = day.Revenue,
+        WaitingPortions = day.WaitingPortions, RevenueBelowAwardedThreshold = day.RevenueBelowAwardedThreshold,
+        Portions = day.Portions.Select(portion => new OverNormPortion
+        {
+            Number = portion.Number, AllocatedAt = portion.AllocatedAt, RecordedAt = portion.RecordedAt,
+            Fund = portion.Fund, UncreditedAmount = portion.UncreditedAmount,
+            RevenueRecordIds = portion.RevenueRecordIds.ToList(),
+            Shares = portion.Shares.Select(share => new OverNormPortionShare
+            {
+                EmployeeId = share.EmployeeId, EmployeeName = share.EmployeeName,
+                WorkedTicks = share.WorkedTicks, Amount = share.Amount
+            }).ToList()
+        }).ToList()
+    };
 }

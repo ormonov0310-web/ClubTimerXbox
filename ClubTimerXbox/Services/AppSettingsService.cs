@@ -20,6 +20,7 @@ namespace ClubTimerXbox.Services
 
         public static void Save(ClubSettings settings)
         {
+            FinancialInputRevision.Changed();
             Current = settings;
             SaveToFile(settings);
         }
