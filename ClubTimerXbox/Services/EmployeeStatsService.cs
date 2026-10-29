@@ -269,6 +269,27 @@ namespace ClubTimerXbox.Services
             List<EmployeeJournalInfo> result)
         {
             var sessions = ActionLogService.GetAllGameSessions();
+            AddGameSessionJournal(employeeName, fromInclusive, toExclusive, result,
+                sessions, CashService.Records);
+        }
+
+        internal static void AddGameSessionJournal(
+            string employeeName,
+            DateTime fromInclusive,
+            DateTime toExclusive,
+            List<EmployeeJournalInfo> result,
+            IEnumerable<GameSessionLogItem> sessions,
+            IEnumerable<CashRecord> cashRecords)
+        {
+            // Payment attribution spans employees/months; only index the original predicate.
+            var paymentAttributedSessionIds = new HashSet<Guid>();
+            foreach (var record in cashRecords)
+            {
+                if (record.Type == CashRecordType.GameSession &&
+                    record.GameSessionId is Guid sessionId &&
+                    record.PaymentRecordId.HasValue)
+                    paymentAttributedSessionIds.Add(sessionId);
+            }
 
             foreach (var session in sessions)
             {
@@ -306,10 +327,7 @@ namespace ClubTimerXbox.Services
                     });
                 }
 
-                bool hasPaymentAttributedGameIncome = CashService.Records.Any(record =>
-                    record.Type == CashRecordType.GameSession &&
-                    record.GameSessionId == session.Id &&
-                    record.PaymentRecordId.HasValue);
+                bool hasPaymentAttributedGameIncome = paymentAttributedSessionIds.Contains(session.Id);
                 if (!hasPaymentAttributedGameIncome &&
                     session.IncomeEmployeeName == employeeName &&
                     session.IsClosed &&

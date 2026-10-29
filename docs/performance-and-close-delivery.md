@@ -1,5 +1,37 @@
 # Local performance and normal-close delivery
 
+## Employee journal lookup, October28
+
+The October28 diagnostic tables identify repeated CashService.Records.Any in
+EmployeeStatsService.AddGameSessionJournal during a full UI-thread snapshot build.
+This is separate from the JSON encoding optimization in1.6.0. One observed build
+took9958ms; the report attributes about6766ms of reconstructed sampled thread-time
+to this Any leaf. Those samples are not exact kernel CPU time or call counts.
+
+The local fix constructs a HashSet of payment-attributed game-session IDs once
+per game-journal invocation,then performs membership lookups. The predicate is
+unchanged:GameSession type,matching non-null session ID and present PaymentRecordId,
+including Guid.Empty. It does not filter the index by employee,date,amount,payment
+channel or closed state. Existing employee/month checks and all rows/order remain
+in their original locations. The set is rebuilt each time;no global stale cache.
+No financial service was moved to a worker thread.
+
+An internal explicit-input overload permits pure fixture tests without opening
+the application or initializing live stores. Tests compare all ordered row fields
+and totals against the frozen1.6.0 implementation,cover enum/null/empty IDs,
+duplicates,signed amounts,employees,month boundaries,sale/extra rows,randomized
+inputs and successive changes. A counted enumerable asserts one cash traversal.
+The4638-session/7377-record synthetic single-journal measurement was24.942ms
+before and15.282ms after on this home machine,not club UI latency or a prediction
+that the complete9.96s freeze is solved.
+
+Focused journal checks,57 cash checks,cash-summary fixture checks and normal
+Release project/solution builds pass. No windows were opened for these checks;
+the owner is remote and another person uses the home PC. The full visual suite,
+real-club responsiveness and shorter overview/OverNormPortionStore pauses remain
+unverified. This is a local pending change,not a published update.
+No Firebase request,listener,interval,payload schema or retry rule was changed.
+
 ## Cash headline
 
 The once-per-second headline does not need detailed report rows. CashReportService

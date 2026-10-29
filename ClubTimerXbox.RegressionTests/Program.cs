@@ -4,6 +4,12 @@ using ClubTimerXbox.Services;
 using ClubTimerUpdater;
 using System.Text.Json;
 
+if (args.Contains("--journal-performance", StringComparer.OrdinalIgnoreCase))
+{
+    EmployeeJournalPerformanceTests.Run(benchmark: true);
+    return;
+}
+
 if (args.Contains("--snapshot-ui-idle", StringComparer.OrdinalIgnoreCase))
 {
     SnapshotPipelinePerformanceTests.MeasureUiIdle();
@@ -96,6 +102,7 @@ new ClubLoanTests().Run();
 ClubCloseTests.Run();
 NumericInputTests.Run();
 CashReportPerformanceTests.Run();
+EmployeeJournalPerformanceTests.Run();
 ClubClosedDeliveryTests.Run();
 SnapshotPipelinePerformanceTests.Run();
 
