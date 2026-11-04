@@ -135,7 +135,8 @@ namespace ClubTimerXbox
             {
                 Text = title,
                 Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
-                FontSize = 14
+                FontSize = 14,
+                TextWrapping = TextWrapping.Wrap
             });
 
             valueText.Foreground = Brushes.White;

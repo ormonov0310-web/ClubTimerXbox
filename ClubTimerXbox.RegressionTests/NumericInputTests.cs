@@ -513,7 +513,7 @@ internal static class NumericInputTests
                 Rect bounds = confirm.TransformToAncestor(scroll).TransformBounds(new Rect(confirm.RenderSize));
                 True(bounds.Top >= 0 && bounds.Bottom <= scroll.ActualHeight + 1,
                     "fine confirmation must remain reachable at minimum width and scaled content");
-                foreach (var text in Descendants(window).OfType<TextBlock>().Where(text => text.Text.Length > 30))
+                foreach (var text in Descendants(window).OfType<TextBlock>().Where(text => text.Text.Length > 15))
                     True(text.TextWrapping == TextWrapping.Wrap && text.DesiredSize.Width <= text.ActualWidth + 1,
                         "long fine text clipped instead of wrapping");
                 Capture(window, $"penalty-{open}-{scale}");
