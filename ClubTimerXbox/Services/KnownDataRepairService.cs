@@ -87,6 +87,7 @@ namespace ClubTimerXbox.Services
                 ApplyCashCorrectionRepair();
                 ApplyTelecomSalaryRepair(identity.InstallationId);
                 ApplyTelecomMirroredCorrectionRepair(identity.InstallationId);
+                CashReconciliationService.TryRepairKnownCashlessLoan();
             }
 
             if (clubId.Equals(EmployeeRenameClubId, StringComparison.OrdinalIgnoreCase))

@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   publish:
-    if: startsWith(github.ref, 'refs/tags/v') || contains(github.event.head_commit.message, '[publish-latest-tag]')
     runs-on: windows-latest
 
     steps:
@@ -22,6 +21,7 @@ jobs:
           fetch-depth: 0
 
       - name: Resolve release tag
+        if: startsWith(github.ref, 'refs/tags/v') || contains(github.event.head_commit.message, '[publish-latest-tag]')
         id: release
         shell: pwsh
         run: |
@@ -46,11 +46,22 @@ jobs:
 
       - name: Validate release regressions
         shell: pwsh
+        env:
+          CLUBTIMER_TEST_ARTIFACTS: ${{ runner.temp }}/clubtimer-test-artifacts
         run: |
           dotnet run --project ClubTimerXbox.RegressionTests -c Release
           if ($LASTEXITCODE -ne 0) { throw "Release regressions failed" }
 
+      - name: Save UI test renders
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: numeric-input-renders
+          path: ${{ runner.temp }}/clubtimer-test-artifacts
+          if-no-files-found: ignore
+
       - name: Package verified release
+        if: steps.release.outputs.version != ''
         shell: pwsh
         run: |
           $version = "${{ steps.release.outputs.version }}"
@@ -65,6 +76,7 @@ jobs:
             -SelfContained
 
       - name: Publish GitHub release
+        if: steps.release.outputs.version != ''
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

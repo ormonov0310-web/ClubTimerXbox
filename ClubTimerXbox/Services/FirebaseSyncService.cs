@@ -5063,22 +5063,8 @@ namespace ClubTimerXbox.Services
             if (fromExclusive == default || toInclusive <= fromExclusive)
                 return Math.Max(0, amount);
 
-            int income = PaymentService.Records
-                .Where(record =>
-                    record.CreatedAt > fromExclusive &&
-                    record.CreatedAt <= toInclusive)
-                .Sum(record => record.MBankAmount);
-            int expenses = CashService.Records
-                .Where(record =>
-                    record.CreatedAt > fromExclusive &&
-                    record.CreatedAt <= toInclusive &&
-                    record.Type == CashRecordType.Expense &&
-                    record.PaymentMethod.Equals(
-                        "Безнал",
-                        StringComparison.OrdinalIgnoreCase))
-                .Sum(record => record.Amount);
-
-            return Math.Max(0, amount + income - expenses);
+            return CashlessVerificationBalancePolicy.Calculate(amount, PaymentService.Records,
+                CashService.Records, fromExclusive, toInclusive, includeTo: true);
         }
 
         private static DateTime? GetLatestCashlessVerificationTime(
@@ -5140,25 +5126,8 @@ namespace ClubTimerXbox.Services
             if (latestActual == null || !latestActual.ExpectedAmount.HasValue)
                 return Math.Max(0, fallbackExpectedCashless);
 
-            int incomeAfterLatestActual = PaymentService.Records
-                .Where(record =>
-                    record.CreatedAt > latestActual.UpdatedAt &&
-                    record.CreatedAt < nextMonthStart)
-                .Sum(record => record.MBankAmount);
-            int expensesAfterLatestActual = CashService.Records
-                .Where(record =>
-                    record.CreatedAt > latestActual.UpdatedAt &&
-                    record.CreatedAt < nextMonthStart &&
-                    record.Type == CashRecordType.Expense &&
-                    record.PaymentMethod.Equals("Безнал", StringComparison.OrdinalIgnoreCase))
-                .Sum(record => record.Amount);
-
-            return Math.Max(
-                0,
-                latestActual.ExpectedAmount.Value +
-                incomeAfterLatestActual -
-                expensesAfterLatestActual
-            );
+            return CashlessVerificationBalancePolicy.Calculate(latestActual.ExpectedAmount.Value,
+                PaymentService.Records, CashService.Records, latestActual.UpdatedAt, nextMonthStart);
         }
 
         private static int CalculateExpectedCashlessBalanceForObservation(
@@ -5176,23 +5145,8 @@ namespace ClubTimerXbox.Services
             if (latestActual == null)
                 return Math.Max(0, fallbackExpectedCashless);
 
-            int incomeAfterLatestActual = PaymentService.Records
-                .Where(record =>
-                    record.CreatedAt > latestActual.UpdatedAt &&
-                    record.CreatedAt < nextMonthStart)
-                .Sum(record => record.MBankAmount);
-            int expensesAfterLatestActual = CashService.Records
-                .Where(record =>
-                    record.CreatedAt > latestActual.UpdatedAt &&
-                    record.CreatedAt < nextMonthStart &&
-                    record.Type == CashRecordType.Expense &&
-                    record.PaymentMethod.Equals("Безнал", StringComparison.OrdinalIgnoreCase))
-                .Sum(record => record.Amount);
-
-            return Math.Max(
-                0,
-                latestActual.Amount + incomeAfterLatestActual - expensesAfterLatestActual
-            );
+            return CashlessVerificationBalancePolicy.Calculate(latestActual.Amount,
+                PaymentService.Records, CashService.Records, latestActual.UpdatedAt, nextMonthStart);
         }
 
         private static string ApplyBalanceCashlessActual(

@@ -21,6 +21,7 @@ internal static class NumericInputTests
 
     public static void Run(string? output = null)
     {
+        output ??= Environment.GetEnvironmentVariable("CLUBTIMER_TEST_ARTIFACTS");
         Exception? failure = null;
         var thread = new Thread(() =>
         {
@@ -48,6 +49,7 @@ internal static class NumericInputTests
                 Check("flexible time initially focuses amount, not minutes", FlexibleAmountFocus);
                 Check("Enter clicks the confirmation once and respects validation", EnterConfirmation);
                 Check("KKM Enter confirms the same150 split without posting cash", CheckoutEnter);
+                Check("session penalty dialogs preserve editing, validation and adaptive layout", PenaltyDialogs);
             }
             catch (Exception error) { failure = error; }
         });
@@ -441,6 +443,85 @@ internal static class NumericInputTests
         Equal(CashCheckoutResultType.Paid, window.ResultType);
         Equal(100, window.PaymentRecord!.CashAmount);
         Equal(50, window.PaymentRecord.MBankAmount);
+    }
+
+    private static void PenaltyDialogs()
+    {
+        using var clipboard = new ClipboardFixture();
+        foreach (bool open in new[] { false, true })
+        {
+            var place = new ClubPlace
+            {
+                Name = "Телевизор с очень длинным названием для проверки переноса текста",
+                IsBusy = true, IsOpenMode = open, ActivePricePerMinute = 2,
+                RemainingSeconds = 3600, PaidAmount = open ? 0 : 120,
+                StartTime = DateTime.Now.AddSeconds(-599)
+            };
+            string before = System.Text.Json.JsonSerializer.Serialize(place);
+            var window = new PenaltyWindow(place) { Width = 360 };
+            using var host = Show(window);
+            var input = Descendants(window).OfType<TextBox>().Single();
+            var confirm = Descendants(window).OfType<Button>().Single(button => button.IsDefault);
+            Equal("5", input.Text);
+            True(window is AdaptiveDialogWindow && window.SizeToContent == SizeToContent.Height,
+                "fine dialog must use adaptive shell");
+            True(Descendants(window).OfType<TextBlock>().Any(text =>
+                text.Text == (open ? "К оплате после штрафа" : "Останется времени")), "wrong mode preview label");
+            if (open) True(!Descendants(window).OfType<TextBlock>().Any(text => text.Text.Contains("Оплачено:")),
+                "open mode must not pretend prepayment");
+            foreach (string text in new[] { "1", "123" })
+            {
+                Clear(input);
+                Type(input, text);
+                Equal(text, input.Text);
+                True(confirm.IsEnabled, "valid typed fine disabled");
+                Paste(input, text, clipboard);
+                Equal(text, input.Text);
+                True(confirm.IsEnabled, "valid pasted fine disabled");
+            }
+            Clear(input);
+            True(HintVisible(input) && !confirm.IsEnabled, "empty minutes must show hint without accepting zero");
+            confirm.Focus();
+            input.Focus();
+            Drain();
+            Equal("", input.Text);
+            Type(input, "0");
+            Equal("0", input.Text);
+            True(!HintVisible(input) && !confirm.IsEnabled, "explicit zero must remain real but invalid minutes");
+            foreach (string text in new[] { "-1", "1.5", "2147483648", "2147483647" })
+            {
+                Paste(input, text, clipboard);
+                Equal(text, input.Text);
+                True(!confirm.IsEnabled, "invalid fine enabled");
+            }
+            Paste(input, "5", clipboard);
+            confirm.Focus();
+            input.Focus();
+            Drain();
+            Equal("5", input.Text);
+            Equal(before, System.Text.Json.JsonSerializer.Serialize(place));
+            foreach (double scale in new[] { 1.0, 1.5, 2.0 })
+            {
+                var scroll = (ScrollViewer)window.Content;
+                ((FrameworkElement)scroll.Content).LayoutTransform = new ScaleTransform(scale, scale);
+                window.Height = Math.Min(420, window.MaxHeight);
+                window.SizeToContent = SizeToContent.Manual;
+                Drain();
+                window.UpdateLayout();
+                scroll.ScrollToEnd();
+                Drain();
+                Rect bounds = confirm.TransformToAncestor(scroll).TransformBounds(new Rect(confirm.RenderSize));
+                True(bounds.Top >= 0 && bounds.Bottom <= scroll.ActualHeight + 1,
+                    "fine confirmation must remain reachable at minimum width and scaled content");
+                foreach (var text in Descendants(window).OfType<TextBlock>().Where(text => text.Text.Length > 30))
+                    True(text.TextWrapping == TextWrapping.Wrap && text.DesiredSize.Width <= text.ActualWidth + 1,
+                        "long fine text clipped instead of wrapping");
+                Capture(window, $"penalty-{open}-{scale}");
+                scroll.ScrollToTop();
+                Drain();
+                Capture(window, $"penalty-{open}-{scale}-top");
+            }
+        }
     }
 
     private static void Enter(UIElement input)

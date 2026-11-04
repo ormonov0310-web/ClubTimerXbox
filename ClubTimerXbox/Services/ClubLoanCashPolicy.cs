@@ -67,8 +67,9 @@ internal static class ClubLoanCashPolicy
     }
 
     public static int NetOut(IEnumerable<CashRecord> records, string method,
-        DateTime from, DateTime to, bool includeFrom = false) => records
+        DateTime from, DateTime to, bool includeFrom = false, bool includeTo = false) => records
         .Where(item => IsMovement(item) && item.PaymentMethod == method &&
-            (includeFrom ? item.CreatedAt >= from : item.CreatedAt > from) && item.CreatedAt < to)
+            (includeFrom ? item.CreatedAt >= from : item.CreatedAt > from) &&
+            (includeTo ? item.CreatedAt <= to : item.CreatedAt < to))
         .Sum(item => item.Type == CashRecordType.ClubLoanIssued ? item.Amount : -item.Amount);
 }

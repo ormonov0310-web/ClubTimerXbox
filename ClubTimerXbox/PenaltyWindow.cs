@@ -7,31 +7,22 @@ using ClubTimerXbox.Services;
 
 namespace ClubTimerXbox
 {
-    public class PenaltyWindow : Window
+    public class PenaltyWindow : AdaptiveDialogWindow
     {
         public int PenaltyMinutes { get; private set; }
 
         private readonly ClubPlace _place;
         private readonly TextBox _minutesTextBox = new TextBox();
         private readonly TextBlock _newTimeText = new TextBlock();
+        private readonly TextBlock _currentInfoText = new TextBlock();
+        private readonly Button _okButton = new Button();
 
-        public PenaltyWindow(ClubPlace place)
+        public PenaltyWindow(ClubPlace place) : base(540, 360)
         {
             _place = place;
 
             Title = "Добавить штраф";
-            Width = 540;
-            Height = 500;
-            MinWidth = 500;
-            MinHeight = 460;
-            WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            Background = new SolidColorBrush(Color.FromRgb(16, 20, 28));
-
-            Content = new ScrollViewer
-            {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Content = CreateContent()
-            };
+            SetAdaptiveContent(CreateContent());
 
             UpdateCalculation();
         }
@@ -49,22 +40,13 @@ namespace ClubTimerXbox
                 Foreground = Brushes.White,
                 FontSize = 26,
                 FontWeight = FontWeights.Bold,
-                Margin = new Thickness(0, 0, 0, 14)
-            });
-
-            root.Children.Add(new TextBlock
-            {
-                Text = "Штраф уменьшает оставшееся время, но не увеличивает оплаченную сумму. Например: оплатил 120 сом, штраф 5 минут — время уменьшилось на 5 минут, но оплачено осталось 120 сом.",
-                Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
-                FontSize = 15,
                 TextWrapping = TextWrapping.Wrap,
-                LineHeight = 23,
-                Margin = new Thickness(0, 0, 0, 20)
+                Margin = new Thickness(0, 0, 0, 14)
             });
 
             root.Children.Add(CreateCurrentInfoCard());
             root.Children.Add(CreateMinutesRow());
-            root.Children.Add(CreateInfoCard("Останется времени", _newTimeText));
+            root.Children.Add(CreateInfoCard(_place.IsOpenMode ? "К оплате после штрафа" : "Останется времени", _newTimeText));
             root.Children.Add(CreateButtonsPanel());
 
             return root;
@@ -81,22 +63,18 @@ namespace ClubTimerXbox
                 FontSize = 14
             });
 
-            panel.Children.Add(new TextBlock
-            {
-                Text =
-                    $"Осталось: {TariffService.FormatTime(_place.RemainingSeconds)}\n" +
-                    $"Оплачено: {_place.PaidAmount} сом",
-                Foreground = Brushes.White,
-                FontSize = 18,
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 6, 0, 0),
-                LineHeight = 27
-            });
+            _currentInfoText.Foreground = Brushes.White;
+            _currentInfoText.FontSize = 18;
+            _currentInfoText.FontWeight = FontWeights.SemiBold;
+            _currentInfoText.Margin = new Thickness(0, 6, 0, 0);
+            _currentInfoText.LineHeight = 27;
+            _currentInfoText.TextWrapping = TextWrapping.Wrap;
+            panel.Children.Add(_currentInfoText);
 
             return new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(24, 32, 43)),
-                CornerRadius = new CornerRadius(14),
+                CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(16),
                 Margin = new Thickness(0, 0, 0, 14),
                 Child = panel
@@ -105,30 +83,23 @@ namespace ClubTimerXbox
 
         private UIElement CreateMinutesRow()
         {
-            var grid = new Grid
+            var panel = new StackPanel
             {
                 Margin = new Thickness(0, 0, 0, 16)
             };
-
-            grid.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(1, GridUnitType.Star)
-            });
-
-            grid.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(170)
-            });
 
             var label = new TextBlock
             {
                 Text = "Штраф, минут",
                 Foreground = Brushes.White,
                 FontSize = 18,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 6),
                 VerticalAlignment = VerticalAlignment.Center
             };
 
             _minutesTextBox.Text = "5";
+            NumericInputHint.Apply(_minutesTextBox, "Штраф, минут");
             _minutesTextBox.FontSize = 20;
             _minutesTextBox.Height = 42;
             _minutesTextBox.Padding = new Thickness(10, 5, 10, 5);
@@ -142,13 +113,7 @@ namespace ClubTimerXbox
                 if (int.TryParse(_minutesTextBox.Text.Trim(), out int parsed))
                     current = parsed;
 
-                if (e.Delta > 0)
-                    current++;
-                else
-                    current--;
-
-                if (current < 1)
-                    current = 1;
+                current = (int)System.Math.Clamp((long)current + (e.Delta > 0 ? 1 : -1), 1, int.MaxValue);
 
                 _minutesTextBox.Text = current.ToString();
                 _minutesTextBox.CaretIndex = _minutesTextBox.Text.Length;
@@ -156,13 +121,10 @@ namespace ClubTimerXbox
                 e.Handled = true;
             };
 
-            Grid.SetColumn(label, 0);
-            Grid.SetColumn(_minutesTextBox, 1);
+            panel.Children.Add(label);
+            panel.Children.Add(_minutesTextBox);
 
-            grid.Children.Add(label);
-            grid.Children.Add(_minutesTextBox);
-
-            return grid;
+            return panel;
         }
 
         private Border CreateInfoCard(string title, TextBlock valueText)
@@ -180,13 +142,14 @@ namespace ClubTimerXbox
             valueText.FontSize = 24;
             valueText.FontWeight = FontWeights.Bold;
             valueText.Margin = new Thickness(0, 5, 0, 0);
+            valueText.TextWrapping = TextWrapping.Wrap;
 
             panel.Children.Add(valueText);
 
             return new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(24, 32, 43)),
-                CornerRadius = new CornerRadius(14),
+                CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(16),
                 Margin = new Thickness(0, 0, 0, 12),
                 Child = panel
@@ -197,18 +160,16 @@ namespace ClubTimerXbox
         {
             var buttonsPanel = new StackPanel
             {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right,
+                Orientation = Orientation.Vertical,
                 Margin = new Thickness(0, 18, 0, 0)
             };
 
             var cancelButton = new Button
             {
                 Content = "Отмена",
-                Width = 120,
                 Height = 44,
                 FontSize = 16,
-                Margin = new Thickness(0, 0, 10, 0)
+                Margin = new Thickness(0, 0, 0, 8)
             };
 
             cancelButton.Click += (_, _) =>
@@ -217,15 +178,11 @@ namespace ClubTimerXbox
                 Close();
             };
 
-            var okButton = new Button
-            {
-                Content = "ОК",
-                Width = 120,
-                Height = 44,
-                FontSize = 16
-            };
+            _okButton.Content = "ОК";
+            _okButton.Height = 44;
+            _okButton.FontSize = 16;
 
-            okButton.Click += (_, _) =>
+            _okButton.Click += (_, _) =>
             {
                 if (!ReadMinutes(out int minutes))
                 {
@@ -239,6 +196,12 @@ namespace ClubTimerXbox
                     return;
                 }
 
+                if (!SessionPenaltyPolicy.TryGetPrice(_place.ActivePricePerMinute, minutes, out _))
+                {
+                    MessageBox.Show("Сумма штрафа слишком велика.", "Добавить штраф");
+                    return;
+                }
+
                 PenaltyMinutes = minutes;
 
                 DialogResult = true;
@@ -246,25 +209,43 @@ namespace ClubTimerXbox
             };
 
             buttonsPanel.Children.Add(cancelButton);
-            buttonsPanel.Children.Add(okButton);
+            buttonsPanel.Children.Add(_okButton);
+            DialogKeyboard.Configure(this, _minutesTextBox, _okButton);
 
             return buttonsPanel;
         }
 
         private void UpdateCalculation()
         {
-            if (!ReadMinutes(out int minutes) || minutes <= 0)
+            var now = System.DateTime.Now;
+            _currentInfoText.Text = _place.IsOpenMode
+                ? $"Начислено: {TariffService.CalculateOpenModePrice(_place.AccruedAmountBeforeCurrentSegment, _place.ActivePricePerMinute, _place.StartTime, now)} сом"
+                : $"Осталось: {TariffService.FormatTime(SessionPenaltyPolicy.GetPrepaidRemainingSeconds(_place, now))}\nОплачено: {_place.PaidAmount} сом";
+            var preview = new ClubPlace
+            {
+                IsBusy = _place.IsBusy, IsOpenMode = _place.IsOpenMode,
+                IsCalculating = _place.IsCalculating,
+                IsTimeExpiredAwaitingAcknowledgement = _place.IsTimeExpiredAwaitingAcknowledgement,
+                StartTime = _place.StartTime, RemainingSeconds = _place.RemainingSeconds,
+                ActivePricePerMinute = _place.ActivePricePerMinute,
+                AccruedAmountBeforeCurrentSegment = _place.AccruedAmountBeforeCurrentSegment
+            };
+            _okButton.IsEnabled = ReadMinutes(out int minutes) &&
+                SessionPenaltyPolicy.TryApply(preview, minutes, now, out _);
+            if (!_okButton.IsEnabled)
             {
                 _newTimeText.Text = "—";
                 return;
             }
 
-            int newSeconds = _place.RemainingSeconds - minutes * 60;
-
-            if (newSeconds < 0)
-                newSeconds = 0;
-
-            _newTimeText.Text = TariffService.FormatTime(newSeconds);
+            if (_place.IsOpenMode)
+            {
+                _newTimeText.Text = $"{TariffService.CalculateOpenModePrice(preview.AccruedAmountBeforeCurrentSegment, preview.ActivePricePerMinute, preview.StartTime, now)} сом";
+            }
+            else
+            {
+                _newTimeText.Text = TariffService.FormatTime(preview.RemainingSeconds);
+            }
         }
 
         private bool ReadMinutes(out int minutes)

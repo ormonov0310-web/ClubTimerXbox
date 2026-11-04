@@ -4,6 +4,22 @@ using ClubTimerXbox.Services;
 using ClubTimerUpdater;
 using System.Text.Json;
 
+if (args.Contains("--session-penalties", StringComparer.OrdinalIgnoreCase))
+{
+    SessionPenaltyTests.Run();
+    return;
+}
+
+if (args.Contains("--cashless-loans", StringComparer.OrdinalIgnoreCase))
+{
+    CashlessLoanVerificationTests.Run();
+    KnownCashlessLoanRepairTests.Run();
+    int option = Array.FindIndex(args, item => item.Equals("--cashless-loans", StringComparison.OrdinalIgnoreCase));
+    if (option + 1 < args.Length)
+        TelecomLoanEvidenceTests.Run(args[option + 1], option + 2 < args.Length ? args[option + 2] : null);
+    return;
+}
+
 if (args.Contains("--financial-background-idle", StringComparer.OrdinalIgnoreCase))
 {
     FinancialBackgroundTests.MeasureIdle();
@@ -160,6 +176,9 @@ new EmployeePayoutHistoryTests().Run();
 new FirebaseSnapshotDeliveryTests().Run();
 new ClubLoanTests().Run();
 ClubCloseTests.Run();
+CashlessLoanVerificationTests.Run();
+KnownCashlessLoanRepairTests.Run();
+SessionPenaltyTests.Run();
 NumericInputTests.Run();
 CashReportPerformanceTests.Run();
 EmployeeJournalPerformanceTests.Run();

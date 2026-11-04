@@ -792,6 +792,33 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        internal static KnownDataRepairResult TryRepairKnownCashlessLoan()
+        {
+            lock (Gate)
+            {
+                if (!_items.Any(item => item.Id == KnownCashlessLoanRepairPolicy.CardId))
+                    return KnownDataRepairResult.NotMatched;
+                string snapshot = JsonSerializer.Serialize(_items);
+                try
+                {
+                    var result = KnownCashlessLoanRepairPolicy.Apply(PcIdentityService.Current.ClubId,
+                        _items, EmployeeDebtService.GetContract(KnownCashlessLoanRepairPolicy.ContractId),
+                        CashService.Records, EmployeeLossService.Items, ClubClock.Current.LocalNow);
+                    if (result == KnownDataRepairResult.Applied)
+                        Save();
+                    return result;
+                }
+                catch
+                {
+                    var restored = JsonSerializer.Deserialize<List<CashReconciliationItem>>(snapshot)
+                        ?? new List<CashReconciliationItem>();
+                    _items.Clear();
+                    _items.AddRange(restored);
+                    throw;
+                }
+            }
+        }
+
         public static bool TryRepairKnownAcceptanceDuplicate(
             KnownCashAcceptanceDuplicateSpec spec)
         {

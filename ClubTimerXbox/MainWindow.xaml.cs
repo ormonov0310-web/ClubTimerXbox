@@ -355,18 +355,7 @@ namespace ClubTimerXbox
 
         private int GetCurrentPrepaidRemainingSeconds(ClubPlace place, DateTime now)
         {
-            if (place.IsOpenMode)
-                return 0;
-
-            if (place.StartTime == null)
-                return Math.Max(0, place.RemainingSeconds);
-
-            int elapsedSeconds = (int)Math.Floor((now - place.StartTime.Value).TotalSeconds);
-
-            if (elapsedSeconds < 0)
-                elapsedSeconds = 0;
-
-            return Math.Max(0, place.RemainingSeconds - elapsedSeconds);
+            return SessionPenaltyPolicy.GetPrepaidRemainingSeconds(place, now);
         }
 
         private bool SyncPrepaidRemainingFromClock(ClubPlace place, DateTime now)
@@ -1205,14 +1194,14 @@ namespace ClubTimerXbox
         private void AddPenalty(ClubPlace place, int minutes)
         {
             string employeeName = GetCurrentEmployeeName();
-            int penaltySeconds = minutes * 60;
+            if (!SessionPenaltyPolicy.TryApply(place, minutes, DateTime.Now, out int penaltyPrice))
+            {
+                MessageBox.Show("Сеанс уже завершён, находится в расчёте или сумма штрафа слишком велика.", "Штраф");
+                return;
+            }
 
             if (place.IsOpenMode)
             {
-                int penaltyPrice = CalculatePriceForMinutes(place.ActivePricePerMinute, minutes);
-                place.AccruedAmountBeforeCurrentSegment += penaltyPrice;
-                place.StartTime = DateTime.Now;
-
                 ActionLogService.AddExtraToActiveSession(
                     placeName: place.Name,
                     type: "Штраф",
@@ -1234,18 +1223,7 @@ namespace ClubTimerXbox
                 return;
             }
 
-            DateTime now = DateTime.Now;
-
-            SyncPrepaidRemainingFromClock(place, now);
-
-            place.RemainingSeconds -= penaltySeconds;
-
-            if (place.RemainingSeconds < 0)
-                place.RemainingSeconds = 0;
-
-            place.StartTime = place.RemainingSeconds > 0 ? now : null;
-
-            int penaltyPriceForMessage = CalculatePriceForMinutes(place.ActivePricePerMinute, minutes);
+            int penaltyPriceForMessage = penaltyPrice;
 
             ActionLogService.AddExtraToActiveSession(
                 placeName: place.Name,

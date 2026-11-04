@@ -76,7 +76,12 @@ namespace ClubTimerXbox.Services
 
         public static int CalculateOpenModePrice(double accruedAmount, double pricePerMinute, DateTime? startTime)
         {
-            int minutes = CalculateOpenModePlayedMinutes(startTime);
+            return CalculateOpenModePrice(accruedAmount, pricePerMinute, startTime, DateTime.Now);
+        }
+
+        public static int CalculateOpenModePrice(double accruedAmount, double pricePerMinute, DateTime? startTime, DateTime now)
+        {
+            int minutes = CalculateOpenModePlayedMinutes(startTime, now);
             double segmentPrice = minutes * pricePerMinute;
             return RoundUpToStep(accruedAmount + segmentPrice, OpenModeBillingStepAmount);
         }
