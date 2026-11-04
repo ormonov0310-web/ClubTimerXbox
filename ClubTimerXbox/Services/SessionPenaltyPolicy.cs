@@ -24,6 +24,13 @@ internal static class SessionPenaltyPolicy
         return true;
     }
 
+    internal static int GetPrepaidUsedAmount(ClubPlace place, DateTime now)
+    {
+        int remaining = GetPrepaidRemainingSeconds(place, now);
+        int unused = remaining <= 0 ? 0 : (int)Math.Ceiling(remaining * (place.ActivePricePerMinute / 60.0));
+        return Math.Clamp(place.PaidAmount - unused, 0, place.PaidAmount);
+    }
+
     internal static bool TryApply(ClubPlace place, int minutes, DateTime now, out int price)
     {
         price = 0;
@@ -43,9 +50,11 @@ internal static class SessionPenaltyPolicy
         {
             int remaining = GetPrepaidRemainingSeconds(place, now);
             if (remaining == 0) return false;
+            int usedBefore = GetPrepaidUsedAmount(place, now);
             DateTime nextStart = place.StartTime?.AddSeconds(place.RemainingSeconds - remaining) ?? now;
             place.RemainingSeconds = (int)Math.Max(0L, remaining - (long)minutes * 60);
             place.StartTime = place.RemainingSeconds > 0 ? nextStart : null;
+            penaltyPrice = Math.Max(0, GetPrepaidUsedAmount(place, now) - usedBefore);
         }
         price = penaltyPrice;
         return true;

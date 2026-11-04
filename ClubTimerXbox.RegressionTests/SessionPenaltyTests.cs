@@ -51,8 +51,8 @@ internal static class SessionPenaltyTests
             prepaid.RemainingSeconds == 35 * 60 && ActualPrepaid(prepaid, Now.AddMinutes(5)) == 50,
             "repeated regular fine includes time since previous fine");
         prepaid = Prepaid();
-        Check(SessionPenaltyPolicy.TryApply(prepaid, 60, Now, out _) && prepaid.RemainingSeconds == 0 &&
-            prepaid.StartTime == null && ActualPrepaid(prepaid, Now) == 120,
+        Check(SessionPenaltyPolicy.TryApply(prepaid, 60, Now, out cost) && prepaid.RemainingSeconds == 0 &&
+            prepaid.StartTime == null && ActualPrepaid(prepaid, Now) == 120 && cost == 100,
             "fine larger than remainder ends tariff without overcharging");
         Check(!SessionPenaltyPolicy.TryApply(prepaid, 1, Now, out _), "ended tariff cannot be fined again");
         prepaid = Prepaid();
@@ -90,15 +90,26 @@ internal static class SessionPenaltyTests
         prepaid.ActivePricePerMinute = 0;
         Check(SessionPenaltyPolicy.TryApply(prepaid, 5, Now, out cost) && cost == 0 && prepaid.RemainingSeconds == 2700,
             "zero-price tariff retains existing time-only penalty semantics");
+        foreach (int paid in new[] { 0, 120, 199, 1000 })
+        foreach (double rate in new[] { 0.0, 1.0, 2.0, 2.1, 199.0 / 60 })
+        foreach (int seconds in new[] { 0, 1, 29, 60, 601, 3600 })
+        {
+            var candidate = Prepaid();
+            candidate.PaidAmount = paid;
+            candidate.StartTime = Now;
+            candidate.RemainingSeconds = seconds;
+            int unused = seconds <= 0 ? 0 : (int)Math.Ceiling(seconds * (rate / 60.0));
+            candidate.ActivePricePerMinute = rate;
+            Check(ActualPrepaid(candidate, Now) == Math.Min(paid, Math.Max(0, paid - unused)),
+                "shared prepaid settlement is exactly the previous positive-domain formula");
+        }
         Console.WriteLine($"Session penalties: {checks} checks passed; owned memory only, no app or cloud.");
     }
 
     private static int Price(ClubPlace place, DateTime now) => TariffService.CalculateOpenModePrice(
         place.AccruedAmountBeforeCurrentSegment, place.ActivePricePerMinute, place.StartTime, now);
 
-    private static int ActualPrepaid(ClubPlace place, DateTime now) => Math.Clamp(place.PaidAmount -
-        (int)Math.Ceiling(SessionPenaltyPolicy.GetPrepaidRemainingSeconds(place, now) * place.ActivePricePerMinute / 60),
-        0, place.PaidAmount);
+    private static int ActualPrepaid(ClubPlace place, DateTime now) => SessionPenaltyPolicy.GetPrepaidUsedAmount(place, now);
 
     private static ClubPlace Open() => new()
     {

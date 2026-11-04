@@ -3967,23 +3967,7 @@ namespace ClubTimerXbox
                     place.StartTime);
             }
 
-            int remainingSeconds = GetCurrentPrepaidRemainingSeconds(place, DateTime.Now);
-            int remainingValue = CalculatePriceBySeconds(place.ActivePricePerMinute, remainingSeconds);
-            int actualPrice = place.PaidAmount - remainingValue;
-
-            if (actualPrice < 0)
-                actualPrice = 0;
-
-            if (actualPrice > place.PaidAmount)
-                actualPrice = place.PaidAmount;
-
-            return actualPrice;
-        }
-
-        private int CalculatePriceForMinutes(double pricePerMinute, int minutes)
-        {
-            double price = minutes * pricePerMinute;
-            return (int)Math.Ceiling(price);
+            return SessionPenaltyPolicy.GetPrepaidUsedAmount(place, DateTime.Now);
         }
 
         private int CalculatePriceBySeconds(double pricePerMinute, int seconds)
