@@ -13,6 +13,12 @@ namespace ClubTimerXbox.Models
 
         public string Note { get; set; } = "";
 
+        public string OperationId { get; set; } = "";
+        public int? CashAmount { get; set; }
+        public int? CashlessAmount { get; set; }
+        public bool PaymentPending { get; set; }
+        public List<ProductIncomingItem> IncomingRecords { get; set; } = new();
+
         public List<StockPurchaseItem> Items { get; set; } = new List<StockPurchaseItem>();
 
         public int TotalAmount

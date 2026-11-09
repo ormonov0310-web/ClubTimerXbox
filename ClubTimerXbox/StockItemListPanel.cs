@@ -18,6 +18,7 @@ namespace ClubTimerXbox
         private readonly List<UIElement> _itemViews = new();
         private readonly List<Entry> _entries = new();
         private readonly DispatcherTimer _timer;
+        private Func<UIElement, int>? _itemPriority;
 
         private sealed record Entry(UIElement View,
             Func<(int? Quantity, DateTime? ZeroSinceUtc)> ReadState, Func<bool>? HasDraft);
@@ -65,6 +66,7 @@ namespace ClubTimerXbox
 
         public void ClearItems()
         {
+            _itemPriority = null;
             _availableItems.Children.Clear();
             _emptyItems.Children.Clear();
             _itemViews.Clear();
@@ -87,8 +89,21 @@ namespace ClubTimerXbox
             RefreshGroups();
         }
 
-        public void RefreshGroups()
+        public void SetItemPriority(Func<UIElement, int>? priority)
         {
+            _itemPriority = priority;
+            RefreshGroups(forceItemOrder: true);
+        }
+
+        public void RefreshGroups(bool forceItemOrder = false)
+        {
+            if (_itemPriority != null && (forceItemOrder || !_entries.Any(entry => entry.View.IsKeyboardFocusWithin)))
+            {
+                // Keep the last applied order when automatic reordering pauses for keyboard input.
+                var ordered = _entries.OrderBy(entry => _itemPriority(entry.View)).ToList();
+                _entries.Clear();
+                _entries.AddRange(ordered);
+            }
             DateTime now = ClubClock.Current.UtcNow;
             var states = _entries.Select(entry =>
             {

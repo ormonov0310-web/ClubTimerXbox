@@ -4,6 +4,18 @@ using ClubTimerXbox.Services;
 using ClubTimerUpdater;
 using System.Text.Json;
 
+if (args.Contains("--stock-acceptance-order", StringComparer.OrdinalIgnoreCase))
+{
+    StockAcceptanceOrderTests.Run();
+    return;
+}
+
+if (args.Contains("--stock-purchase-split", StringComparer.OrdinalIgnoreCase))
+{
+    StockPurchaseSplitTests.Run();
+    return;
+}
+
 if (args.Contains("--session-penalties", StringComparer.OrdinalIgnoreCase))
 {
     SessionPenaltyTests.Run();
@@ -77,6 +89,7 @@ if (args.Contains("--finance-headless", StringComparer.OrdinalIgnoreCase))
     new EmployeeDebtTestSuite().Run();
     new EmployeePayoutHistoryTests().Run();
     new ClubLoanTests().Run();
+    StockPurchaseSplitTests.Run();
     return;
 }
 
@@ -175,6 +188,8 @@ new EmployeeDebtTestSuite().Run();
 new EmployeePayoutHistoryTests().Run();
 new FirebaseSnapshotDeliveryTests().Run();
 new ClubLoanTests().Run();
+StockPurchaseSplitTests.Run();
+StockAcceptanceOrderTests.Run();
 ClubCloseTests.Run();
 CashlessLoanVerificationTests.Run();
 KnownCashlessLoanRepairTests.Run();

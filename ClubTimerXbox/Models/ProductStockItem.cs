@@ -6,6 +6,8 @@ namespace ClubTimerXbox.Models
     {
         public Guid Id { get; set; } = Guid.NewGuid();
 
+        public System.Collections.Generic.List<Guid> AppliedPurchaseIds { get; set; } = new();
+
         // Название товара должно совпадать с SaleItem.Name
         public string ProductName { get; set; } = "";
 

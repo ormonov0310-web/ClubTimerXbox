@@ -12,6 +12,16 @@ namespace ClubTimerXbox.Services
 
         public static IReadOnlyList<ProductIncomingItem> Items => _items;
 
+        internal static void EnsurePurchaseIncoming(ProductIncomingItem incoming)
+        {
+            var old = _items.FirstOrDefault(item => item.Id == incoming.Id);
+            if (old == null) _items.Add(incoming);
+            else if (old.ProductName != incoming.ProductName || old.QuantityAdded != incoming.QuantityAdded ||
+                old.TotalPurchaseAmount != incoming.TotalPurchaseAmount)
+                throw new InvalidOperationException("Конфликт прихода закупки.");
+            Save();
+        }
+
         public static void AddIncoming(
             string productName,
             int quantityAdded,

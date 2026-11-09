@@ -142,6 +142,15 @@ namespace ClubTimerXbox.Services
             ProductStockStorageService.Save(_stockItems);
         }
 
+        internal static void ApplyPurchaseOnce(StockPurchase purchase)
+        {
+            if (purchase.Items.All(item => FindByProductName(item.ProductName)?.AppliedPurchaseIds?.Contains(purchase.Id) == true))
+                return;
+            var updated = StockPurchasePostingPolicy.ApplyInventory(purchase, _stockItems, ClubClock.Current.UtcNow);
+            ProductStockStorageService.Save(updated);
+            StockPurchasePostingPolicy.CommitIncomingInventory(_stockItems, updated);
+        }
+
         public static bool ExistsByProductName(string productName)
         {
             productName = productName.Trim();

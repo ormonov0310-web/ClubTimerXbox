@@ -49,27 +49,9 @@ namespace ClubTimerXbox.Services
         public static void Save(List<StockPurchase> purchases)
         {
             FinancialInputRevision.Changed();
-            try
-            {
-                if (!Directory.Exists(FolderPath))
-                {
-                    Directory.CreateDirectory(FolderPath);
-                }
-
-                string json = JsonSerializer.Serialize(
-                    purchases,
-                    new JsonSerializerOptions
-                    {
-                        WriteIndented = true
-                    }
-                );
-
-                File.WriteAllText(FilePath, json);
-            }
-            catch
-            {
-                // Не ломаем программу, если файл временно недоступен.
-            }
+            Directory.CreateDirectory(FolderPath);
+            AtomicFileStorageService.WriteAllText(FilePath,
+                JsonSerializer.Serialize(purchases, new JsonSerializerOptions { WriteIndented = true }));
         }
 
         public static void Clear()

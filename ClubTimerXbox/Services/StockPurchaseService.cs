@@ -11,6 +11,39 @@ namespace ClubTimerXbox.Services
 
         public static IReadOnlyList<StockPurchase> Purchases => _purchases;
 
+        public static void RecoverPending()
+        {
+            foreach (var pending in _purchases.Where(item => item.PaymentPending).ToArray())
+                Complete(pending);
+        }
+
+        public static StockPurchase AddPaidPurchase(Guid operationId, List<StockPurchaseItem> items,
+            int cash, int cashless, string note)
+        {
+            RecoverPending();
+            var purchase = _purchases.FirstOrDefault(item => item.Id == operationId || item.OperationId == operationId.ToString("D"));
+            var requested = StockPurchasePostingPolicy.Create(operationId, items, cash, cashless,
+                note, ClubClock.Current.LocalNow, purchase == null ? ProductStockService.StockItems : Array.Empty<ProductStockItem>());
+            if (purchase != null) StockPurchasePostingPolicy.EnsureSame(purchase, requested);
+            else
+            {
+                purchase = requested;
+                _purchases.Add(purchase);
+                try { Save(); }
+                catch { _purchases.Remove(purchase); throw; }
+            }
+            try { Complete(purchase); }
+            catch
+            {
+                throw new InvalidOperationException("Закупка сохранена, оплата ожидает восстановления. Не создавайте её повторно.");
+            }
+            return purchase;
+        }
+
+        private static void Complete(StockPurchase purchase) => StockPurchasePostingPolicy.Recover(purchase,
+            ProductStockService.ApplyPurchaseOnce, ProductIncomingService.EnsurePurchaseIncoming,
+            CashService.EnsureStockPurchaseExpense, Save);
+
         public static int RenameEmployeeReferences(
             string oldEmployeeName,
             string newEmployeeName)

@@ -99,6 +99,19 @@ namespace ClubTimerXbox.Services
             }
         }
 
+        internal static void EnsureStockPurchaseExpense(CashRecord record)
+        {
+            var old = _records.FirstOrDefault(item => item.Id == record.Id);
+            if (old == null) AddRecord(record);
+            else
+            {
+                if (old.Type != CashRecordType.Expense || old.ExpenseCategory != "Закупка" ||
+                    old.Amount != record.Amount || old.PaymentMethod != record.PaymentMethod)
+                    throw new InvalidOperationException("Конфликт оплаты закупки.");
+                Save();
+            }
+        }
+
         private static void Save()
         {
             CashStorageService.Save(_records);

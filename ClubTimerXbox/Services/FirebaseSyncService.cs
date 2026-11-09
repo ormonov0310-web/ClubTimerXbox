@@ -658,7 +658,11 @@ namespace ClubTimerXbox.Services
         {
                 using var measurement = SnapshotBuildMeasurements.Measure("snapshot.build-state");
                 using var portions = OverNormPortionService.BeginCalculation();
-                if (preparedFinancials == null) EmployeeDebtService.RecoverClubLoanMovements();
+                if (preparedFinancials == null)
+                {
+                    EmployeeDebtService.RecoverClubLoanMovements();
+                    StockPurchaseService.RecoverPending();
+                }
                 _lastKnownPlaces = places.ToList();
                 var pcIdentity = PcIdentityService.Current;
                 var businessDay = BusinessCalendarService.GetBusinessDay(
@@ -933,9 +937,12 @@ namespace ClubTimerXbox.Services
                     .Select(purchase => new
                     {
                         createdAt = purchase.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                        id = purchase.Id.ToString(),
                         addedBy = purchase.AddedBy,
                         note = purchase.Note,
                         totalAmount = purchase.TotalAmount,
+                        cashAmount = purchase.CashAmount,
+                        cashlessAmount = purchase.CashlessAmount,
                         items = purchase.Items.Select(item => new
                         {
                             productName = item.ProductName,
@@ -1116,6 +1123,7 @@ namespace ClubTimerXbox.Services
                         updateChannel = AppVersionService.UpdateChannel
                     },
                     supportsClubLoans = true,
+                    supportsStockPurchaseSplit = true,
                     currentEmployeeName = EmployeeService.CurrentEmployee?.Name ?? "",
                     settings = BuildClubSettingsPayload(AppSettingsService.Current),
                     acceptance = new
@@ -1947,6 +1955,7 @@ namespace ClubTimerXbox.Services
                 Application.Current?.Dispatcher.VerifyAccess();
                 using var portions = OverNormPortionService.BeginCalculation();
                 EmployeeDebtService.RecoverClubLoanMovements();
+                StockPurchaseService.RecoverPending();
                 if (fullHistory) LateOpeningPenaltyService.EnsureTodayNoOpeningRecommendation();
                 DateTime month = BusinessCalendarService.GetBusinessMonth(ClubClock.Current.LocalNow).StartInclusive;
                 var months = fullHistory ? GetReportMonthStarts(month).Append(month).Distinct().ToArray() : new[] { month };
@@ -3399,9 +3408,12 @@ namespace ClubTimerXbox.Services
                 .Select(purchase => new
                 {
                     createdAt = purchase.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                    id = purchase.Id.ToString(),
                     addedBy = purchase.AddedBy,
                     note = purchase.Note,
                     totalAmount = purchase.TotalAmount,
+                    cashAmount = purchase.CashAmount,
+                    cashlessAmount = purchase.CashlessAmount,
                     items = purchase.Items.Select(item => new
                     {
                         productName = item.ProductName,
@@ -3720,6 +3732,18 @@ namespace ClubTimerXbox.Services
                         $"Позиция удалена: {command.ProductName}, тип: {NormalizeSaleItemType(command.ItemType)}."
                     );
 
+                    return;
+                }
+
+                if (command.Type == "ConfirmStockPurchaseSplit")
+                {
+                    if (!Guid.TryParse(command.PurchaseOperationId, out var operationId) ||
+                        command.CashAmount is not int cash || command.CashlessAmount is not int cashless)
+                        throw new InvalidOperationException("Не задана оплата закупки.");
+                    var purchase = StockPurchaseService.AddPaidPurchase(operationId, command.PurchaseItems,
+                        cash, cashless, command.Description);
+                    await MarkCommandApplied(commandId, command,
+                        $"Закуп подтверждён: {purchase.TotalAmount} сом, наличные {cash}, безнал {cashless}.");
                     return;
                 }
 
@@ -6123,6 +6147,9 @@ namespace ClubTimerXbox.Services
             public int MinimumQuantity { get; set; }
 
             public List<StockPurchaseItem> PurchaseItems { get; set; } = new List<StockPurchaseItem>();
+            public string PurchaseOperationId { get; set; } = "";
+            public int? CashAmount { get; set; }
+            public int? CashlessAmount { get; set; }
 
             public string Title { get; set; } = "";
             public string Description { get; set; } = "";

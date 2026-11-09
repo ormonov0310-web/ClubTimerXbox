@@ -51,7 +51,7 @@ namespace ClubTimerXbox.Services
 
             string json = JsonSerializer.Serialize(items, options);
 
-            File.WriteAllText(IncomingFilePath, json);
+            AtomicFileStorageService.WriteAllText(IncomingFilePath, json);
         }
 
         public static void Clear()

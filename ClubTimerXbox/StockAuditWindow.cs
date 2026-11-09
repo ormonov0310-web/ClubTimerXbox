@@ -17,6 +17,7 @@ namespace ClubTimerXbox
         private readonly StackPanel _historyPanel = new StackPanel();
 
         private readonly List<AuditRow> _rows = new List<AuditRow>();
+        private StockAcceptanceDragBehavior? _dragOrder;
 
         private Border? _productsCard;
         private Border? _cashCard;
@@ -55,7 +56,7 @@ namespace ClubTimerXbox
             _showDebtsSection = ShiftAcceptanceService.Current.DebtAcceptanceRequired;
 
             Content = CreateContent();
-            Closed += (_, _) => _cashRecountButtonTimer?.Stop();
+            Closed += (_, _) => { _cashRecountButtonTimer?.Stop(); _dragOrder?.Dispose(); };
 
             LoadRows();
             LoadHistory();
@@ -1176,10 +1177,41 @@ namespace ClubTimerXbox
 
         private void LoadRows()
         {
+            _dragOrder?.Dispose();
             _itemsPanel.ClearItems();
             _rows.Clear();
+            string clubId = PcIdentityService.Current.ClubId;
+            var store = StockAcceptanceOrderStore.Local();
+            var stock = ProductStockService.StockItems.Where(item => SaleItemService.FindByName(item.ProductName) != null).ToList();
+            var popularity = ProductPopularityService.GetLifetimePaidQuantities();
+            List<Guid> saved;
+            try { saved = store.Load(clubId); }
+            catch { saved = new(); }
+            var priority = StockAcceptanceOrderPolicy.Priority(stock, saved, popularity);
+            var ranks = priority.Select((id, index) => (id, index)).ToDictionary(item => item.id, item => item.index);
+            var byId = stock.ToDictionary(item => item.Id);
+            var byView = new Dictionary<UIElement, ProductStockItem>();
+            _dragOrder = new StockAcceptanceDragBehavior(_itemsPanel,
+                id => byId.TryGetValue(id, out var item) && item.Quantity > 0,
+                (source, target, after) =>
+                {
+                    if (PcIdentityService.Current.ClubId != clubId) return false;
+                    var updated = StockAcceptanceOrderPolicy.MoveAvailable(priority, stock, source, target, after);
+                    if (updated.SequenceEqual(priority)) return false;
+                    try { store.Save(clubId, updated); }
+                    catch
+                    {
+                        MessageBox.Show("Не удалось сохранить порядок товаров. Прежний порядок оставлен.",
+                            "Приёмка товаров", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return false;
+                    }
+                    priority = updated;
+                    ranks = priority.Select((id, index) => (id, index)).ToDictionary(item => item.id, item => item.index);
+                    _itemsPanel.RefreshGroups(forceItemOrder: true);
+                    return true;
+                });
 
-            foreach (var stockItem in ProductPopularityService.OrderStock(ProductStockService.StockItems))
+            foreach (var stockItem in StockAcceptanceOrderPolicy.Order(stock, priority))
             {
                 var saleItem = SaleItemService.FindByName(stockItem.ProductName);
 
@@ -1215,71 +1247,24 @@ namespace ClubTimerXbox
                 };
 
                 _rows.Add(row);
-                _itemsPanel.AddTrackedItem(CreateRowCard(row),
+                var card = CreateRowCard(row);
+                byView.Add(card, stockItem);
+                _dragOrder.Register(card, stockItem.Id);
+                _itemsPanel.AddTrackedItem(card,
                     () => ((int?)stockItem.Quantity, stockItem.ZeroStockSinceUtc),
                     () => row.ActualQuantityBox.Text.Trim() != row.ExpectedQuantity.ToString());
             }
+            _itemsPanel.SetItemPriority(view =>
+            {
+                var item = byView[view];
+                return ranks[item.Id] + (item.Quantity > 0 ? 0 : priority.Count);
+            });
         }
 
         private Border CreateRowCard(AuditRow row)
         {
-            var root = new Grid();
-
-            root.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(1, GridUnitType.Star)
-            });
-
-            root.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = GridLength.Auto
-            });
-
-            var leftPanel = new StackPanel();
-
-            leftPanel.Children.Add(new TextBlock
-            {
-                Text = row.ProductName,
-                Foreground = Brushes.White,
-                FontSize = 20,
-                FontWeight = FontWeights.Bold
-            });
-
-            leftPanel.Children.Add(new TextBlock
-            {
-                Text =
-                    $"По программе: {row.ExpectedQuantity} шт\n" +
-                    $"Цена продажи: {row.SalePrice} сом",
-                Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
-                FontSize = 14,
-                LineHeight = 21,
-                Margin = new Thickness(0, 6, 0, 0)
-            });
-
-            leftPanel.Children.Add(row.DifferenceText);
-
-            Grid.SetColumn(leftPanel, 0);
-            root.Children.Add(leftPanel);
-
-            var rightPanel = new StackPanel
-            {
-                Width = 170
-            };
-
-            rightPanel.Children.Add(new TextBlock
-            {
-                Text = "Фактически",
-                Foreground = new SolidColorBrush(Color.FromRgb(170, 180, 195)),
-                FontSize = 13,
-                Margin = new Thickness(0, 0, 0, 4)
-            });
-
-            rightPanel.Children.Add(row.ActualQuantityBox);
-
-            Grid.SetColumn(rightPanel, 1);
-            root.Children.Add(rightPanel);
-
-            return CreateCard(root, Color.FromRgb(24, 32, 43));
+            return StockAcceptanceRowView.Create(row.ProductName, row.ExpectedQuantity, row.SalePrice,
+                row.ActualQuantityBox, row.DifferenceText);
         }
 
         private void UpdateRowDifference(AuditRow row)

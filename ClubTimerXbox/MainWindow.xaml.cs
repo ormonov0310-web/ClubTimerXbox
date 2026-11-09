@@ -46,6 +46,8 @@ namespace ClubTimerXbox
         {
             InitializeComponent();
             EmployeeDebtService.RecoverClubLoanMovements();
+            try { StockPurchaseService.RecoverPending(); }
+            catch { /* The next owned financial preparation retries the durable purchase. */ }
             AppUpdateRuntimeGuard.MarkRunning();
             VisualThemeService.ThemeChanged += VisualThemeService_ThemeChanged;
             AppUpdateService.StateChanged += AppUpdateService_StateChanged;
