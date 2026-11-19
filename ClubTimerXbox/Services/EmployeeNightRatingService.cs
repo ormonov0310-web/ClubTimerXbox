@@ -28,7 +28,8 @@ namespace ClubTimerXbox.Services
                 businessDay.StartInclusive,
                 businessDay.EndExclusive,
                 now);
-            if (reward == null)
+            if (reward == null || !EmployeeActivityPolicy.CanParticipate(
+                    EmployeeService.FindByName(reward.EmployeeName)))
                 return;
 
             string nightKey = reward.OneAm.ToString("yyyy-MM-dd");
@@ -45,6 +46,9 @@ namespace ClubTimerXbox.Services
         {
             var currentShift = ActionLogService.CurrentShift;
             if (currentShift == null || string.IsNullOrWhiteSpace(currentShift.EmployeeName))
+                return;
+
+            if (!EmployeeActivityPolicy.CanParticipate(EmployeeService.FindByName(currentShift.EmployeeName)))
                 return;
 
             if (ActionLogService.GetActiveGameSessions().Any())

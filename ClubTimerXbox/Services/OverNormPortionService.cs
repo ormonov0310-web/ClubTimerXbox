@@ -132,9 +132,8 @@ internal static class OverNormPortionService
             if (shift.StartedAt >= end || (shift.ClosedAt ?? now) <= start) continue;
             var employee = employees.FirstOrDefault(e => e.Name.Equals(shift.EmployeeName,
                 StringComparison.OrdinalIgnoreCase));
-            if (employee == null || string.IsNullOrWhiteSpace(employee.EmployeeId)) continue;
-            work.Add(new PortionWork(employee.EmployeeId, employee.Name, shift.StartedAt,
-                shift.ClosedAt ?? now));
+            var candidate = EmployeeActivityPolicy.NewPortionWork(employee, shift, now);
+            if (candidate != null) work.Add(candidate);
         }
         var revenue = CashService.Records.Where(r => r.Type == CashRecordType.GameSession &&
                 r.Category == "Игры" && CashService.GetBusinessTime(r) >= start &&

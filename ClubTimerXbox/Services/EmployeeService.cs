@@ -41,26 +41,10 @@ namespace ClubTimerXbox.Services
 
         static EmployeeService()
         {
-            Employees = EmployeeStorageService.Load();
-
-            if (Employees.Count == 0)
-            {
-                Employees = _defaultEmployees
-                    .Select(employee => new Employee
-                    {
-                        Name = employee.Name,
-                        PinCode = employee.PinCode,
-                        IsActive = employee.IsActive
-                    })
-                    .ToList();
-
-                Save();
-            }
-            else
-            {
-                EnsureDefaultEmployeesExist();
-                Save();
-            }
+            Employees = EmployeeRosterInitialization.Initialize(
+                EmployeeStorageService.Load(),
+                _defaultEmployees);
+            Save();
         }
 
         public static List<Employee> GetActiveEmployees()
@@ -103,6 +87,9 @@ namespace ClubTimerXbox.Services
         {
             return FindByName(employeeName) != null;
         }
+
+        internal static Employee RequireActiveByName(string employeeName) =>
+            EmployeeActivityPolicy.RequireActive(FindByName(employeeName));
 
         public static bool Login(string pinCode)
         {
@@ -256,6 +243,9 @@ namespace ClubTimerXbox.Services
             if (employee == null)
                 return;
 
+            if (employee.IsActive && !isActive)
+                ActionLogService.CloseEmployeeOpenShifts(employee.Name, ClubClock.Current.LocalNow);
+
             employee.IsActive = isActive;
 
             if (!isActive &&
@@ -289,26 +279,6 @@ namespace ClubTimerXbox.Services
             CurrentEmployee = null;
 
             Save();
-        }
-
-        private static void EnsureDefaultEmployeesExist()
-        {
-            foreach (var defaultEmployee in _defaultEmployees)
-            {
-                bool exists = Employees.Any(employee =>
-                    employee.Name.Equals(defaultEmployee.Name, StringComparison.OrdinalIgnoreCase)
-                );
-
-                if (exists)
-                    continue;
-
-                Employees.Add(new Employee
-                {
-                    Name = defaultEmployee.Name,
-                    PinCode = defaultEmployee.PinCode,
-                    IsActive = defaultEmployee.IsActive
-                });
-            }
         }
 
         private static void Save()

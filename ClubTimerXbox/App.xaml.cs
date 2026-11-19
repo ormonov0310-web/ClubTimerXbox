@@ -9,6 +9,21 @@ namespace ClubTimerXbox
         {
             base.OnStartup(e);
 
+            try
+            {
+                SalikhEmployeeRecoveryService.ApplyBeforeStartup();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine("Employee recovery: " + ex.Message);
+                MessageBox.Show("Не удалось безопасно завершить восстановление записей сотрудника. " +
+                    "Не удаляйте данные и резервные копии. Обратитесь к владельцу для проверки. " +
+                    "Программа остановлена до начала расчётов.",
+                    "Требуется проверка данных", MessageBoxButton.OK, MessageBoxImage.Error);
+                Shutdown();
+                return;
+            }
+
             AppUpdateLaunchContext.Initialize(e.Args);
 
             // Пока открыто окно входа, нельзя завершать приложение,

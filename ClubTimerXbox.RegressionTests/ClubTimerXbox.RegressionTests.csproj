@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Update="Fixtures\SalikhEmployeeRecovery.json" CopyToOutputDirectory="PreserveNewest" />
     <Using Include="System.IO" />
     <ProjectReference Include="..\ClubTimerXbox\ClubTimerXbox.csproj"
                       AdditionalProperties="SkipCopyUpdater=true" />

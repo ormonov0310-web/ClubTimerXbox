@@ -10,10 +10,8 @@ namespace ClubTimerXbox.Services
         private const string TelecomSecondEmployee = "\u041c\u0438\u0440\u0431\u0435\u043a";
         private const double TelecomStalbekRecoveredHours = 213.55;
         private const double TelecomMirbekRecoveredHours = 8.57;
-        private const string EmployeeRenameClubId = "club_2";
-        private const string RenamedEmployeeId = "emp_b50acc8d89e3452486c3600a32b6188b";
-        private const string PreviousEmployeeName = "\u041c\u0438\u0440\u0431\u0435\u043a";
-        private const string CurrentEmployeeName = "\u041c\u0443\u0445\u0430\u043c\u043c\u0435\u0434";
+        private const string SalikhovClubId = "club_2";
+        private const string SalikhovCashCorrectionEmployee = "\u041c\u0443\u0445\u0430\u043c\u043c\u0435\u0434";
         private const int SalikhovIncorrectExtraAmount = 1330;
         private const int SalikhovIncorrectFormalizedAmount = 28;
 
@@ -90,9 +88,9 @@ namespace ClubTimerXbox.Services
                 CashReconciliationService.TryRepairKnownCashlessLoan();
             }
 
-            if (clubId.Equals(EmployeeRenameClubId, StringComparison.OrdinalIgnoreCase))
+            if (clubId.Equals(SalikhovClubId, StringComparison.OrdinalIgnoreCase))
             {
-                ApplyEmployeeRenameRepair();
+                // The legacy name-only rename is retired: the old name can belong to a new employee.
                 ApplySalikhovAccumulatedCashlessRepair();
                 ApplySalikhovLateFinalizationRepair();
             }
@@ -118,7 +116,7 @@ namespace ClubTimerXbox.Services
                 SalikhovIncorrectAllocationId,
                 SalikhovIncorrectExtraAmount,
                 SalikhovIncorrectFormalizedAmount,
-                CurrentEmployeeName
+                SalikhovCashCorrectionEmployee
             );
         }
 
@@ -222,23 +220,6 @@ namespace ClubTimerXbox.Services
                     "Система",
                     "Восстановленная сырая потеря сверена с открытым излишком.");
             }
-        }
-
-        private static void ApplyEmployeeRenameRepair()
-        {
-            var employee = EmployeeService.FindById(RenamedEmployeeId);
-
-            if (employee == null ||
-                !employee.Name.Equals(
-                    CurrentEmployeeName,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            EmployeeReferenceRenameService.RenameAll(
-                PreviousEmployeeName,
-                CurrentEmployeeName);
         }
     }
 }

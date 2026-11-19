@@ -15,6 +15,8 @@ namespace ClubTimerXbox.Services
 
         public static void EvaluateOpenedShift(ShiftLogItem shift)
         {
+            if (!EmployeeActivityPolicy.CanParticipate(EmployeeService.FindByName(shift.EmployeeName)))
+                return;
             var settings = AutoSalaryService.Settings;
             DateTime dayStart = shift.StartedAt.Date.AddHours(OpeningWindowStartHour);
             if (shift.StartedAt < dayStart || !IsFirstOpeningForDay(shift, dayStart))
@@ -47,6 +49,9 @@ namespace ClubTimerXbox.Services
                          .Where(item => item.DecisionDueAt.HasValue && item.DecisionDueAt.Value <= now)
                          .ToList())
             {
+                if (!EmployeeActivityPolicy.CanParticipate(
+                        EmployeeService.FindByName(item.ResponsibleEmployeeName)))
+                    continue;
                 EmployeeLossService.TryFormalizeViolationRecommendation(
                     item.Id,
                     "Автоматически оформлено в 23:00: владелец не отменил рекомендацию.");

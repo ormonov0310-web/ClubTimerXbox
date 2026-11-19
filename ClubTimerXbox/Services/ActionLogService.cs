@@ -241,6 +241,7 @@ namespace ClubTimerXbox.Services
         public static ShiftLogItem StartShift(string employeeName)
         {
             string cleanEmployeeName = employeeName.Trim();
+            EmployeeService.RequireActiveByName(cleanEmployeeName);
             var currentShift = CurrentShift;
 
             if (currentShift != null &&
@@ -288,6 +289,20 @@ namespace ClubTimerXbox.Services
             CloseCurrentShiftAt(ClubClock.Current.LocalNow);
         }
 
+        internal static void CloseEmployeeOpenShifts(string employeeName, DateTime at)
+        {
+            var closed = EmployeeActivityPolicy.CloseOpenShifts(Shifts, employeeName, at);
+            if (closed.Count == 0)
+                return;
+            foreach (var shift in closed)
+            {
+                Add(employeeName, "Смена закрыта", "",
+                    $"Сотрудник отключён владельцем. Смена {shift.Id}: " +
+                    $"{shift.StartedAt:dd.MM.yyyy HH:mm} — {shift.ClosedAt:dd.MM.yyyy HH:mm}.");
+            }
+            SaveLogs();
+        }
+
         public static void CloseCurrentShiftAt(DateTime closeTime)
         {
             var currentShift = CurrentShift;
@@ -317,6 +332,7 @@ namespace ClubTimerXbox.Services
         public static ShiftLogItem SwitchShift(string newEmployeeName)
         {
             newEmployeeName = newEmployeeName.Trim();
+            EmployeeService.RequireActiveByName(newEmployeeName);
             var oldShift = CurrentShift;
 
             if (oldShift != null &&

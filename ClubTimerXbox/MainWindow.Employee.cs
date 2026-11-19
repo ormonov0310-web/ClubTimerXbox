@@ -9,6 +9,16 @@ namespace ClubTimerXbox
 {
     public partial class MainWindow
     {
+        private bool EnsureActiveEmployeeActivity(string employeeName)
+        {
+            if (EmployeeActivityPolicy.CanParticipate(EmployeeService.FindByName(employeeName)))
+                return true;
+            MessageBox.Show(this,
+                "Сотрудник отключён или смена не выбрана. Выберите активного сотрудника и повторите действие.",
+                "Сотрудник недоступен");
+            return false;
+        }
+
         private readonly DispatcherTimer _employeeRatingBorderAnimationTimer = new()
         {
             Interval = TimeSpan.FromMilliseconds(120)

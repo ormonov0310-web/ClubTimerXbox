@@ -917,7 +917,8 @@ namespace ClubTimerXbox
 
             bool? checkoutResult = checkoutWindow.ShowDialog();
 
-            if (checkoutResult != true || checkoutWindow.PaymentRecord == null)
+            if (checkoutResult != true || checkoutWindow.PaymentRecord == null ||
+                !EnsureActiveEmployeeActivity(checkoutWindow.EmployeeName))
                 return;
 
             CloseAlarmWindowForPlace(place.Name);
@@ -964,6 +965,8 @@ namespace ClubTimerXbox
 
         private void StartOpenMode(ClubPlace place, bool isPromo = false)
         {
+            if (!EnsureActiveEmployeeActivity(GetCurrentEmployeeName()))
+                return;
             if (place.IsBusy)
             {
                 MessageBox.Show($"{place.Name} уже занят.", "Внимание");
@@ -1111,7 +1114,8 @@ namespace ClubTimerXbox
 
             bool? checkoutResult = checkoutWindow.ShowDialog();
 
-            if (checkoutResult != true || checkoutWindow.PaymentRecord == null)
+            if (checkoutResult != true || checkoutWindow.PaymentRecord == null ||
+                !EnsureActiveEmployeeActivity(checkoutWindow.EmployeeName))
                 return;
 
             PaymentService.AddPayment(checkoutWindow.PaymentRecord);
@@ -1552,6 +1556,12 @@ namespace ClubTimerXbox
                 };
 
                 bool? checkoutResult = checkoutWindow.ShowDialog();
+
+                if (checkoutResult == true && !EnsureActiveEmployeeActivity(checkoutWindow.EmployeeName))
+                {
+                    RestorePlaceAfterCancelledCheckout(place, wasOpenMode, gameAmount);
+                    return;
+                }
 
                 if (checkoutResult == true &&
                     checkoutWindow.ResultType == CashCheckoutResultType.TransferToPlace)
@@ -2330,7 +2340,8 @@ namespace ClubTimerXbox
 
             bool? result = checkoutWindow.ShowDialog();
 
-            if (result != true || checkoutWindow.PaymentRecord == null)
+            if (result != true || checkoutWindow.PaymentRecord == null ||
+                !EnsureActiveEmployeeActivity(checkoutWindow.EmployeeName))
             {
                 MessageBox.Show(
                     "ТВ останется в состоянии «Время вышло», пока неоплаченные позиции не будут рассчитаны через ККМ.",
@@ -3829,7 +3840,8 @@ namespace ClubTimerXbox
 
             bool? checkoutResult = checkoutWindow.ShowDialog();
 
-            if (checkoutResult != true || checkoutWindow.PaymentRecord == null)
+            if (checkoutResult != true || checkoutWindow.PaymentRecord == null ||
+                !EnsureActiveEmployeeActivity(checkoutWindow.EmployeeName))
                 return;
 
             if (item.Type == SaleItemType.Product)
@@ -3879,6 +3891,8 @@ namespace ClubTimerXbox
 
         private void AttachSaleToPlace(ClubPlace place, SaleItem item, int quantity, int totalAmount)
         {
+            if (!EnsureActiveEmployeeActivity(GetCurrentEmployeeName()))
+                return;
             if (!place.IsBusy)
             {
                 MessageBox.Show(

@@ -44,7 +44,7 @@ namespace ClubTimerXbox.Services
                     changed = true;
                 }
 
-                foreach (var employee in EmployeeService.GetAllEmployees())
+                foreach (var employee in EmployeeService.GetActiveEmployees())
                 {
                     if (EnsureProfile(employee))
                         changed = true;
@@ -80,7 +80,7 @@ namespace ClubTimerXbox.Services
                     }
 
                     var employee = EmployeeService.FindByName(loss.ResponsibleEmployeeName);
-                    if (employee == null)
+                    if (!EmployeeActivityPolicy.CanParticipate(employee))
                         continue;
 
                     bool violation = EmployeeLossService.IsViolationLoss(loss);
@@ -90,7 +90,7 @@ namespace ClubTimerXbox.Services
                             ? "REVENUE_CONFIRMED_LOSS_SMALL"
                             : "REVENUE_CONFIRMED_LOSS_LARGE";
                     AddRuleEventUnsafe(
-                        employee,
+                        employee!,
                         EmployeeRatingRuleCatalog.Get(ruleCode),
                         sourceId,
                         violation ? "ViolationLoss" : "ConfirmedLoss",
@@ -116,11 +116,11 @@ namespace ClubTimerXbox.Services
                              State.CashExtraAcceptanceRewardsActivatedAt))
                 {
                     var employee = EmployeeService.FindByName(reward.EmployeeName);
-                    if (employee == null)
+                    if (!EmployeeActivityPolicy.CanParticipate(employee))
                         continue;
 
                     string sourceId = CashAcceptanceExtraRewardPolicy.BuildSourceId(
-                        "REVENUE_CONFIRMED_EXTRA", reward.InvestigationId, employee);
+                        "REVENUE_CONFIRMED_EXTRA", reward.InvestigationId, employee!);
                     if (CashAcceptanceExtraRewardPolicy.HasReward(
                             State.Events, sourceId, employee, reward.LegacySourceIds))
                         continue;
@@ -140,11 +140,11 @@ namespace ClubTimerXbox.Services
                              CashReconciliationService.Items))
                 {
                     var employee = EmployeeService.FindByName(reward.EmployeeName);
-                    if (employee == null)
+                    if (!EmployeeActivityPolicy.CanParticipate(employee))
                         continue;
 
                     string sourceId = CashAcceptanceExtraRewardPolicy.BuildSourceId(
-                        "TIME_CONFIRMED_SHIFT_EXTRA", reward.InvestigationId, employee);
+                        "TIME_CONFIRMED_SHIFT_EXTRA", reward.InvestigationId, employee!);
                     if (CashAcceptanceExtraRewardPolicy.HasReward(
                             State.Events, sourceId, employee,
                             new[] { "confirmed-shift-extra:" + reward.InvestigationId.ToString("N") }))
@@ -387,8 +387,7 @@ namespace ClubTimerXbox.Services
             EnsureActivated();
             lock (Gate)
             {
-                var employee = EmployeeService.FindByName(employeeName)
-                    ?? throw new InvalidOperationException("Сотрудник не найден.");
+                var employee = EmployeeService.RequireActiveByName(employeeName);
                 var profile = GetOrCreateProfileUnsafe(employee.EmployeeId, employee.Name);
                 var version = new EmployeeRatingBaseVersion
                 {
@@ -409,8 +408,7 @@ namespace ClubTimerXbox.Services
             EnsureActivated();
             lock (Gate)
             {
-                var employee = EmployeeService.FindByName(employeeName)
-                    ?? throw new InvalidOperationException("Сотрудник не найден.");
+                var employee = EmployeeService.RequireActiveByName(employeeName);
                 DateTime now = ClubClock.Current.LocalNow;
                 var profile = GetOrCreateProfileUnsafe(employee.EmployeeId, employee.Name);
                 var version = new EmployeeRatingBaseVersion
@@ -449,8 +447,7 @@ namespace ClubTimerXbox.Services
             EnsureActivated();
             lock (Gate)
             {
-                var employee = EmployeeService.FindByName(employeeName)
-                    ?? throw new InvalidOperationException("Сотрудник не найден.");
+                var employee = EmployeeService.RequireActiveByName(employeeName);
                 DateTime now = ClubClock.Current.LocalNow;
                 var profile = GetOrCreateProfileUnsafe(employee.EmployeeId, employee.Name);
                 int basePercent = GetBasePercentUnsafe(profile, branch, now);
@@ -496,8 +493,7 @@ namespace ClubTimerXbox.Services
                 if (existing != null)
                     return existing;
 
-                var employee = EmployeeService.FindByName(employeeName)
-                    ?? throw new InvalidOperationException("Сотрудник не найден.");
+                var employee = EmployeeService.RequireActiveByName(employeeName);
                 var item = AddRuleEventUnsafe(
                     employee,
                     EmployeeRatingRuleCatalog.Get(ruleCode),

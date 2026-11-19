@@ -4,6 +4,24 @@ using ClubTimerXbox.Services;
 using ClubTimerUpdater;
 using System.Text.Json;
 
+if (args.Contains("--employee-recovery", StringComparer.OrdinalIgnoreCase))
+{
+    SalikhEmployeeRecoveryTests.Run();
+    return;
+}
+
+if (args.Contains("--employee-activity", StringComparer.OrdinalIgnoreCase))
+{
+    EmployeeActivityTests.Run();
+    return;
+}
+
+if (args.Contains("--employee-identity", StringComparer.OrdinalIgnoreCase))
+{
+    EmployeeIdentityStartupTests.Run();
+    return;
+}
+
 if (args.Contains("--stock-acceptance-order", StringComparer.OrdinalIgnoreCase))
 {
     StockAcceptanceOrderTests.Run();
@@ -82,6 +100,9 @@ if (args.Contains("--sync-background", StringComparer.OrdinalIgnoreCase))
 
 if (args.Contains("--finance-headless", StringComparer.OrdinalIgnoreCase))
 {
+    EmployeeIdentityStartupTests.Run();
+    EmployeeActivityTests.Run();
+    SalikhEmployeeRecoveryTests.Run();
     new BusinessCalendarTestSuite().Run();
     new EmployeeSalaryRuleTestSuite().Run();
     new FinancialPaceTestSuite().Run();
@@ -174,6 +195,9 @@ if (args.Contains("--cash", StringComparer.OrdinalIgnoreCase))
 
 var suite = new CashConstitutionTestSuite();
 suite.Run();
+EmployeeIdentityStartupTests.Run();
+EmployeeActivityTests.Run();
+SalikhEmployeeRecoveryTests.Run();
 new BusinessCalendarTestSuite().Run();
 new EmployeeSalaryRuleTestSuite().Run();
 new NextUpdateWorkflowTestSuite().Run();

@@ -84,7 +84,8 @@ namespace ClubTimerXbox
                 Owner = this
             };
 
-            if (checkoutWindow.ShowDialog() != true || checkoutWindow.PaymentRecord == null)
+            if (checkoutWindow.ShowDialog() != true || checkoutWindow.PaymentRecord == null ||
+                !EnsureActiveEmployeeActivity(checkoutWindow.EmployeeName))
                 return;
 
             if (!DecreaseProductStockIfNeeded(item, quantity))
@@ -138,6 +139,9 @@ namespace ClubTimerXbox
             bool? result = selectWindow.ShowDialog();
 
             if (result != true || selectWindow.SelectedPlace == null)
+                return;
+
+            if (!EnsureActiveEmployeeActivity(GetCurrentEmployeeName()))
                 return;
 
             if (!DecreaseProductStockIfNeeded(item, quantity))

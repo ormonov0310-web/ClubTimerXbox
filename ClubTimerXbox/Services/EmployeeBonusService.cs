@@ -68,6 +68,7 @@ namespace ClubTimerXbox.Services
             DateTime salaryMonth,
             string description = "")
         {
+            EmployeeService.RequireActiveByName(employeeName);
             if (amount < 0)
                 amount = 0;
 
