@@ -565,11 +565,21 @@ namespace ClubTimerXbox
                 return;
 
             string employeeName = EmployeeService.CurrentEmployee?.Name ?? "Неизвестно";
-            var debts = ActionLogService.GetOutstandingCustomerDebts();
-            int total = debts.Sum(item => item.Amount);
-            ActionLogService.AcceptOutstandingDebtResponsibility(
-                employeeName,
-                ActionLogService.CurrentShift?.Id);
+            IReadOnlyList<OutstandingCustomerDebtItem> debts;
+            int total;
+            try
+            {
+                debts = ActionLogService.GetOutstandingCustomerDebts();
+                total = debts.Sum(item => item.Amount);
+                ActionLogService.AcceptOutstandingDebtResponsibility(
+                    employeeName,
+                    ActionLogService.CurrentShift?.Id);
+            }
+            catch (Exception error) when (IsDeferredCheckoutFailure(error))
+            {
+                MessageBox.Show("Приёмка долгов не завершена. Проверьте смену и ожидающие платежи.", "Приёмка долгов");
+                return;
+            }
             ShiftAcceptanceService.AcceptDebts();
 
             MessageBox.Show(
@@ -580,6 +590,10 @@ namespace ClubTimerXbox
                 "Приёмка долгов");
             FinishOrRefreshAfterPartAccepted();
         }
+
+        private static bool IsDeferredCheckoutFailure(Exception error) =>
+            error is InvalidOperationException or System.IO.IOException or UnauthorizedAccessException
+                or System.IO.InvalidDataException or System.Text.Json.JsonException;
 
         private void AddRepeatAcceptanceButtonIfAvailable(
             Panel buttonsPanel,

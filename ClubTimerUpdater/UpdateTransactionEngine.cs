@@ -5,6 +5,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text.Json;
+using ClubTimerCompatibility;
 using Microsoft.Win32;
 
 namespace ClubTimerUpdater
@@ -37,6 +38,8 @@ namespace ClubTimerUpdater
         public bool ReportOnly { get; set; }
         public string RecoveryUpdaterPath { get; set; } = "";
         public string StatusFile { get; set; } = "";
+        internal string ClubDataDirectory { get; init; } = SessionStorageCompatibility.DataDirectory;
+        internal bool ManageRecoveryRegistration { get; init; } = true;
     }
 
     public sealed class PreparedUpdatePackage : IDisposable
@@ -121,6 +124,7 @@ namespace ClubTimerUpdater
         {
             ValidateRequest(request);
             ValidatePreparedTree(prepared.SourceDir, request.MainExe);
+            SessionStorageCompatibility.RequireCompatible(request.ClubDataDirectory, prepared.SourceDir, request.MainExe);
 
             string backupPath = CreateBackup(request.TargetDir, request.BackupRoot);
             phaseChanged?.Invoke(UpdateTransactionPhase.BackupCreated);
@@ -129,7 +133,8 @@ namespace ClubTimerUpdater
             var journal = UpdateTransactionJournal.FromRequest(request, backupPath, prepared.StagingDir);
             journal.Phase = UpdateTransactionPhase.BackupCreated.ToString();
             SaveJournal(request.JournalPath, journal);
-            RegisterRecovery(request);
+            if (request.ManageRecoveryRegistration)
+                RegisterRecovery(request);
 
             try
             {
@@ -157,12 +162,14 @@ namespace ClubTimerUpdater
                 SaveJournal(request.JournalPath, journal);
                 phaseChanged?.Invoke(UpdateTransactionPhase.ValidatingInstall);
                 ValidateInstalledTree(prepared.SourceDir, request.TargetDir);
+                SessionStorageCompatibility.RequireCompatible(request.ClubDataDirectory, request.TargetDir, request.MainExe);
                 failureHook?.Invoke(UpdateTransactionPhase.ValidatingInstall);
 
                 journal.Phase = UpdateTransactionPhase.Completed.ToString();
                 SaveJournal(request.JournalPath, journal);
                 phaseChanged?.Invoke(UpdateTransactionPhase.Completed);
-                ClearRecoveryRegistration();
+                if (request.ManageRecoveryRegistration)
+                    ClearRecoveryRegistration();
                 TryDeleteFile(request.JournalPath);
                 CleanupTemporaryFiles(request.TargetDir);
                 return backupPath;
@@ -176,12 +183,14 @@ namespace ClubTimerUpdater
 
                 try
                 {
+                    SessionStorageCompatibility.RequireCompatible(request.ClubDataDirectory, backupPath, request.MainExe);
                     RestoreBackup(request.TargetDir, backupPath);
                     ValidateInstalledTree(backupPath, request.TargetDir);
                     journal.Phase = UpdateTransactionPhase.RolledBack.ToString();
                     SaveJournal(request.JournalPath, journal);
                     phaseChanged?.Invoke(UpdateTransactionPhase.RolledBack);
-                    ClearRecoveryRegistration();
+                    if (request.ManageRecoveryRegistration)
+                        ClearRecoveryRegistration();
                     CleanupTemporaryFiles(request.TargetDir);
                     throw new UpdateRolledBackException(
                         "Установка не завершилась. Предыдущая версия восстановлена.",
@@ -204,7 +213,11 @@ namespace ClubTimerUpdater
             }
         }
 
-        public static UpdateRecoveryResult RecoverFromJournal(string journalPath)
+        public static UpdateRecoveryResult RecoverFromJournal(string journalPath) =>
+            RecoverFromJournal(journalPath, SessionStorageCompatibility.DataDirectory, manageRecoveryRegistration: true);
+
+        internal static UpdateRecoveryResult RecoverFromJournal(
+            string journalPath, string clubDataDirectory, bool manageRecoveryRegistration)
         {
             UpdateTransactionJournal journal = LoadJournal(journalPath);
             if (string.IsNullOrWhiteSpace(journal.TargetDir) ||
@@ -225,9 +238,11 @@ namespace ClubTimerUpdater
             {
                 if (!File.Exists(Path.Combine(journal.TargetDir, journal.MainExe)))
                     throw new InvalidOperationException("Подтверждённая версия не найдена в папке приложения.");
+                SessionStorageCompatibility.RequireCompatible(clubDataDirectory, journal.TargetDir, journal.MainExe);
             }
             else if (!rollbackCompleted)
             {
+                SessionStorageCompatibility.RequireCompatible(clubDataDirectory, journal.BackupPath, journal.MainExe);
                 RestoreBackup(journal.TargetDir, journal.BackupPath);
                 ValidateInstalledTree(journal.BackupPath, journal.TargetDir);
                 journal.Phase = UpdateTransactionPhase.RolledBack.ToString();
@@ -235,12 +250,14 @@ namespace ClubTimerUpdater
             }
             else
             {
+                SessionStorageCompatibility.RequireCompatible(clubDataDirectory, journal.TargetDir, journal.MainExe);
                 ValidateInstalledTree(journal.BackupPath, journal.TargetDir);
             }
 
             CleanupTemporaryFiles(journal.TargetDir);
             TryDeleteDirectory(journal.StagingDir);
-            ClearRecoveryRegistration();
+            if (manageRecoveryRegistration)
+                ClearRecoveryRegistration();
             TryDeleteFile(journalPath);
 
             return new UpdateRecoveryResult

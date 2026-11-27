@@ -12,6 +12,7 @@
     <FileVersion>99.9.9.0</FileVersion>
     <InformationalVersion>99.9.9</InformationalVersion>
     <ApplicationIcon>Assets\AppIcon\clubtimer.ico</ApplicationIcon>
+    <Description>ClubTimerXbox;SessionStorage=1</Description>
   </PropertyGroup>
 
   <ItemGroup>
@@ -29,6 +30,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="ClubTimerXbox.RegressionTests" />
+    <Compile Include="..\Shared\SessionStorageCompatibility.cs" Link="Services\SessionStorageCompatibility.cs" />
   </ItemGroup>
 
   <Target Name="CopyUpdaterToOutput" AfterTargets="Build" Condition="'$(SkipCopyUpdater)' != 'true'">

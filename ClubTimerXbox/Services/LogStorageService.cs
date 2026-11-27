@@ -26,6 +26,8 @@ namespace ClubTimerXbox.Services
         private static readonly string LogsFilePath =
             Path.Combine(LogsFolderPath, "logs.json");
 
+        internal static string FilePath => LogsFilePath;
+
         private static readonly string BackupFilePath = LogsFilePath + ".bak";
         private static readonly string TemporaryFilePath = LogsFilePath + ".tmp";
 

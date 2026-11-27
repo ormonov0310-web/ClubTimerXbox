@@ -13,7 +13,8 @@ namespace ClubTimerXbox
     {
         None,
         Paid,
-        TransferToPlace
+        TransferToPlace,
+        Deferred
     }
 
     internal enum CashCheckoutPaymentMode
@@ -51,7 +52,8 @@ namespace ClubTimerXbox
             List<CheckoutItem> items,
             string placeName = "",
             Guid? gameSessionId = null,
-            bool allowTransferToPlace = false)
+            bool allowTransferToPlace = false,
+            bool allowDefer = false)
         {
             InitializeComponent();
             NumericInputHint.Apply(CashTextBox, "Наличные");
@@ -70,6 +72,18 @@ namespace ClubTimerXbox
             TransferToPlaceButton.Visibility = allowTransferToPlace
                 ? Visibility.Visible
                 : Visibility.Collapsed;
+            if (allowDefer)
+            {
+                Rect area = SystemParameters.WorkArea;
+                MaxWidth = Math.Max(300, area.Width * 0.92);
+                Width = Math.Min(Width, MaxWidth);
+                MinWidth = Math.Min(320, Width);
+                MaxHeight = Math.Max(260, area.Height * 0.88);
+                MinHeight = Math.Min(220, MaxHeight);
+                Height = double.NaN;
+                SizeToContent = SizeToContent.Height;
+                DeferPaymentButton.Visibility = Visibility.Visible;
+            }
 
             foreach (var item in _items)
             {
@@ -424,6 +438,14 @@ namespace ClubTimerXbox
             PaymentRecord = null;
             DialogResult = true;
             Close();
+        }
+
+        private void DeferPaymentButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (DeferPaymentButton.Visibility != Visibility.Visible || TotalAmount <= 0)
+                return;
+            ResultType = CashCheckoutResultType.Deferred;
+            DialogResult = true;
         }
 
         private void CancelButton_Click(object sender, RoutedEventArgs e)

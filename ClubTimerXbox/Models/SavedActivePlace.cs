@@ -5,6 +5,10 @@ namespace ClubTimerXbox.Models
     public class SavedActivePlace
     {
         public string Name { get; set; } = "";
+        public Guid? GameSessionId { get; set; }
+        [System.Text.Json.Serialization.JsonInclude]
+        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        internal SessionPauseState? PauseState { get; set; }
         public PlaceType Type { get; set; }
 
         public bool IsBusy { get; set; }

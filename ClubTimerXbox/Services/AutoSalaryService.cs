@@ -310,6 +310,7 @@ namespace ClubTimerXbox.Services
                     StringComparer.OrdinalIgnoreCase
                 );
 
+            var games = ActionLogService.GetClosedGameSessions();
             DateTime day = monthStart.Date;
             while (day < nextMonthStart.Date)
             {
@@ -318,7 +319,8 @@ namespace ClubTimerXbox.Services
                 DateTime scheduleStart = GetScheduleStart(day, settings);
                 DateTime scheduleEnd = GetScheduleEnd(day, settings);
 
-                ApplyPaidTimeForDay(result, scheduleStart, scheduleEnd);
+                DateTime businessDayEnd = day.AddDays(1).AddHours(BusinessCalendarService.BusinessDayStartHour);
+                ApplyPaidTimeForDay(result, scheduleStart, scheduleEnd, businessDayEnd, games);
                 ApplyPunctualityBonusForDay(result, scheduleStart, settings);
                 ApplyLateActiveBonusForDay(result, scheduleStart, settings);
                 ApplyOverNormBonusForDay(result,
@@ -424,8 +426,14 @@ namespace ClubTimerXbox.Services
         private static void ApplyPaidTimeForDay(
             Dictionary<string, EmployeeBonusInput> result,
             DateTime scheduleStart,
-            DateTime scheduleEnd)
+            DateTime scheduleEnd,
+            DateTime businessDayEnd,
+            IReadOnlyList<GameSessionLogItem> games)
         {
+            DateTime now = ClubClock.Current.LocalNow;
+            DateTime nightEnd = Min(businessDayEnd, now);
+            IReadOnlyList<PaidInterval>? nightPlay = null;
+
             foreach (var input in result.Values)
             {
                 var shifts = EmployeeStatsService.GetShifts(
@@ -436,7 +444,7 @@ namespace ClubTimerXbox.Services
 
                 foreach (var shift in shifts)
                 {
-                    DateTime shiftEnd = shift.ClosedAt ?? ClubClock.Current.LocalNow;
+                    DateTime shiftEnd = shift.ClosedAt ?? now;
                     if (shift.StartedAt >= scheduleEnd || shiftEnd <= scheduleStart)
                         continue;
 
@@ -449,16 +457,14 @@ namespace ClubTimerXbox.Services
                         paidTime += paidEnd - paidStart;
                     }
 
-                    TimeSpan latePaidTime = GetLateActiveTime(
-                        input.EmployeeName,
-                        shift.StartedAt,
-                        shiftEnd,
-                        scheduleEnd
-                    );
-                    if (latePaidTime > TimeSpan.Zero)
+                    if (shiftEnd > scheduleEnd && nightEnd > scheduleEnd)
                     {
-                        input.AddPaidInterval(scheduleEnd, scheduleEnd + latePaidTime);
-                        paidTime += latePaidTime;
+                        nightPlay ??= GetLatePlayIntervals(games, scheduleEnd, nightEnd);
+                        foreach (var interval in ClipLatePlayToShift(nightPlay, shift.StartedAt, shiftEnd))
+                        {
+                            input.AddPaidInterval(interval.Start, interval.End);
+                            paidTime += interval.End - interval.Start;
+                        }
                     }
 
                     if (paidTime <= TimeSpan.Zero)
@@ -707,32 +713,27 @@ namespace ClubTimerXbox.Services
             return total.TotalHours;
         }
 
-        private static TimeSpan GetLateActiveTime(
-            string employeeName,
-            DateTime shiftStart,
-            DateTime shiftEnd,
-            DateTime scheduleEnd)
+        internal static IReadOnlyList<PaidInterval> GetLatePlayIntervals(
+            IEnumerable<GameSessionLogItem> closedGames,
+            DateTime scheduleEnd,
+            DateTime businessDayEnd)
         {
-            if (shiftEnd <= scheduleEnd)
-                return TimeSpan.Zero;
-
-            var intervals = EmployeeStatsService
-                .GetGameSessionsForMonth(employeeName, scheduleEnd)
-                .Select(session => new
-                {
-                    Start = Max(session.StartedAt, Max(shiftStart, scheduleEnd)),
-                    End = Min(session.ClosedAt ?? ClubClock.Current.LocalNow, shiftEnd)
-                })
-                .Where(interval => interval.End > interval.Start)
+            // A checkout recipient is a financial role, not the operator of a shift.
+            var intervals = closedGames
+                .Where(game => game.IsClosed && game.ClosedAt > scheduleEnd && game.StartedAt < businessDayEnd)
+                .SelectMany(session => SessionPausePolicy.ActiveIntervals(
+                    Max(session.StartedAt, scheduleEnd),
+                    Min(session.ClosedAt!.Value, businessDayEnd),
+                    session.PlayPauses))
                 .OrderBy(interval => interval.Start)
                 .ToList();
 
             if (intervals.Count == 0)
-                return TimeSpan.Zero;
+                return [];
 
+            var merged = new List<PaidInterval>();
             DateTime currentStart = intervals[0].Start;
             DateTime currentEnd = intervals[0].End;
-            TimeSpan total = TimeSpan.Zero;
 
             for (int index = 1; index < intervals.Count; index++)
             {
@@ -745,13 +746,25 @@ namespace ClubTimerXbox.Services
                     continue;
                 }
 
-                total += currentEnd - currentStart;
+                merged.Add(new PaidInterval(currentStart, currentEnd));
                 currentStart = interval.Start;
                 currentEnd = interval.End;
             }
 
-            total += currentEnd - currentStart;
-            return total;
+            merged.Add(new PaidInterval(currentStart, currentEnd));
+            return merged;
+        }
+
+        internal static IEnumerable<PaidInterval> ClipLatePlayToShift(
+            IReadOnlyList<PaidInterval> nightPlay, DateTime shiftStart, DateTime shiftEnd)
+        {
+            foreach (var interval in nightPlay)
+            {
+                DateTime start = Max(interval.Start, shiftStart);
+                DateTime end = Min(interval.End, shiftEnd);
+                if (end > start)
+                    yield return new PaidInterval(start, end);
+            }
         }
 
         private static TimeSpan GetOverlap(

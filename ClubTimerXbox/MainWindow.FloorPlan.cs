@@ -272,7 +272,11 @@ namespace ClubTimerXbox
             e.Handled = true;
 
             if (!_floorPlanEditorEnabled)
+            {
+                if (!place.IsTimeExpiredAwaitingAcknowledgement)
+                    ScheduleDeferredCheckout(place);
                 return;
+            }
 
             _draggedFloorPlanCard = card;
             _draggedFloorPlanPlaceName = place.Name;
@@ -514,6 +518,8 @@ namespace ClubTimerXbox
                     : _floorPlanEditorEnabled
                         ? new SolidColorBrush(Color.FromRgb(251, 191, 36))
                         : GetCardBorderBrush(visual.Place);
+                if (!isSelected && !_floorPlanEditorEnabled)
+                    AnimateDeferredOutline(visual.Card, visual.Place);
             }
         }
 
@@ -585,7 +591,7 @@ namespace ClubTimerXbox
             AlternativeDetailMoneyText.Text = GetMoneyText(place);
             AlternativeDetailEmployeeText.Text = GetEmployeeText(place);
 
-            string salesText = GetActiveSalesText(place);
+            string salesText = WithDeferredCheckoutBadge(place, GetActiveSalesText(place));
             AlternativeDetailSalesText.Text = salesText;
             AlternativeDetailSalesText.Visibility = string.IsNullOrWhiteSpace(salesText)
                 ? Visibility.Collapsed

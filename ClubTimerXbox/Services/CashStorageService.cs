@@ -67,5 +67,8 @@ namespace ClubTimerXbox.Services
                 // Пока ничего не делаем.
             }
         }
+
+        internal static void SaveDeferredIncome(List<CashRecord> items) =>
+            DurableCheckoutFile.Save(CashFilePath, items);
     }
 }

@@ -40,6 +40,48 @@ if (args.Contains("--session-penalties", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--session-lifecycle", StringComparer.OrdinalIgnoreCase))
+{
+    SessionLifecycleTests.Run();
+    return;
+}
+
+if (args is ["--session-release-gates"])
+{
+    SessionReleaseGateTests.Run();
+    return;
+}
+
+if (args is ["--probe-session-release-gates", var gateData, var gatePhase])
+{
+    SessionReleaseGateTests.RestartProbe(gateData, gatePhase);
+    return;
+}
+
+if (args.SequenceEqual(new[] { "--session-pause" }))
+{
+    SessionPauseTests.Run();
+    return;
+}
+
+if (args is ["--probe-session-pause", var pauseFile])
+{
+    SessionPauseTests.ProbeAfterRestart(pauseFile);
+    return;
+}
+
+if (args.Contains("--tariff-refund", StringComparer.OrdinalIgnoreCase))
+{
+    TariffRefundTests.Run();
+    return;
+}
+
+if (args.Contains("--deferred-reminders", StringComparer.OrdinalIgnoreCase))
+{
+    DeferredCheckoutReminderTests.Run();
+    return;
+}
+
 if (args.Contains("--cashless-loans", StringComparer.OrdinalIgnoreCase))
 {
     CashlessLoanVerificationTests.Run();
@@ -193,6 +235,13 @@ if (args.Contains("--cash", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args is ["--updater"])
+{
+    new NextUpdateWorkflowTestSuite().Run();
+    new AppUpdateTestSuite().Run();
+    return;
+}
+
 var suite = new CashConstitutionTestSuite();
 suite.Run();
 EmployeeIdentityStartupTests.Run();
@@ -218,6 +267,11 @@ ClubCloseTests.Run();
 CashlessLoanVerificationTests.Run();
 KnownCashlessLoanRepairTests.Run();
 SessionPenaltyTests.Run();
+SessionLifecycleTests.Run();
+SessionPauseTests.Run();
+SessionReleaseGateTests.Run();
+TariffRefundTests.Run();
+DeferredCheckoutReminderTests.Run();
 NumericInputTests.Run();
 CashReportPerformanceTests.Run();
 EmployeeJournalPerformanceTests.Run();
@@ -1909,7 +1963,9 @@ internal sealed class AppUpdateTestSuite
             JournalPath = Path.Combine(_root, "update-transaction.json"),
             MainExe = "ClubTimerXbox.exe",
             Version = "9.9.9",
-            RecoveryUpdaterPath = ""
+            RecoveryUpdaterPath = "",
+            ClubDataDirectory = Path.Combine(_root, "test-club-data"),
+            ManageRecoveryRegistration = false
         };
 
         public void Dispose()

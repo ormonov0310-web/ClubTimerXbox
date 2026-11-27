@@ -66,8 +66,12 @@ namespace ClubTimerXbox.Services
             if (startTime == null)
                 return 0;
 
-            double totalSeconds = (now - startTime.Value).TotalSeconds;
+            return CalculateOpenModePlayedMinutes(now - startTime.Value);
+        }
 
+        internal static int CalculateOpenModePlayedMinutes(TimeSpan played)
+        {
+            double totalSeconds = played.TotalSeconds;
             if (totalSeconds < OpenModeFirstChargeAfterSeconds)
                 return 0;
 
@@ -81,7 +85,13 @@ namespace ClubTimerXbox.Services
 
         public static int CalculateOpenModePrice(double accruedAmount, double pricePerMinute, DateTime? startTime, DateTime now)
         {
-            int minutes = CalculateOpenModePlayedMinutes(startTime, now);
+            return CalculateOpenModePrice(accruedAmount, pricePerMinute,
+                startTime.HasValue ? now - startTime.Value : TimeSpan.Zero);
+        }
+
+        internal static int CalculateOpenModePrice(double accruedAmount, double pricePerMinute, TimeSpan played)
+        {
+            int minutes = CalculateOpenModePlayedMinutes(played);
             double segmentPrice = minutes * pricePerMinute;
             return RoundUpToStep(accruedAmount + segmentPrice, OpenModeBillingStepAmount);
         }

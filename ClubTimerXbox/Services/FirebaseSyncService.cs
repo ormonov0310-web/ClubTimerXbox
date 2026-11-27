@@ -3502,10 +3502,7 @@ namespace ClubTimerXbox.Services
 
             if (place.IsOpenMode)
             {
-                return TariffService.CalculateOpenModePrice(
-                    place.AccruedAmountBeforeCurrentSegment,
-                    place.ActivePricePerMinute,
-                    place.StartTime);
+                return SessionPausePolicy.OpenPrice(place, DateTime.Now);
             }
 
             return place.PaidAmount;

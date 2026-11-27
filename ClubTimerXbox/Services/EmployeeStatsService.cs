@@ -73,6 +73,7 @@ namespace ClubTimerXbox.Services
 
     public class EmployeeGameSessionInfo
     {
+        internal IReadOnlyList<GameSessionPauseInterval>? PlayPauses { get; set; }
         public DateTime StartedAt { get; set; }
         public DateTime? ClosedAt { get; set; }
         public string PlaceName { get; set; } = "";
@@ -761,6 +762,7 @@ namespace ClubTimerXbox.Services
                 {
                     StartedAt = session.StartedAt,
                     ClosedAt = session.ClosedAt,
+                    PlayPauses = session.PlayPauses,
                     PlaceName = session.PlaceName,
                     TariffText = session.TariffText,
                     GameAmount = session.CashIncomeAmount,

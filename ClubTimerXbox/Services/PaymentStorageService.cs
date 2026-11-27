@@ -51,8 +51,11 @@ namespace ClubTimerXbox.Services
 
             string json = JsonSerializer.Serialize(items, options);
 
-            File.WriteAllText(FilePath, json);
+            AtomicFileStorageService.WriteAllText(FilePath, json);
         }
+
+        internal static void SaveDeferredReceipt(List<PaymentRecord> items) =>
+            DurableCheckoutFile.Save(FilePath, items);
 
         public static void Clear()
         {

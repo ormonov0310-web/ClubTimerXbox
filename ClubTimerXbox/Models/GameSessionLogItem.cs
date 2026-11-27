@@ -14,6 +14,12 @@ namespace ClubTimerXbox.Models
 
         public bool IsOpenMode { get; set; }
 
+        public Guid? DeferredCheckoutId { get; set; }
+        public DateTime? DeferredCheckoutPaidAt { get; set; }
+
+        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public List<GameSessionPauseInterval>? PlayPauses { get; set; }
+
         public string TariffText { get; set; } = "";
         public int PaidAmount { get; set; }
 

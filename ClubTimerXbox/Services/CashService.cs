@@ -15,6 +15,12 @@ namespace ClubTimerXbox.Services
 
         public static IReadOnlyList<CashRecord> Records => _records;
 
+        internal static void SaveDeferredIncome(IReadOnlyList<CashRecord> income)
+        {
+            DeferredCheckoutPosting.SaveIncome(_records, income, CashStorageService.SaveDeferredIncome);
+            FinancialInputRevision.Changed();
+        }
+
         public static int RenameEmployeeReferences(
             string oldEmployeeName,
             string newEmployeeName)

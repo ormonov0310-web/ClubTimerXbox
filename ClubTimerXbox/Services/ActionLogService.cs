@@ -57,6 +57,24 @@ namespace ClubTimerXbox.Services
             LogStorageService.Save(Shifts, GameSessions);
         }
 
+        internal static void DetachDeferredGame(DeferredCheckout checkout, string stoppedBy) =>
+            DeferredCheckoutPosting.Detach(checkout, GameSessions, stoppedBy, SaveLogs);
+
+        internal static void SavePauseInterval(GameSessionLogItem game, SessionPauseState state, bool recovery = false)
+        {
+            SessionStorageVersion.RequireFor(LogStorageService.FilePath);
+            if (SessionPausePolicy.RecordInterval(game, state) || !recovery)
+                SaveLogs();
+        }
+
+        internal static void FinishDeferredPayment(DeferredCheckoutLedger ledger, DeferredCheckout entry, string paidBy)
+        {
+            DeferredCheckoutPosting.Complete(ledger, entry, GameSessions, paidBy,
+                PaymentService.SaveDeferredReceipt, CashService.SaveDeferredIncome, SaveLogs);
+            if (entry.PaymentIntent is { } intent)
+                OverNormPortionService.OnGameIncomeRecorded(BusinessCalendarService.ToClubLocal(intent.AcceptedAt.UtcDateTime));
+        }
+
         public static int RenameEmployeeReferences(
             string oldEmployeeName,
             string newEmployeeName)
@@ -837,6 +855,10 @@ namespace ClubTimerXbox.Services
 
         public static IReadOnlyList<OutstandingCustomerDebtItem> GetOutstandingCustomerDebts()
         {
+            var pending = DeferredCheckoutLedger.ForCurrentClub().GetOutstanding();
+            var separatelyDeferredIds = pending.SelectMany(entry => entry.Lines)
+                .Where(line => line.SourceSaleLineId.HasValue)
+                .Select(line => line.SourceSaleLineId!.Value).ToHashSet();
             var activeDeferredSaleLineIds = GameSessions
                 .Where(session => !session.IsClosed)
                 .SelectMany(session => session.DeferredCheckoutItems ?? new List<CheckoutItem>())
@@ -849,7 +871,7 @@ namespace ClubTimerXbox.Services
             {
                 foreach (var line in session.SaleLines.Where(line => !line.IsPaid))
                 {
-                    if (activeDeferredSaleLineIds.Contains(line.Id))
+                    if (activeDeferredSaleLineIds.Contains(line.Id) || separatelyDeferredIds.Contains(line.Id))
                         continue;
 
                     result.Add(new OutstandingCustomerDebtItem
@@ -867,7 +889,7 @@ namespace ClubTimerXbox.Services
                     });
                 }
 
-                if (session.IsClosed)
+                if (session.IsClosed || pending.Any(entry => entry.GameSessionId == session.Id))
                     continue;
 
                 foreach (var item in session.DeferredCheckoutItems ?? new List<CheckoutItem>())
@@ -887,6 +909,19 @@ namespace ClubTimerXbox.Services
                 }
             }
 
+            foreach (var entry in pending)
+                result.Add(new OutstandingCustomerDebtItem
+                {
+                    SessionId = entry.GameSessionId,
+                    PlaceName = entry.PlaceName,
+                    ItemName = $"Остановка {entry.StopNumber}",
+                    Quantity = 1,
+                    Amount = entry.Total,
+                    CreatedAt = BusinessCalendarService.ToClubLocal(entry.StoppedAt.UtcDateTime),
+                    CreatedByEmployeeName = EmployeeService.FindById(entry.StoppedBy.EmployeeId)?.Name ?? "",
+                    ResponsibleEmployeeName = EmployeeService.FindById(entry.Responsible.EmployeeId)?.Name ?? ""
+                });
+
             return result
                 .OrderBy(item => item.CreatedAt)
                 .ThenBy(item => item.PlaceName)
@@ -900,6 +935,20 @@ namespace ClubTimerXbox.Services
             DateTime acceptedAt = ClubClock.Current.LocalNow;
             int logicalDebtCount = GetOutstandingCustomerDebts().Count;
             int changed = 0;
+            var ledger = DeferredCheckoutLedger.ForCurrentClub();
+            var pending = ledger.GetOutstanding();
+            if (!pending.IsEmpty)
+            {
+                var employee = EmployeeService.FindByName(employeeName);
+                if (employee is null || !employee.IsActive || shiftId is null ||
+                    CurrentShift?.Id != shiftId || EmployeeService.CurrentEmployee?.EmployeeId != employee.EmployeeId ||
+                    pending.Any(entry => entry.PaymentIntent is not null))
+                    throw new InvalidOperationException("Не удалось принять отложенные ККМ. Проверьте смену и ожидающие платежи.");
+
+                var actor = new CheckoutActor(employee.EmployeeId, shiftId.Value);
+                var acceptedMoment = new DateTimeOffset(BusinessCalendarService.ToUtc(acceptedAt));
+                changed += ledger.AcceptAllResponsibility(pending, actor, acceptedMoment);
+            }
 
             foreach (var line in GameSessions
                          .SelectMany(session => session.SaleLines)

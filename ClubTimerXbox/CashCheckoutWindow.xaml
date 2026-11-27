@@ -27,16 +27,19 @@
                         Margin="0,0,0,14">
                     <StackPanel>
                         <TextBlock x:Name="EmployeeText"
+                                   TextWrapping="Wrap"
                                    Foreground="#CBD5E1"
                                    FontSize="16"
                                    Margin="0,0,0,6"/>
 
                         <TextBlock x:Name="OperationText"
+                                   TextWrapping="Wrap"
                                    Foreground="#CBD5E1"
                                    FontSize="16"
                                    Margin="0,0,0,6"/>
 
                         <TextBlock x:Name="PlaceText"
+                                   TextWrapping="Wrap"
                                    Foreground="#94A3B8"
                                    FontSize="14"/>
                     </StackPanel>
@@ -184,6 +187,17 @@
                         Foreground="White"
                         Click="TransferToPlaceButton_Click"
                         Margin="0,0,0,10"/>
+
+                <Button x:Name="DeferPaymentButton"
+                        Content="Отложить"
+                        MinHeight="46"
+                        FontSize="16"
+                        FontWeight="SemiBold"
+                        Background="#D6A43C"
+                        Foreground="#141820"
+                        Click="DeferPaymentButton_Click"
+                        Margin="0,0,0,10"
+                        Visibility="Collapsed"/>
 
                 <Button Content="Отмена"
                         Height="46"

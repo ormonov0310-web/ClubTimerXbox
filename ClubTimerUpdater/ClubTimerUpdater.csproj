@@ -11,6 +11,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\Shared\SessionStorageCompatibility.cs" Link="SessionStorageCompatibility.cs" />
+    <InternalsVisibleTo Include="ClubTimerXbox.RegressionTests" />
     <Resource Include="..\ClubTimerXbox\Assets\Themes\glass-club.png"
               Link="Assets\Themes\glass-club.png" />
   </ItemGroup>

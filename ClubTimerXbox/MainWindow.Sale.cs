@@ -117,7 +117,7 @@ namespace ClubTimerXbox
         private void AttachSaleToPlaceFromMainScreen(SaleItem item, int quantity, int totalAmount)
         {
             var activePlaces = _places
-                .Where(place => place.IsBusy && !place.IsCalculating)
+                .Where(place => place.IsBusy && !place.IsCalculating && !place.IsPaused)
                 .ToList();
 
             if (activePlaces.Count == 0)
@@ -138,7 +138,7 @@ namespace ClubTimerXbox
 
             bool? result = selectWindow.ShowDialog();
 
-            if (result != true || selectWindow.SelectedPlace == null)
+            if (result != true || selectWindow.SelectedPlace == null || selectWindow.SelectedPlace.IsPaused)
                 return;
 
             if (!EnsureActiveEmployeeActivity(GetCurrentEmployeeName()))

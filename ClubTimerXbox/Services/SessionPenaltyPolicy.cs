@@ -8,6 +8,8 @@ internal static class SessionPenaltyPolicy
     internal static int GetPrepaidRemainingSeconds(ClubPlace place, DateTime now)
     {
         if (place.IsOpenMode) return 0;
+        if (place.PauseState is { ResumedAt: null } pause)
+            return SessionPausePolicy.GetFrozenPrepaidSeconds(pause);
         int remaining = Math.Max(0, place.RemainingSeconds);
         if (!place.StartTime.HasValue) return remaining;
         double elapsed = Math.Max(0, Math.Floor((now - place.StartTime.Value).TotalSeconds));
@@ -34,7 +36,7 @@ internal static class SessionPenaltyPolicy
     internal static bool TryApply(ClubPlace place, int minutes, DateTime now, out int price)
     {
         price = 0;
-        if (!place.IsBusy || place.IsCalculating || place.IsTimeExpiredAwaitingAcknowledgement ||
+        if (!place.IsBusy || place.IsCalculating || place.IsPaused || place.IsTimeExpiredAwaitingAcknowledgement ||
             !TryGetPrice(place.ActivePricePerMinute, minutes, out int penaltyPrice))
             return false;
         if (place.IsOpenMode)

@@ -5,7 +5,7 @@ namespace ClubTimerXbox.Services
 {
     internal static class AtomicFileStorageService
     {
-        public static void WriteAllText(string filePath, string content)
+        public static void WriteAllText(string filePath, string content, bool flushToDisk = false)
         {
             string? folderPath = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrWhiteSpace(folderPath))
@@ -15,7 +15,17 @@ namespace ClubTimerXbox.Services
                 filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
-                File.WriteAllText(temporaryPath, content);
+                if (flushToDisk)
+                {
+                    using var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write,
+                        FileShare.None, 4096, FileOptions.WriteThrough);
+                    using var writer = new StreamWriter(stream);
+                    writer.Write(content);
+                    writer.Flush();
+                    stream.Flush(flushToDisk: true);
+                }
+                else
+                    File.WriteAllText(temporaryPath, content);
                 File.Move(temporaryPath, filePath, overwrite: true);
             }
             finally

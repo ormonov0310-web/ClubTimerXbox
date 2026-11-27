@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using ClubTimerXbox.Models;
 
@@ -62,9 +63,13 @@ namespace ClubTimerXbox.Services
             return changed;
         }
 
-        public static void Save(List<SavedActivePlace> activePlaces)
+        public static void Save(List<SavedActivePlace> activePlaces, bool flushToDisk = false) =>
+            SaveTo(SessionsFilePath, activePlaces, flushToDisk);
+
+        internal static void SaveTo(string path, List<SavedActivePlace> activePlaces, bool flushToDisk)
         {
-            Directory.CreateDirectory(SessionsFolderPath);
+            if (activePlaces.Any(place => place.PauseState is not null))
+                SessionStorageVersion.RequireFor(path);
 
             var options = new JsonSerializerOptions
             {
@@ -73,17 +78,19 @@ namespace ClubTimerXbox.Services
 
             string json = JsonSerializer.Serialize(activePlaces, options);
 
-            File.WriteAllText(SessionsFilePath, json);
+            AtomicFileStorageService.WriteAllText(path, json, flushToDisk);
         }
 
-        public static List<SavedActivePlace> Load()
+        public static List<SavedActivePlace> Load() => LoadFrom(SessionsFilePath);
+
+        internal static List<SavedActivePlace> LoadFrom(string path)
         {
             try
             {
-                if (!File.Exists(SessionsFilePath))
+                if (!File.Exists(path))
                     return new List<SavedActivePlace>();
 
-                string json = File.ReadAllText(SessionsFilePath);
+                string json = File.ReadAllText(path);
 
                 var places = JsonSerializer.Deserialize<List<SavedActivePlace>>(json);
 

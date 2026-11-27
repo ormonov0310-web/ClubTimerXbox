@@ -20,6 +20,7 @@ namespace ClubTimerXbox.Models
         public string PlaceName { get; set; } = "";
 
         public Guid? GameSessionId { get; set; }
+        public Guid? DeferredCheckoutId { get; set; }
 
         public List<CheckoutItem> Items { get; set; } = new List<CheckoutItem>();
 

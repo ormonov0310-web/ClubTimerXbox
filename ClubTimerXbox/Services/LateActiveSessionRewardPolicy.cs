@@ -32,15 +32,13 @@ namespace ClubTimerXbox.Services
 
             DateTime oneAm = businessDayStart.Date.AddDays(1).AddHours(1);
             var candidates = sessions
-                .Select(session => new
-                {
-                    Session = session,
-                    QualifiedAt = GetQualificationTime(
-                        session.StartedAt,
-                        session.ClosedAt ?? evaluationEnd,
-                        oneAm,
-                        businessDayEnd)
-                })
+                .SelectMany(session => SessionPausePolicy.ActiveIntervals(
+                        session.StartedAt, session.ClosedAt ?? evaluationEnd, session.PlayPauses)
+                    .Select(interval => new
+                    {
+                        Session = session,
+                        QualifiedAt = GetQualificationTime(interval.Start, interval.End, oneAm, businessDayEnd)
+                    }))
                 .Where(candidate =>
                     candidate.QualifiedAt.HasValue &&
                     candidate.QualifiedAt.Value <= evaluationEnd)

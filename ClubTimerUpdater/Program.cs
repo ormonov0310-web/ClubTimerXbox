@@ -14,6 +14,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using ClubTimerCompatibility;
 
 namespace ClubTimerUpdater
 {
@@ -479,6 +480,22 @@ namespace ClubTimerUpdater
         {
             if (!_options.Restart || string.IsNullOrWhiteSpace(_options.MainExe))
                 return;
+
+            try
+            {
+                SessionStorageCompatibility.RequireCompatible(
+                    SessionStorageCompatibility.DataDirectory, _options.TargetDir, _options.MainExe);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or JsonException)
+            {
+                if (updateResult == "done")
+                    throw;
+                UpdateLog.Write($"Application launch blocked: {ex.Message}");
+                WriteStatus("recovery_required", ex.Message);
+                SetProgress((int)_progressBar.Dispatcher.Invoke(() => _progressBar.Value),
+                    "Запуск заблокирован для защиты данных клуба.", ex.Message);
+                return;
+            }
 
             string[] args = string.IsNullOrWhiteSpace(_options.UpdateSession)
                 ? Array.Empty<string>()

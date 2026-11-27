@@ -14,6 +14,8 @@ namespace ClubTimerXbox.Models
 
         public bool IsBusy { get; set; }
         public bool IsOpenMode { get; set; }
+        internal SessionPauseState? PauseState { get; set; }
+        internal bool IsPaused => PauseState is { ResumedAt: null };
         public bool IsNewBranchPromoSession { get; set; }
 
         // Место уже остановлено, но окно расчёта ещё открыто.

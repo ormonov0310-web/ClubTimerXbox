@@ -11,6 +11,12 @@ namespace ClubTimerXbox.Services
         private static readonly List<PaymentRecord> _records = PaymentStorageService.Load();
 
         public static IReadOnlyList<PaymentRecord> Records => _records;
+        internal static void SaveDeferredReceipt(PaymentRecord receipt)
+        {
+            DeferredCheckoutPosting.SaveReceipt(_records, receipt, PaymentStorageService.SaveDeferredReceipt);
+            Interlocked.Increment(ref _revision);
+            FinancialInputRevision.Changed();
+        }
         private static long _revision;
         public static long Revision => Interlocked.Read(ref _revision);
 

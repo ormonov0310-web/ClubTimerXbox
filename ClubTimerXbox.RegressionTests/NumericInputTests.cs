@@ -49,6 +49,7 @@ internal static class NumericInputTests
                 Check("flexible time initially focuses amount, not minutes", FlexibleAmountFocus);
                 Check("Enter clicks the confirmation once and respects validation", EnterConfirmation);
                 Check("KKM Enter confirms the same150 split without posting cash", CheckoutEnter);
+                Check("deferred KKM button, close and actual mixed-payment controls", DeferredCheckoutControls);
                 Check("session penalty dialogs preserve editing, validation and adaptive layout", PenaltyDialogs);
             }
             catch (Exception error) { failure = error; }
@@ -521,6 +522,83 @@ internal static class NumericInputTests
                 Drain();
                 Capture(window, $"penalty-{open}-{scale}-top");
             }
+        }
+    }
+
+    private static void DeferredCheckoutControls()
+    {
+        var order = new List<CheckoutItem>
+        {
+            new() { Name = "Длинное название товара и услуги для проверки переноса текста", UnitPrice = 340 }
+        };
+        var original = new CashCheckoutWindow("Администратор", "Закрытие тарифа", order);
+        Equal(Visibility.Collapsed, ((Button)original.FindName("DeferPaymentButton")).Visibility);
+        original.Close();
+
+        foreach (string decision in new[] { "defer", "close", "pay" })
+        {
+            var window = new CashCheckoutWindow("Администратор с длинным именем для проверки переноса",
+                "Остановка 0", order, "Телевизор 5", Guid.NewGuid(), allowDefer: true)
+            {
+                Width = 330, MaxHeight = 410, ShowInTaskbar = false, ShowActivated = false,
+                WindowStartupLocation = WindowStartupLocation.Manual, Left = -10000, Top = -10000
+            };
+            window.Resources.MergedDictionaries.Add(LoadTheme());
+            Exception? failure = null;
+            window.ContentRendered += (_, _) => window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+            {
+                try
+                {
+                    var defer = (Button)window.FindName("DeferPaymentButton");
+                    Equal(Visibility.Visible, defer.Visibility);
+                    var scroll = (ScrollViewer)window.Content;
+                    True(window.SizeToContent == SizeToContent.Height && scroll.ScrollableHeight > 0,
+                        $"long KKM must fit via scrolling ({window.SizeToContent}, size {window.ActualWidth}×{window.ActualHeight}, scroll {scroll.ScrollableHeight})");
+                    if (decision == "defer")
+                    {
+                        defer.BringIntoView();
+                        defer.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    }
+                    else if (decision == "close")
+                    {
+                        window.Close();
+                    }
+                    else
+                    {
+                        var cash = (TextBox)window.FindName("CashTextBox");
+                        using var clipboard = new ClipboardFixture();
+                        foreach (var text in new[] { "1", "123" })
+                        {
+                            Clear(cash);
+                            True(HintVisible(cash), "empty cash editor must show only the zero hint");
+                            Type(cash, text);
+                            Equal(text, cash.Text);
+                            Clear(cash);
+                            Paste(cash, text, clipboard);
+                            Equal(text, cash.Text);
+                        }
+                        Clear(cash);
+                        Type(cash, "0");
+                        Equal("0", cash.Text);
+                        Clear(cash);
+                        Type(cash, "200");
+                        Enter(cash);
+                    }
+                }
+                catch (Exception error) { failure = error; window.Close(); }
+            }));
+            window.ShowDialog();
+            if (failure != null) ExceptionDispatchInfo.Capture(failure).Throw();
+            Equal(decision == "defer" ? CashCheckoutResultType.Deferred : decision == "pay"
+                ? CashCheckoutResultType.Paid : CashCheckoutResultType.None, window.ResultType);
+            if (decision == "pay")
+            {
+                Equal(200, window.PaymentRecord!.CashAmount);
+                Equal(140, window.PaymentRecord.MBankAmount);
+                SessionLifecycleTests.TestDeferredPosting(True, window.PaymentRecord);
+            }
+            else
+                True(window.PaymentRecord is null, "hiding a checkout must not create a receipt");
         }
     }
 

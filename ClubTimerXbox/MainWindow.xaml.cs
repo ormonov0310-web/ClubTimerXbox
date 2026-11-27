@@ -45,6 +45,11 @@ namespace ClubTimerXbox
         public MainWindow()
         {
             InitializeComponent();
+            DeferredReminderBanner.Dismissed += (_, _) =>
+            {
+                _visibleDeferredReminderIds.Clear();
+                RefreshDeferredReminderBanner();
+            };
             EmployeeDebtService.RecoverClubLoanMovements();
             try { StockPurchaseService.RecoverPending(); }
             catch { /* The next owned financial preparation retries the durable purchase. */ }
@@ -57,7 +62,10 @@ namespace ClubTimerXbox
             UpdateCurrentEmployeeText();
 
             CreatePlaces();
-            RestoreActivePlacesFromStorage();
+            if (!RecoverDeferredCheckouts())
+                return;
+            if (!TryRestoreActivePlaces())
+                return;
             DrawPlaces();
             UpdateMainViewButtons();
             UpdateMainCashText();
@@ -229,12 +237,25 @@ namespace ClubTimerXbox
         private void RestoreActivePlacesFromStorage()
         {
             var savedPlaces = ActiveSessionStorageService.Load();
+            if (ActionLogService.GetActiveGameSessions().Any(game =>
+                    game.PlayPauses?.LastOrDefault() is { EndedAt: null } &&
+                    !savedPlaces.Any(saved => saved.PauseState?.FrozenClock?.GameSessionId == game.Id)))
+                throw new System.IO.InvalidDataException("An active paused game is missing its TV checkpoint.");
 
             if (savedPlaces.Count == 0)
                 return;
 
             foreach (var saved in savedPlaces)
             {
+                // A crash after detaching the old game can leave its earlier TV save on disk.
+                if (!DeferredCheckoutPosting.ShouldRestoreActivePlace(saved, _pendingCheckouts, ActionLogService.GameSessions))
+                    continue;
+                var recordedPauseGame = saved.PauseState is not null
+                    ? ActionLogService.GetGameSession(saved.GameSessionId)
+                    : null;
+                if (recordedPauseGame?.IsClosed == true && saved.PauseState is { ResumedAt: null })
+                    continue;
+
                 var place = _places.Find(item =>
                     item.Name == saved.Name &&
                     item.Type == saved.Type
@@ -267,35 +288,18 @@ namespace ClubTimerXbox
                 place.StartedByEmployeeName = saved.StartedByEmployeeName;
                 place.IncomeEmployeeName = saved.IncomeEmployeeName;
 
-                if (
-                    place.IsBusy &&
-                    !place.IsOpenMode &&
-                    !place.IsCalculating &&
-                    !place.IsTimeExpiredAwaitingAcknowledgement)
+                if (saved.PauseState is { } pauseState && recordedPauseGame?.IsClosed != true)
                 {
-                    DateTime now = DateTime.Now;
-                    int passedSeconds = (int)(now - saved.LastSavedAt).TotalSeconds;
-
-                    if (passedSeconds < 0)
-                        passedSeconds = 0;
-
-                    place.RemainingSeconds -= passedSeconds;
-
-                    if (place.RemainingSeconds <= 0)
-                    {
-                        place.RemainingSeconds = 0;
-                        place.IsCalculating = false;
-                        place.StartTime = null;
-                    }
-                    else
-                    {
-                        place.StartTime = now;
-                    }
+                    var game = ActionLogService.GetActiveGameSessionByPlace(place.Name);
+                    SessionPausePolicy.Restore(place, saved, game?.Id);
+                    ActionLogService.SavePauseInterval(game!, pauseState, recovery: true);
                 }
+
+                SessionPausePolicy.RestorePrepaidCountdown(place, saved.LastSavedAt, DateTime.Now);
             }
         }
 
-        private void SaveActivePlacesToStorage()
+        private void SaveActivePlacesToStorage(bool flushToDisk = false)
         {
             var activePlaces = new List<SavedActivePlace>();
             DateTime now = DateTime.Now;
@@ -310,6 +314,11 @@ namespace ClubTimerXbox
                 activePlaces.Add(new SavedActivePlace
                 {
                     Name = place.Name,
+                    GameSessionId = place.PauseState?.FrozenClock.GameSessionId ??
+                        (place.IsOpenMode && place.IsCalculating
+                            ? ActionLogService.GetActiveGameSessionByPlace(place.Name)?.Id
+                            : null),
+                    PauseState = place.PauseState,
                     Type = place.Type,
 
                     IsBusy = place.IsBusy,
@@ -352,7 +361,7 @@ namespace ClubTimerXbox
                 return;
             }
 
-            ActiveSessionStorageService.Save(activePlaces);
+            ActiveSessionStorageService.Save(activePlaces, flushToDisk);
         }
 
         private int GetCurrentPrepaidRemainingSeconds(ClubPlace place, DateTime now)
@@ -366,6 +375,9 @@ namespace ClubTimerXbox
                 return false;
 
             if (place.IsOpenMode)
+                return false;
+
+            if (place.IsPaused)
                 return false;
 
             if (place.IsCalculating)
@@ -564,7 +576,7 @@ namespace ClubTimerXbox
 
             var saleText = new TextBlock
             {
-                Text = GetActiveSalesText(place),
+                Text = WithDeferredCheckoutBadge(place, GetActiveSalesText(place)),
                 Foreground = new SolidColorBrush(Color.FromRgb(251, 191, 36)),
                 FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
@@ -609,21 +621,25 @@ namespace ClubTimerXbox
                 card.ContextMenu = CreateContextMenu(place);
             };
             ApplyCardMotion(card, place);
+            AnimateDeferredOutline(card, place);
 
             return card;
         }
 
         private Brush GetCardBorderBrush(ClubPlace place)
         {
-            if (!place.IsBusy)
-                return new SolidColorBrush(Color.FromRgb(51, 65, 85));
-
             if (place.IsTimeExpiredAwaitingAcknowledgement)
             {
                 return _expiredCardBlinkState
                     ? new SolidColorBrush(Color.FromRgb(248, 113, 113))
                     : new SolidColorBrush(Color.FromRgb(127, 29, 29));
             }
+
+            if (PendingFor(place).Any())
+                return new SolidColorBrush(Color.FromRgb(253, 224, 71));
+
+            if (!place.IsBusy)
+                return new SolidColorBrush(Color.FromRgb(51, 65, 85));
 
             if (GetActiveSessionPendingCheckoutTotal(place.Name) > 0)
                 return new SolidColorBrush(Color.FromRgb(251, 191, 36));
@@ -637,7 +653,8 @@ namespace ClubTimerXbox
 
             card.PreviewMouseRightButtonDown += (_, e) =>
             {
-                if (!place.IsTimeExpiredAwaitingAcknowledgement)
+                _deferredClickTimer?.Stop();
+                if (!place.IsTimeExpiredAwaitingAcknowledgement || PendingFor(place).Any())
                     return;
 
                 e.Handled = true;
@@ -653,7 +670,7 @@ namespace ClubTimerXbox
 
                 if (!place.IsTimeExpiredAwaitingAcknowledgement)
                 {
-                    card.BorderBrush = GetActiveSessionPendingCheckoutTotal(place.Name) > 0
+                    card.BorderBrush = PendingFor(place).Any() || GetActiveSessionPendingCheckoutTotal(place.Name) > 0
                         ? new SolidColorBrush(Color.FromRgb(253, 224, 71))
                         : new SolidColorBrush(Color.FromRgb(96, 165, 250));
                 }
@@ -669,6 +686,7 @@ namespace ClubTimerXbox
             {
                 AnimateScale(card, 1, 170);
                 card.BorderBrush = GetCardBorderBrush(place);
+                AnimateDeferredOutline(card, place);
 
                 if (card.Effect is DropShadowEffect shadow)
                 {
@@ -683,7 +701,11 @@ namespace ClubTimerXbox
                 AnimateScale(card, card.IsMouseOver ? 1.025 : 1, 120);
 
                 if (!place.IsTimeExpiredAwaitingAcknowledgement)
+                {
+                    if (ScheduleDeferredCheckout(place))
+                        e.Handled = true;
                     return;
+                }
 
                 e.Handled = true;
                 AcknowledgeExpiredPlace(place.Name);
@@ -728,19 +750,21 @@ namespace ClubTimerXbox
                     menu.Items.Add(CreateMenuItem("Открытый режим", () => StartOpenMode(place)));
 
                 menu.Items.Add(CreateClockMenuItem("Любое время", () => OpenFlexibleStartWindow(place)));
+                AddDeferredCheckoutMenuItems(menu, place);
                 return menu;
             }
 
             if (place.IsTimeExpiredAwaitingAcknowledgement)
             {
                 menu.Items.Add(CreateMenuItem("Завершить расчёт", () => AcknowledgeExpiredPlace(place.Name)));
+                AddDeferredCheckoutMenuItems(menu, place);
                 return menu;
             }
 
-            if (!place.IsOpenMode && !place.IsCalculating)
+            if (!place.IsOpenMode && !place.IsCalculating && !place.IsPaused)
                 menu.Items.Add(CreateMenuItem("Добавить время", () => OpenAddTimeWindow(place)));
 
-            if (!place.IsCalculating)
+            if (!place.IsCalculating && !place.IsPaused)
             {
                 menu.Items.Add(CreateMenuItem("Добавить штраф", () => OpenPenaltyWindow(place)));
                 menu.Items.Add(CreateMenuItem("Пересадить", () => MoveClient(place)));
@@ -748,6 +772,9 @@ namespace ClubTimerXbox
 
             menu.Items.Add(new Separator());
             menu.Items.Add(CreateMenuItem("Остановить", () => StopPlace(place)));
+            if (SessionPausePolicy.CanChange(place))
+                menu.Items.Add(CreateMenuItem(place.IsPaused ? "Возобновить" : "Пауза", () => ToggleSessionPause(place)));
+            AddDeferredCheckoutMenuItems(menu, place);
 
             return menu;
         }
@@ -1041,6 +1068,8 @@ namespace ClubTimerXbox
 
         private void OpenAddTimeWindow(ClubPlace place)
         {
+            if (place.IsPaused)
+                return;
             if (!place.IsBusy)
             {
                 MessageBox.Show("Сначала запустите место.", "Добавить время");
@@ -1075,7 +1104,7 @@ namespace ClubTimerXbox
 
             bool? result = window.ShowDialog();
 
-            if (result != true)
+            if (result != true || place.IsPaused)
                 return;
 
             string employeeName = GetCurrentEmployeeName();
@@ -1114,7 +1143,7 @@ namespace ClubTimerXbox
 
             bool? checkoutResult = checkoutWindow.ShowDialog();
 
-            if (checkoutResult != true || checkoutWindow.PaymentRecord == null ||
+            if (checkoutResult != true || checkoutWindow.PaymentRecord == null || place.IsPaused ||
                 !EnsureActiveEmployeeActivity(checkoutWindow.EmployeeName))
                 return;
 
@@ -1166,6 +1195,8 @@ namespace ClubTimerXbox
 
         private void OpenPenaltyWindow(ClubPlace place)
         {
+            if (place.IsPaused)
+                return;
             if (!place.IsBusy)
             {
                 MessageBox.Show("Сначала запустите место.", "Добавить штраф");
@@ -1268,7 +1299,7 @@ namespace ClubTimerXbox
                 return;
             }
 
-            if (fromPlace.IsCalculating)
+            if (fromPlace.IsCalculating || fromPlace.IsPaused)
             {
                 MessageBox.Show("Это место сейчас в расчёте.", "Пересадить");
                 return;
@@ -1289,7 +1320,7 @@ namespace ClubTimerXbox
 
             bool? result = transferWindow.ShowDialog();
 
-            if (result != true || transferWindow.SelectedPlace == null)
+            if (result != true || transferWindow.SelectedPlace == null || fromPlace.IsPaused)
                 return;
 
             var toPlace = transferWindow.SelectedPlace;
@@ -1466,6 +1497,8 @@ namespace ClubTimerXbox
 
             int gameAmount = GetActualPrice(place);
             var activeSession = ActionLogService.GetActiveGameSessionByPlace(place.Name);
+            var checkoutActorAtOpen = GetCurrentCheckoutActor();
+            var stoppedAt = new DateTimeOffset(ClubClock.Current.UtcNow);
             Guid? sessionId = activeSession?.Id;
             int productsAmount = GetActiveSessionProductsAndServicesTotal(place.Name);
             int deferredCheckoutAmount = GetActiveSessionDeferredCheckoutTotal(place.Name);
@@ -1482,8 +1515,7 @@ namespace ClubTimerXbox
 
             int refund = 0;
             int needToPayForGame = 0;
-            int refundCashAmount = 0;
-            int refundMBankAmount = 0;
+            TariffRefundBreakdown? refundBreakdown = null;
 
             if (!wasOpenMode)
             {
@@ -1494,8 +1526,7 @@ namespace ClubTimerXbox
                 else if (gameDifference > 0)
                 {
                     refund = gameDifference;
-                    (refundCashAmount, refundMBankAmount) =
-                        CalculateRefundByOriginalPayment(place, refund);
+                    refundBreakdown = CalculateRefundByOriginalPayment(place, refund);
                 }
             }
 
@@ -1533,14 +1564,16 @@ namespace ClubTimerXbox
 
             if (totalClientMustPayNow > 0)
             {
+                bool allowDefer = wasOpenMode && activeSession?.IsOpenMode == true &&
+                    checkoutActorAtOpen is not null && checkoutItems.All(item => item.SourceGameSessionId.HasValue);
                 place.IsCalculating = true;
                 place.StartTime = null;
 
-                if (wasOpenMode)
+                if (wasOpenMode && !place.IsPaused)
                     place.AccruedAmountBeforeCurrentSegment = gameAmount;
 
                 DrawPlaces();
-                SaveActivePlacesToStorage();
+                SaveActivePlacesToStorage(flushToDisk: allowDefer);
 
                 var checkoutWindow = new CashCheckoutWindow(
                     employeeName: closedByEmployeeName,
@@ -1550,12 +1583,24 @@ namespace ClubTimerXbox
                     items: checkoutItems,
                     placeName: place.Name,
                     gameSessionId: sessionId,
-                    allowTransferToPlace: wasOpenMode)
+                    allowTransferToPlace: wasOpenMode,
+                    allowDefer: allowDefer)
                 {
                     Owner = this
                 };
 
                 bool? checkoutResult = checkoutWindow.ShowDialog();
+
+                if (checkoutResult == true && checkoutWindow.ResultType == CashCheckoutResultType.Deferred)
+                {
+                    if (activeSession is not null && checkoutActorAtOpen is not null &&
+                        TryDeferCheckout(place, activeSession.Id, checkoutActorAtOpen, stoppedAt, checkoutItems))
+                        return;
+
+                    if (place.IsCalculating && ActionLogService.GetActiveGameSessionByPlace(place.Name)?.Id == sessionId)
+                        RestorePlaceAfterCancelledCheckout(place, wasOpenMode, gameAmount);
+                    return;
+                }
 
                 if (checkoutResult == true && !EnsureActiveEmployeeActivity(checkoutWindow.EmployeeName))
                 {
@@ -1607,15 +1652,15 @@ namespace ClubTimerXbox
                 PostDeferredGameIncome(settlementPayment, closedByEmployeeName);
             }
 
-            if (!wasOpenMode && refund > 0)
+            if (refundBreakdown is { } refundChannels)
             {
                 PaymentService.AddPayment(CreateGameRefundPaymentRecord(
                     employeeName: closedByEmployeeName,
                     placeName: place.Name,
                     gameSessionId: sessionId,
                     refundAmount: refund,
-                    cashAmount: refundCashAmount,
-                    mBankAmount: refundMBankAmount));
+                    cashAmount: refundChannels.ReturnCash,
+                    mBankAmount: refundChannels.ReturnCashless));
             }
 
             ActionLogService.CloseActiveGameSession(
@@ -1673,19 +1718,26 @@ namespace ClubTimerXbox
 
             UpdateMainCashText();
 
-            MessageBox.Show(
+            if (refundBreakdown is { } summary)
+            {
+                var refundWindow = new TariffRefundSummaryWindow(place.Name, gameAmount, place.PaidAmount,
+                    refund, summary, paidProductsAmount, incomeEmployeeName) { Owner = this };
+                refundWindow.ShowDialog();
+            }
+            else
+            {
+                MessageBox.Show(
                     BuildStopMessage(
                         wasOpenMode,
                         gameAmount,
                         pendingCheckoutAmount,
                         place.PaidAmount,
-                        refund,
-                    needToPayForGame,
-                    totalClientMustPayNow,
-                    incomeEmployeeName
-                ),
-                wasOpenMode ? "Открытый режим" : "Расчёт"
-            );
+                        needToPayForGame,
+                        incomeEmployeeName
+                    ),
+                    wasOpenMode ? "Открытый режим" : "Расчёт"
+                );
+            }
 
             ClearPlace(place);
             DrawPlaces();
@@ -1721,9 +1773,9 @@ namespace ClubTimerXbox
             place.IsCalculating = false;
             place.IsTimeExpiredAwaitingAcknowledgement = false;
             place.IsOpenMode = wasOpenMode;
-            place.StartTime = DateTime.Now;
+            place.StartTime = place.IsPaused ? null : DateTime.Now;
 
-            if (wasOpenMode)
+            if (wasOpenMode && !place.IsPaused)
                 place.AccruedAmountBeforeCurrentSegment = accruedGameAmount;
 
             DrawPlaces();
@@ -1890,6 +1942,7 @@ namespace ClubTimerXbox
                 .Where(place =>
                     place.IsBusy &&
                     place.IsOpenMode &&
+                    !place.IsPaused &&
                     !place.IsCalculating &&
                     !place.Name.Equals(sourcePlace.Name, StringComparison.OrdinalIgnoreCase))
                 .ToList();
@@ -1962,9 +2015,7 @@ namespace ClubTimerXbox
             int gameAmount,
             int productsAmount,
             int paidAmount,
-            int refund,
             int needToPayForGame,
-            int totalClientMustPayNow,
             string incomeEmployeeName)
         {
             string text = "";
@@ -1988,21 +2039,7 @@ namespace ClubTimerXbox
             if (productsAmount > 0)
                 text += $"Товары/услуги: {productsAmount} сом\n";
 
-            if (refund > 0)
-            {
-                text += $"Возврат по игре: {refund} сом\n";
-
-                if (productsAmount > 0)
-                {
-                    if (totalClientMustPayNow > 0)
-                        text += $"\nПосле учёта товаров клиент должен доплатить: {totalClientMustPayNow} сом\n";
-                    else if (totalClientMustPayNow < 0)
-                        text += $"\nПосле учёта товаров вернуть клиенту: {Math.Abs(totalClientMustPayNow)} сом\n";
-                    else
-                        text += "\nПосле учёта товаров ничего доплачивать/возвращать не нужно.\n";
-                }
-            }
-            else if (needToPayForGame > 0)
+            if (needToPayForGame > 0)
             {
                 text += $"Доплата по игре: {needToPayForGame} сом\n";
 
@@ -2022,26 +2059,27 @@ namespace ClubTimerXbox
             return text;
         }
 
-        private (int CashAmount, int MBankAmount) CalculateRefundByOriginalPayment(
+        private TariffRefundBreakdown CalculateRefundByOriginalPayment(
             ClubPlace place,
             int refundAmount)
         {
             if (refundAmount <= 0)
-                return (0, 0);
+                return default;
 
             int cashPaid = place.PrepaidCashAmount;
             int mBankPaid = place.PrepaidMBankAmount;
 
             if (cashPaid + mBankPaid <= 0)
             {
+                Guid? pausedGameId = place.PauseState?.FrozenClock.GameSessionId;
                 var payments = PaymentService.Records
                     .Where(record =>
-                        record.PlaceName == place.Name &&
+                        (pausedGameId.HasValue
+                            ? record.GameSessionId == pausedGameId
+                            : record.PlaceName == place.Name &&
+                              record.CreatedAt >= (place.StartTime ?? BusinessCalendarService
+                                .GetBusinessDay(ClubClock.Current.LocalNow).StartInclusive)) &&
                         record.TotalAmount > 0 &&
-                        record.CreatedAt >= (place.StartTime ??
-                            BusinessCalendarService
-                                .GetBusinessDay(ClubClock.Current.LocalNow)
-                                .StartInclusive) &&
                         record.Items.Any(item => item.Category == "Игры"))
                     .ToList();
 
@@ -2049,25 +2087,10 @@ namespace ClubTimerXbox
                 mBankPaid = payments.Sum(record => record.MBankAmount);
             }
 
-            int totalPaidByMethods = cashPaid + mBankPaid;
-
-            if (totalPaidByMethods <= 0)
-                return (0, refundAmount);
-
-            int cashRefund = Math.Min(cashPaid, refundAmount);
-            int mBankRefund = refundAmount - cashRefund;
-
-            if (mBankRefund > mBankPaid)
-            {
-                int extra = mBankRefund - mBankPaid;
-                mBankRefund = mBankPaid;
-                cashRefund += extra;
-            }
-
-            return (cashRefund, mBankRefund);
+            return TariffRefundBreakdown.FromOriginalPayment(cashPaid, mBankPaid, refundAmount);
         }
 
-        private PaymentRecord CreateGameRefundPaymentRecord(
+        internal static PaymentRecord CreateGameRefundPaymentRecord(
             string employeeName,
             string placeName,
             Guid? gameSessionId,
@@ -2104,6 +2127,7 @@ namespace ClubTimerXbox
             _oneMinuteWarningShownPlaceNames.Remove(place.Name);
 
             place.IsBusy = false;
+            place.PauseState = null;
             place.IsOpenMode = false;
             place.IsNewBranchPromoSession = false;
             place.IsCalculating = false;
@@ -2129,6 +2153,7 @@ namespace ClubTimerXbox
 
         private void MainTimer_Tick(object? sender, EventArgs e)
         {
+            TickDeferredReminders();
             bool needRedraw = false;
             bool needSave = false;
             DateTime now = DateTime.Now;
@@ -2145,7 +2170,7 @@ namespace ClubTimerXbox
                 if (!place.IsBusy)
                     continue;
 
-                if (place.IsCalculating)
+                if (place.IsCalculating || place.IsPaused)
                     continue;
 
                 if (place.IsTimeExpiredAwaitingAcknowledgement)
@@ -2220,7 +2245,7 @@ namespace ClubTimerXbox
 
         private void FinalizeExpiredPrepaidPlace(ClubPlace place)
         {
-            if (!place.IsBusy || place.IsOpenMode || place.IsCalculating)
+            if (!place.IsBusy || place.IsOpenMode || place.IsCalculating || place.IsPaused)
                 return;
 
             if (place.IsTimeExpiredAwaitingAcknowledgement)
@@ -2263,6 +2288,7 @@ namespace ClubTimerXbox
 
             place.RemainingSeconds = 0;
             place.StartTime = null;
+            place.PauseState = null;
             place.IsOpenMode = false;
             place.IsCalculating = false;
             place.IsTimeExpiredAwaitingAcknowledgement = true;
@@ -3963,7 +3989,7 @@ namespace ClubTimerXbox
 
         private int GetCurrentSegmentPlayedMinutes(ClubPlace place)
         {
-            return TariffService.CalculateOpenModePlayedMinutes(place.StartTime);
+            return TariffService.CalculateOpenModePlayedMinutes(SessionPausePolicy.OpenSegmentTime(place, DateTime.Now));
         }
 
         private int GetCurrentSegmentPrice(ClubPlace place)
@@ -3977,10 +4003,7 @@ namespace ClubTimerXbox
         {
             if (place.IsOpenMode)
             {
-                return TariffService.CalculateOpenModePrice(
-                    place.AccruedAmountBeforeCurrentSegment,
-                    place.ActivePricePerMinute,
-                    place.StartTime);
+                return SessionPausePolicy.OpenPrice(place, DateTime.Now);
             }
 
             return SessionPenaltyPolicy.GetPrepaidUsedAmount(place, DateTime.Now);
@@ -4103,6 +4126,9 @@ namespace ClubTimerXbox
 
             if (place.IsCalculating)
                 return "Расчёт";
+
+            if (place.IsPaused)
+                return "Пауза";
 
             if (place.IsOpenMode)
                 return place.IsNewBranchPromoSession
@@ -4344,6 +4370,9 @@ namespace ClubTimerXbox
             if (place.IsCalculating)
                 return new SolidColorBrush(Color.FromRgb(251, 191, 36));
 
+            if (place.IsPaused)
+                return Brushes.LightSkyBlue;
+
             if (place.IsNewBranchPromoSession)
                 return new SolidColorBrush(Color.FromRgb(74, 222, 128));
 
@@ -4380,6 +4409,9 @@ namespace ClubTimerXbox
 
             if (place.IsCalculating)
                 return VisualThemeService.CreateTintedSurfaceBrush(Color.FromRgb(70, 55, 20), 202);
+
+            if (place.IsPaused)
+                return VisualThemeService.CreateTintedSurfaceBrush(Color.FromRgb(31, 50, 68), 202);
 
             if (place.IsNewBranchPromoSession)
                 return VisualThemeService.CreateTintedSurfaceBrush(Color.FromRgb(20, 70, 45), 196);
